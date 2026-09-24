@@ -35,6 +35,15 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests')) {
+        $suiteOutput = Join-Path $out "$suite.exe"
+        $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+        $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll "/out:$suiteOutput" $suiteSources
+        if ($LASTEXITCODE -ne 0) { throw "$suite compilation failed." }
+        & $suiteOutput
+        if ($LASTEXITCODE -ne 0) { throw "$suite failed." }
+    }
     $cliOutput = Join-Path $out 'CliTests.exe'
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$cliOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\CliTests.cs')
     if ($LASTEXITCODE -ne 0) { throw 'CLI test compilation failed.' }

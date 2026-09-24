@@ -55,7 +55,10 @@ Explorer 会保持已加载 DLL 的文件锁。如替换 DLL 时失败，先注�
 | 撤销 | 只操作勾选项，确认提示会明确说明本地更改将丢失 |
 | 差异 | 选择一个受控文件，比较工作区本地版本与其基础版本 |
 | 历史 | 上半部提交记录，下半部选中提交的完整文件明细；文件、目录（含子项内容修改）与整个仓库均可查询 |
-| 范围历史 / 恢复 | 固定使用打开窗口时的文件或目录范围；恢复文件/目录产生待提交更改，根目录操作切换历史快照 |
+| 范围历史 / 恢复 | 固定使用打开窗口时的文件或目录范围；根目录分别提供“整仓回滚为待提交”和“切换历史快照” |
+| 历史文件 | 双击历史明细中的文件，输入两个变更集比较，或导出右侧目标版本；支持外部差异工具 |
+| 删除 / 重命名 | 生成待提交删除或移动；要求所选范围干净，不覆盖目标；可撤销后再决定是否提交 |
+| 加入忽略列表 | 将未版本控制项的精确路径追加到工作区 ignore.conf，保留已有规则 |
 | 打开 Gluon | 在官方客户端中打开当前工作区 |
 | 设置 | 配置 cm.exe、gluon.exe、命令超时、外部 diff / merge 程序及参数模板 |
 
@@ -81,7 +84,7 @@ $exe = '.\bin\TortoiseSCM\Release\TortoiseSCM.exe'
 & $exe --cli --command diff --path 'D:\Work\Juscent\SCM_Study\TestSCM\README.md' --json | ConvertFrom-Json
 ```
 
-工作区写操作支持 `add`、`checkout`、`checkin`、`undo`、`update`、`rollback`、`switch`，必须显式给 `--yes` 和至少一个 `--path`。
+工作区写操作支持 `add`、`checkout`、`checkin`、`undo`、`update`、`rollback`、`switch`、`remove`、`move`、`ignore`，必须显式给 `--yes` 和至少一个 `--path`。
 重复 `--path` 可传递多选；必须来自同一工作区，空选择不表示全库操作。
 签入必须有 `--comment <说明>` 或 `--commentsfile <UTF-8文件>`。
 添加、签出和撤销可带 `--recursive`，签入本身遵循 Plastic 的递归目录语义。
@@ -101,6 +104,8 @@ CLI `diff` 输出基础版本与本地版本的文本差异，二进制变化单
 & $exe --cli --command rollback --path 'D:\workspace\Assets' --changeset 42 --yes --json | ConvertFrom-Json
 # 将整个工作区切换到历史快照，不产生回滚提交
 & $exe --cli --command switch --path 'D:\workspace' --changeset 42 --yes --json | ConvertFrom-Json
+# 在当前分支产生整仓回滚待提交更改，检查后再用 checkin 提交
+& $exe --cli --command rollback --path 'D:\workspace' --changeset 42 --yes --json | ConvertFrom-Json
 # 从历史快照回到当前分支最新版本
 & $exe --cli --command update --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
@@ -109,9 +114,38 @@ CLI `diff` 输出基础版本与本地版本的文本差异，二进制变化单
 仓库根历史包含各分支提交；目录历史通过提交文件路径筛选，也包括只有子文件内容变化的提交。
 当前目录查询需要逐个读取仓库提交明细，大仓库首次查询可能较慢。
 `rollback` 要求目标范围无待定更改，保留范围外更改；`switch` 要求整个工作区干净。
-根目录不能使用 `rollback`，应使用 `switch`；Partial 的切换只影响已加载内容，保留加载规则。
+根目录 `rollback` 使用原生减法合并：仅支持干净且位于分支最新版本的 Standard 工作区，目标必须是父链祖先。
+它保留分支选择器，生成待提交更改，不自动提交；发生冲突或无法识别的预检输出时拒绝执行。
+`switch` 则切换历史快照；Partial 的切换只影响已加载内容，保留加载规则。
 Partial 目录恢复仅支持目录结构一致的历史内容；涉及增删或移动时会在执行前拒绝，请使用 Standard 工作区完成这类恢复。
 恢复语义遵循原生 [Unity Version Control REVERT](https://docs.unity.com/zh-cn/unity-version-control/uvcs-cli/revert)。
+整仓回滚使用 [MERGE 的 subtractive interval](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/merge)。
+
+### 历史文件比较与导出
+
+```powershell
+& $exe --cli --command diff-history --path 'D:\workspace' --item '/Assets/file.txt' --from 40 --to 42 --json | ConvertFrom-Json
+# 可增加 --external 调用设置的差异工具
+& $exe --cli --command export --path 'D:\workspace' --item '/Assets/file.txt' --changeset 42 --output 'D:\temp\file.txt' --yes --json | ConvertFrom-Json
+# 覆盖已存在的导出目标必须额外指定 --overwrite
+```
+
+`--item` 是以 `/` 开头的仓库路径，与本机工作区是否已加载该文件无关；可导出当前已被删除的文件的旧版本。
+比较双方目前使用同一路径；重命名前请使用旧路径。缺失端点明确报错，不伪装为空文件。
+导出先下载并验证，再替换目标，服务器错误不会截断旧文件。目录、元数据和符号链接不作为文件导出。
+
+### 删除、移动与忽略
+
+```powershell
+& $exe --cli --command remove --path 'D:\workspace\old.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command move --path 'D:\workspace\old.txt' --destination 'D:\workspace\renamed.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command ignore --path 'D:\workspace\generated' --yes --json | ConvertFrom-Json
+```
+
+删除 / 移动仅用于已提交的受控项，禁止工作区根目录、跨工作区、目标覆盖和有待定更改的范围。
+GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件可通过 Explorer 从该文件打开后操作。
+忽略配置采用 [Plastic 原生 ignore.conf 精确路径规则](https://docs.unity.com/en-us/unity-version-control/config-files/filter-pattern)，
+目录规则覆盖后代，已有受控文件不会因此取消跟踪。需要共享规则时可自行添加、提交 ignore.conf。
 
 ### 外部 diff / merge
 
@@ -187,7 +221,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 需求 | GUI | CLI | 限制 |
 | --- | --- | --- | --- |
 | 文件 / 目录更新、历史、恢复 | 更新、历史 / 范围历史内恢复按钮 | `update`、`history`、`rollback --changeset` | 精确范围更新需要 Partial；Standard 明确要求整体更新 |
-| 整仓更新、历史、历史版本 | 根目录打开，历史内切换快照 | 根路径 `update`、`history`、`switch --changeset` | 历史快照切换不生成回滚提交；Partial 仅处理已加载项 |
+| 整仓更新、历史、历史版本 | 根目录打开，历史内分别回滚待提交和切换快照 | 根路径 `update`、`history`、`rollback`、`switch` | 整仓待提交回滚仅 Standard；Partial 快照仅处理已加载项 |
 | 目录范围提交、勾选及右键 | 按范围显示，勾选签入，右键历史 / 差异 / 丢弃 | `status --path` 获取范围，重复 `--path` 提交所选项，`history` / `undo` | 目录递归操作包含后代；私有文件需先添加 |
 | 上下窗格历史明细 | 上方提交、下方完整提交文件清单 | `history` + `changeset --changeset` 返回结构化记录 | 目录历史首次扫描可能较慢 |
 | 自定义 diff / merge | 设置窗口、差异按钮、合并工具入口 | `settings`、`diff --external`、`merge` | 配置与手动三方合并可用；自动冲突解决尚未接入 |

@@ -114,7 +114,7 @@ namespace TortoiseSCM
             ValidateChangeset(changeset);
             var validated = await BuildReadCommandAsync(path, cancellationToken).ConfigureAwait(false);
             string absolute = validated.Arguments[1], root = validated.WorkingDirectory;
-            if (SamePath(absolute, root)) throw new ArgumentException("工作区根目录不能作为待签入回滚项；请使用切换历史快照操作。");
+            if (SamePath(absolute, root)) return await RollbackWorkspaceAsync(root, changeset, cancellationToken).ConfigureAwait(false);
             await ValidateCleanRevisionOperationAsync(root, absolute, cancellationToken).ConfigureAwait(false);
             await GetChangesetAsync(root, changeset, cancellationToken).ConfigureAwait(false);
             var workspace = await GetWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);

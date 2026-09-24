@@ -18,7 +18,7 @@
 | --- | --- |
 | Release x64 EXE + DLL 构建 | 通过 |
 | 后端断言（含原 TestSCM 添加/撤销测试） | 47 项通过 |
-| 真实 EXE 的无服务器 CLI 黑盒断言 | 382 项通过 |
+| 真实 EXE 的无服务器 CLI 黑盒断言 | 490 项通过 |
 | 独立分支上的真实服务器 CLI 断言 | 47 项通过 |
 | 外部工具真实进程断言 | 18 项通过 |
 | 历史解析与删除目录范围断言 | 6 项通过 |
@@ -26,7 +26,7 @@
 | Shell/COM 单元检查 | 26 项通过 |
 | 当前用户注册后的真实 COM DLL 激活 | 20 项通过 |
 | UTF-8 多选路径文件交接与消费清理 | 通过 |
-| WinForms 工作区加载、范围过滤、勾选、历史加载、筛选、快速切换、分类设置及布局 | 31 项通过 |
+| WinForms 工作区加载、范围过滤、勾选、历史加载、筛选、快速切换、分类设置及布局 | 35 项通过 |
 | 默认窗口、最小窗口、设置 / 历史 / 合并窗口渲染 | 通过，已查看图片 |
 | `git diff --check` | 通过 |
 | TestSCM 测试后 `cm status --short --machinereadable` | 空输出，干净 |
@@ -95,3 +95,25 @@ GUI 新增检查覆盖最小尺寸提交按钮、路径优先列表、设置分�
 
 原上游 UnitTests 基线另执行 585 项，584 项通过；1 项既有 UTF-8 fixture 在本机 CP936 编译环境下失真。
 新增 Plastic 工程没有依赖该测试工程，并显式设置 UTF-8 源码编译。
+
+## 阶段 1：历史文件与日常操作
+
+2026-09-25：新增历史导出、两变更集同路径比较、整仓回滚为待提交更改，以及删除、移动、精确路径忽略。
+
+| 检查 | 结果 |
+| --- | --- |
+| 历史文件独立测试 | 39 项通过，含二进制、覆盖保护、失败不截断、路径验证、外部工具与取消 |
+| 整仓回滚独立测试 | 8 项通过；隔离工作区合计 20 项真实验证通过 |
+| 文件操作独立测试 | 7 项通过，含已有规则编码保持及 hardlink 保护 |
+| 文件操作 Standard / Partial | 各 24 项真实验证通过，结束后干净 |
+| 新历史 CLI 端到端场景 | 30 项通过，包含回滚后再次提交及 consumer 验收 |
+
+新 CLI 完整证据：`bin/TortoiseSCM/qa/integration-20260925-033556-cefe929a/cli-integration-results.json`。
+cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选择器不变，发布为新的 cs44，consumer 更新后逐项核对内容。
+文件操作证据：`bin/TortoiseSCM/qa/integration-20260925-033155-88fea7ce/file-operation-results.json`。
+整仓回滚 API 证据：`bin/TortoiseSCM/qa/integration-20260925-032653-23081833/workspace-rollback-results.json`。
+最终构建日志：`bin/TortoiseSCM/qa/stage1-validation.log`；新增窗口渲染 `historical-file.png` 和 `historical-file-minimum.png` 已检查。
+
+边界：历史比较缺失端点明确报错；重命名前后需分别使用对应路径，目前不自动追踪路径映射。
+整仓回滚只支持 Standard 分支最新版本回退父链祖先，拒绝冲突、Partial 和过期工作区；不会自动提交。
+文件原生修订历史可能复用旧修订而不列出整仓回滚的发布提交，该提交可在仓库历史与 changeset 明细中查询。

@@ -112,6 +112,10 @@ namespace TortoiseSCM
             menu.Items.Add("显示历史 / 恢复版本", null, async delegate { await ExecuteAsync(PlasticCommand.History, HighlightedPaths()); });
             menu.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff, HighlightedPaths()); });
             menu.Items.Add("丢弃所选行的修改…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo, HighlightedPaths()); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("重命名 / 移动…", null, async delegate { await ExecuteFileOperationAsync("move", HighlightedPaths()); });
+            menu.Items.Add("删除受控项…", null, async delegate { await ExecuteFileOperationAsync("remove", HighlightedPaths()); });
+            menu.Items.Add("加入忽略列表", null, async delegate { await ExecuteFileOperationAsync("ignore", HighlightedPaths()); });
             menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { e.Cancel = busy || files.SelectedItems.Count == 0; };
             files.ContextMenuStrip = menu;
             changes.Controls.Add(files, 0, 1);
@@ -137,6 +141,9 @@ namespace TortoiseSCM
             operations.Items.Add("添加…", null, async delegate { await ExecuteAsync(PlasticCommand.Add); });
             operations.Items.Add("签出…", null, async delegate { await ExecuteAsync(PlasticCommand.Checkout); });
             operations.Items.Add("撤销勾选项…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo); });
+            operations.Items.Add("重命名 / 移动…", null, async delegate { await ExecuteFileOperationAsync("move", null); });
+            operations.Items.Add("删除受控项…", null, async delegate { await ExecuteFileOperationAsync("remove", null); });
+            operations.Items.Add("加入忽略列表…", null, async delegate { await ExecuteFileOperationAsync("ignore", null); });
             operations.Items.Add(new ToolStripSeparator());
             operations.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff); });
             operations.Items.Add("所选项历史", null, async delegate { await ExecuteAsync(PlasticCommand.History); });
@@ -203,6 +210,41 @@ namespace TortoiseSCM
                 dialog.Controls.Add(text); dialog.Controls.Add(close); dialog.CancelButton = close;
                 dialog.ShowDialog(this);
             }
+        }
+
+        private async Task ExecuteFileOperationAsync(string operation, List<string> explicitPaths)
+        {
+            if (busy || !loaded) return;
+            var paths = explicitPaths ?? SelectedPaths(true, true);
+            if (paths.Count != 1) { MessageBox.Show(this, "请仅选择一个文件或目录。", "TortoiseSCM"); return; }
+            string path = paths[0], destination = null;
+            string title = operation == "move" ? "重命名 / 移动" : operation == "remove" ? "删除受控项" : "加入忽略列表";
+            if (operation == "move")
+            {
+                using (var dialog = new PathInputForm(path))
+                { if (dialog.ShowDialog(this) != DialogResult.OK) return; destination = dialog.Destination; }
+            }
+            else
+            {
+                string note = operation == "remove" ? "从磁盘删除此受控文件或目录，生成待提交删除。目录包含后代。\r\n存在本地更改或私有项时会拒绝操作。" :
+                    "将此未版本控制项的精确路径写入工作区 ignore.conf。\r\n目录规则包含后代；不会删除文件，也不会取消已受控文件的跟踪。";
+                if (MessageBox.Show(this, note + "\r\n\r\n" + path + "\r\n\r\n继续？", title, MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
+            }
+            SetBusy(true, "正在" + title + "…");
+            try
+            {
+                PlasticCommandResult result;
+                if (operation == "move") result = await client.MoveAsync(path, destination, CancellationToken.None);
+                else if (operation == "remove") result = await client.RemoveAsync(path, CancellationToken.None);
+                else result = await client.IgnoreAsync(path, CancellationToken.None);
+                AppendOutput("[" + title + "] " + path); AppendOutput(result.Output); AppendOutput(result.Error);
+                if (!result.Succeeded) MessageBox.Show(this, result.Error + "\r\n" + result.Output, "操作未成功", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SHChangeNotify(0x00002000, 0x0005, Path.GetDirectoryName(path), IntPtr.Zero);
+            }
+            catch (Exception ex) { ShowError(ex); }
+            finally { SetBusy(false, ""); }
+            await RefreshAsync();
         }
         private async Task InitializeAsync()
         {

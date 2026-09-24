@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
 internal static class CliIntegrationTests
@@ -45,6 +46,11 @@ internal static class CliIntegrationTests
 
             string firstName = "中文 & 空格.txt", secondName = "unselected.txt";
             string first = Path.Combine(producer, firstName), second = Path.Combine(producer, secondName);
+            if (args.Length > 2 && args[2] == "--history-only")
+            {
+                HistoricalFileAndRootRollbackScenarios(producer, consumer, partial);
+                Save(true, null); Console.WriteLine("PASS: " + assertions + " live historical file / whole rollback assertions"); return 0;
+            }
             if (args.Length > 2 && args[2] == "--revisions-only")
             {
                 RevisionAndScopeScenarios(producer, consumer, partial, first, second);
@@ -111,6 +117,7 @@ internal static class CliIntegrationTests
             Assert(!Status(producer).Contains("AD"), "Producer has no leftover pending additions");
             Assert(!Status(partial).Contains("CH"), "Partial fixture has no leftover local changes");
             RevisionAndScopeScenarios(producer, consumer, partial, first, second);
+            HistoricalFileAndRootRollbackScenarios(producer, consumer, partial);
             Console.WriteLine("PASS: " + assertions + " live CLI integration assertions");
             Save(true, null);
             return 0;
@@ -249,6 +256,75 @@ internal static class CliIntegrationTests
 
     private static bool HasPending(string path)
     { return ((IList)((Dictionary<string, object>)Call("status", path)["data"])["entries"]).Count != 0; }
+
+    private static void HistoricalFileAndRootRollbackScenarios(string producer, string consumer, string partial)
+    {
+        Call("update", producer, "--yes");
+        string textName = "历史 中文 & file.txt", binaryName = "binary.bin", deletedName = "后来删除.txt", addedName = "later-added.txt", movedName = "rename-source.txt", renamedName = "rename-destination.txt";
+        string textPath = Path.Combine(producer, textName), binaryPath = Path.Combine(producer, binaryName), deletedPath = Path.Combine(producer, deletedName), addedPath = Path.Combine(producer, addedName);
+        byte[] originalText = new UTF8Encoding(false).GetBytes("历史第一版\nline unchanged\n"), originalBinary = new byte[] { 0, 1, 255, 254, 17 }, deletedBytes = new UTF8Encoding(false).GetBytes("deleted historical bytes\n");
+        File.WriteAllBytes(textPath, originalText); File.WriteAllBytes(binaryPath, originalBinary); File.WriteAllBytes(deletedPath, deletedBytes);
+        string moveSource = Path.Combine(producer, movedName), moveDestination = Path.Combine(producer, renamedName);
+        Create(moveSource, "rename retained bytes\n");
+        Call("add", new[] { textPath, binaryPath, deletedPath, moveSource }, "--yes");
+        Call("checkin", producer, "--yes", "--comment", "historical download and whole rollback baseline");
+        long before = LatestChangeset(textPath);
+        File.WriteAllText(textPath, "历史第二版\nline unchanged\n", new UTF8Encoding(false));
+        File.WriteAllBytes(binaryPath, new byte[] { 0, 2, 255, 253, 18 });
+        Call("remove", deletedPath, "--yes");
+        Call("move", moveSource, "--destination", moveDestination, "--yes");
+        Assert(!File.Exists(deletedPath) && !File.Exists(moveSource) && File.ReadAllText(moveDestination) == "rename retained bytes\n", "CLI remove and move produce the requested local tree");
+        Create(addedPath, "added later\n"); Call("add", addedPath, "--yes");
+        Call("checkin", producer, "--yes", "--comment", "historical download and whole rollback changed tree");
+        long after = LatestChangeset(textPath);
+        Assert(after > before && !HasPending(producer), "Historical fixture has two clean revisions");
+
+        var compared = (Dictionary<string, object>)Call("diff-history", producer, "--item", "/" + textName, "--from", before.ToString(), "--to", after.ToString())["data"];
+        Assert((bool)compared["hasChanges"] && !(bool)compared["isBinary"] && compared["diffText"].ToString().Contains("历史第一版") && compared["diffText"].ToString().Contains("历史第二版"), "Arbitrary historical text comparison returns both Unicode versions");
+        var same = (Dictionary<string, object>)Call("diff-history", producer, "--item", "/" + textName, "--from", before.ToString(), "--to", before.ToString())["data"];
+        Assert(!(bool)same["hasChanges"], "Identical historical revisions report no changes");
+        var binary = (Dictionary<string, object>)Call("diff-history", producer, "--item", "/" + binaryName, "--from", before.ToString(), "--to", after.ToString())["data"];
+        Assert((bool)binary["isBinary"] && (bool)binary["hasChanges"], "Binary historical comparison reports binary differences");
+
+        string exported = Path.Combine(runDirectory, "导出 historical.txt"), exportedBinary = Path.Combine(runDirectory, "exported.bin"), exportedDeleted = Path.Combine(runDirectory, "deleted-history.txt");
+        Call("export", producer, "--item", "/" + textName, "--changeset", before.ToString(), "--output", exported, "--yes");
+        Assert(File.ReadAllBytes(exported).SequenceEqual(originalText), "Historical Unicode export preserves exact bytes");
+        Invoke("export", new[] { producer }, 2, "--item", "/" + textName, "--changeset", after.ToString(), "--output", exported, "--yes");
+        Assert(File.ReadAllBytes(exported).SequenceEqual(originalText), "Export refuses overwrite and preserves existing destination");
+        Call("export", producer, "--item", "/" + textName, "--changeset", after.ToString(), "--output", exported, "--yes", "--overwrite");
+        Assert(File.ReadAllBytes(exported).SequenceEqual(File.ReadAllBytes(textPath)), "Explicit export overwrite writes requested revision");
+        Call("export", producer, "--item", "/" + binaryName, "--changeset", before.ToString(), "--output", exportedBinary, "--yes");
+        Assert(File.ReadAllBytes(exportedBinary).SequenceEqual(originalBinary), "Binary export preserves every byte");
+        Call("export", producer, "--item", "/" + deletedName, "--changeset", before.ToString(), "--output", exportedDeleted, "--yes");
+        Assert(!File.Exists(deletedPath) && File.ReadAllBytes(exportedDeleted).SequenceEqual(deletedBytes), "Deleted working file remains exportable from its old revision");
+        Assert(!HasPending(producer), "Historical comparison and export do not modify workspace");
+        string ignored = Path.Combine(producer, "local-only.tmp"), ignoreConfig = Path.Combine(producer, "ignore.conf");
+        Create(ignored, "private local content");
+        Call("ignore", ignored, "--yes");
+        Assert(File.ReadAllText(ignoreConfig).Contains("/local-only.tmp") && !HasPending(ignored), "CLI ignore adds an exact private path rule");
+        File.Delete(ignored); File.Delete(ignoreConfig);
+
+        string selector = File.ReadAllText(Path.Combine(producer, ".plastic", "plastic.selector"));
+        var restored = Call("rollback", producer, "--changeset", before.ToString(), "--yes");
+        Assert(((Dictionary<string, object>)restored["data"])["operation"].ToString() == "restore-pending", "Whole-workspace rollback is reported as pending restoration");
+        Assert(File.ReadAllText(Path.Combine(producer, ".plastic", "plastic.selector")) == selector, "Whole rollback preserves the workspace branch selector");
+        Assert(File.ReadAllBytes(textPath).SequenceEqual(originalText) && File.ReadAllBytes(binaryPath).SequenceEqual(originalBinary), "Whole rollback restores historical text and binary bytes");
+        Assert(File.ReadAllBytes(deletedPath).SequenceEqual(deletedBytes) && !File.Exists(addedPath), "Whole rollback restores deletion and removes later addition");
+        Assert(File.ReadAllText(moveSource) == "rename retained bytes\n" && !File.Exists(moveDestination), "Whole rollback reverses the recorded rename");
+        Assert(HasPending(producer), "Whole rollback leaves changes ready for checkin");
+        var published = Call("checkin", producer, "--yes", "--comment", "publish whole-workspace rollback as a new changeset");
+        var publishedMatch = Regex.Match(published["output"].ToString(), @"cs:(\d+)@");
+        long publishedChangeset = publishedMatch.Success ? Int64.Parse(publishedMatch.Groups[1].Value) : -1;
+        Assert(!HasPending(producer) && publishedChangeset > after, "Whole rollback is published as a new changeset without rewriting history");
+        Assert(Json.Serialize(ChangesetDetails(producer, publishedChangeset)).Contains("publish whole-workspace rollback"), "Published rollback changeset has its own server history record");
+        Call("update", consumer, "--yes");
+        Assert(File.ReadAllBytes(Path.Combine(consumer, textName)).SequenceEqual(originalText) && File.ReadAllBytes(Path.Combine(consumer, binaryName)).SequenceEqual(originalBinary) &&
+            File.ReadAllBytes(Path.Combine(consumer, deletedName)).SequenceEqual(deletedBytes) && !File.Exists(Path.Combine(consumer, addedName)), "Independent consumer receives the committed whole rollback snapshot");
+        Assert(File.ReadAllText(Path.Combine(consumer, movedName)) == "rename retained bytes\n" && !File.Exists(Path.Combine(consumer, renamedName)), "Independent consumer receives the reversed rename");
+        Invoke("rollback", new[] { partial }, 2, "--changeset", before.ToString(), "--yes");
+        Assert(!HasPending(partial), "Unsupported Partial whole rollback is rejected without changes");
+        Events.Add(new { historicalBaseline = before, historicalChanged = after, historicalPublishedRollback = publishedChangeset });
+    }
 
     private static Dictionary<string, object> Call(string command, string path, params string[] extra)
     { return Call(command, new[] { path }, extra); }

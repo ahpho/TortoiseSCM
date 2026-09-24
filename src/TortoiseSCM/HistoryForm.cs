@@ -20,6 +20,8 @@ namespace TortoiseSCM
         private readonly TextBox description = new TextBox();
         private readonly Label status = new Label();
         private readonly Button restore = new Button();
+        private readonly Button snapshot = new Button();
+        private readonly Button historicalFile = new Button();
         private readonly TextBox filter = new TextBox();
         private readonly Button close = new Button();
         private readonly List<PlasticHistoryItem> entries = new List<PlasticHistoryItem>();
@@ -76,12 +78,20 @@ namespace TortoiseSCM
             description.BackColor = SystemColors.Window;
             description.AccessibleName = "提交说明";
             ConfigureList(changedFiles, "本次提交的文件", new[] { "操作", "路径", "原路径", "类型" }, new[] { 75, 570, 280, 70 });
+            changedFiles.SelectedIndexChanged += delegate { UpdateFileAction(); };
+            changedFiles.DoubleClick += delegate { OpenHistoricalFile(); };
+            var fileMenu = new ContextMenuStrip();
+            fileMenu.Items.Add("比较 / 导出历史文件…", null, delegate { OpenHistoricalFile(); });
+            fileMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { e.Cancel = !historicalFile.Enabled; };
+            changedFiles.ContextMenuStrip = fileMenu;
             lower.Panel1.Controls.Add(description);
             lower.Panel2.Controls.Add(changedFiles);
             split.Panel2.Controls.Add(lower);
             layout.Controls.Add(split, 0, 1);
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Margin = Padding.Empty };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, Margin = Padding.Empty };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, wholeWorkspace ? 165 : 0));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
             status.Dock = DockStyle.Fill;
@@ -89,17 +99,25 @@ namespace TortoiseSCM
             status.TextAlign = ContentAlignment.MiddleLeft;
             status.Margin = Padding.Empty;
             layout.Controls.Add(status, 0, 2);
-            restore.Text = wholeWorkspace ? "切换工作区到此版本(&R)..." : "恢复此范围到此版本(&R)...";
+            restore.Text = wholeWorkspace ? "整仓回滚为待提交(&R)..." : "恢复此范围到此版本(&R)...";
             restore.Dock = DockStyle.Fill;
             restore.Margin = new Padding(3, 3, 6, 3);
             restore.Enabled = false;
-            restore.Click += async delegate { await RestoreAsync(); };
-            footer.Controls.Add(restore, 1, 0);
+            restore.Click += async delegate { await RestoreAsync(false); };
+            historicalFile.Text = "比较 / 导出文件…";
+            historicalFile.Dock = DockStyle.Fill; historicalFile.Enabled = false;
+            historicalFile.Click += delegate { OpenHistoricalFile(); };
+            footer.Controls.Add(historicalFile, 0, 0);
+            snapshot.Text = "切换历史快照…";
+            snapshot.Dock = DockStyle.Fill; snapshot.Visible = wholeWorkspace; snapshot.Enabled = false;
+            snapshot.Click += async delegate { await RestoreAsync(true); };
+            footer.Controls.Add(snapshot, 2, 0);
+            footer.Controls.Add(restore, 3, 0);
             close.Text = "关闭";
             close.Dock = DockStyle.Fill;
             close.Margin = new Padding(3, 3, 0, 3);
             close.DialogResult = DialogResult.Cancel;
-            footer.Controls.Add(close, 2, 0);
+            footer.Controls.Add(close, 4, 0);
             CancelButton = close;
             layout.Controls.Add(footer, 0, 3);
             Controls.Add(layout);
@@ -172,7 +190,8 @@ namespace TortoiseSCM
             if (detailRequest != null) detailRequest.Cancel();
             changedFiles.Items.Clear();
             description.Clear();
-            restore.Enabled = false;
+            restore.Enabled = snapshot.Enabled = false;
+            UpdateFileAction();
             if (revisions.SelectedItems.Count != 1 || writing) return;
             var entry = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
             description.Text = entry.Comment;
@@ -186,34 +205,50 @@ namespace TortoiseSCM
                 foreach (var file in details.Files)
                     changedFiles.Items.Add(new ListViewItem(new[] { file.Status, file.Path, file.OldPath, file.ItemType }) { Tag = file });
                 status.Text = "cs:" + entry.Changeset + " · " + details.Files.Count + " 个更改项（完整提交）";
-                restore.Enabled = true;
+                restore.Enabled = snapshot.Enabled = true;
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!cancellation.IsCancellationRequested && request == generation) status.Text = "明细读取失败：" + ex.Message; }
             finally { if (detailRequest == cancellation) detailRequest = null; cancellation.Dispose(); }
         }
 
-        private async Task RestoreAsync()
+        private void UpdateFileAction()
+        {
+            var file = changedFiles.SelectedItems.Count == 1 ? (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag : null;
+            historicalFile.Enabled = !writing && revisions.SelectedItems.Count == 1 && file != null &&
+                !string.Equals(file.ItemType, "D", StringComparison.OrdinalIgnoreCase) && !string.Equals(file.ItemType, "dir", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void OpenHistoricalFile()
+        {
+            if (!historicalFile.Enabled) return;
+            var file = (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag;
+            var entry = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
+            using (var dialog = new HistoricalFileForm(client, path, file.Path, entry.Changeset)) dialog.ShowDialog(this);
+        }
+
+        private async Task RestoreAsync(bool switchSnapshot)
         {
             if (writing || revisions.SelectedItems.Count != 1) return;
             var entry = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
-            string explanation = wholeWorkspace ?
+            string explanation = switchSnapshot ?
                 "将整个工作区切换到历史快照。部分工作区只切换已加载内容，并保留加载规则。\r\n这不会创建回滚提交；存在待提交更改时操作会被拒绝。" :
+                wholeWorkspace ? "在当前分支把整仓内容回滚到所选历史版本，生成待提交更改。\r\n不会自动提交；请返回提交窗口检查并提交。\r\n只支持完整工作区，要求当前分支最新且无待提交更改。" :
                 "将此文件或目录恢复到历史内容，结果成为待提交更改。\r\n目录包含其后代；范围内已有待提交更改时操作会被拒绝。\r\n部分工作区不支持涉及增删、移动或未加载项的目录恢复。";
             if (MessageBox.Show(this, explanation + "\r\n\r\n" + path + "\r\n目标 cs:" + entry.Changeset + "\r\n\r\n继续？",
                 "TortoiseSCM — 恢复历史版本", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             writing = true;
-            revisions.Enabled = restore.Enabled = filter.Enabled = close.Enabled = false;
+            revisions.Enabled = restore.Enabled = snapshot.Enabled = historicalFile.Enabled = filter.Enabled = close.Enabled = false;
             status.Text = "正在恢复历史版本…";
             try
             {
-                var result = wholeWorkspace ? await client.SwitchAsync(path, entry.Changeset, lifetime.Token) :
+                var result = switchSnapshot ? await client.SwitchAsync(path, entry.Changeset, lifetime.Token) :
                     await client.RollbackAsync(path, entry.Changeset, lifetime.Token);
                 status.Text = result.Succeeded ? "已完成。关闭历史窗口后可检查待定更改。" : "操作失败：" + result.Error;
                 if (!result.Succeeded) MessageBox.Show(this, result.Output + "\r\n" + result.Error, "恢复未成功", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex) { status.Text = "恢复失败：" + ex.Message; MessageBox.Show(this, ex.Message, "恢复未成功"); }
-            finally { writing = false; revisions.Enabled = restore.Enabled = filter.Enabled = close.Enabled = true; }
+            finally { writing = false; revisions.Enabled = restore.Enabled = snapshot.Enabled = filter.Enabled = close.Enabled = true; UpdateFileAction(); }
         }
     }
 }

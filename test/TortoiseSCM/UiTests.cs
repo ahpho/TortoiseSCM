@@ -70,7 +70,7 @@ namespace TortoiseSCM
                             var list = (ListView)typeof(MainForm).GetField("files", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
                             Require(list.Items.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).Path.Equals(sample, StringComparison.OrdinalIgnoreCase)), "Live private UTF-8 file is displayed");
                             Require(list.CheckedItems.Count == 0, "No unreviewed changes selected automatically");
-                            Require(list.ContextMenuStrip != null && list.ContextMenuStrip.Items.Count == 3, "Pending context menu provides history, diff and discard");
+                            Require(list.ContextMenuStrip != null && list.ContextMenuStrip.Items.Cast<ToolStripItem>().Count(item => item is ToolStripMenuItem) == 6, "Pending context menu provides history, diff, discard, move, remove and ignore");
                             var message = (TextBox)Field(form, "comment");
                             Require(message.PointToScreen(Point.Empty).Y < list.PointToScreen(Point.Empty).Y, "Tortoise commit layout places message above changed files");
                             Require(!list.GridLines && list.Columns[0].Text == "路径", "Pending list uses native path-first layout without a grid");
@@ -163,6 +163,28 @@ namespace TortoiseSCM
                             Application.DoEvents();
                             var restore = (Button)Field(history, "restore");
                             Require(history.RectangleToScreen(history.ClientRectangle).Contains(restore.RectangleToScreen(restore.ClientRectangle)), "History restore button remains visible at minimum size");
+                            var snapshot = (Button)Field(history, "snapshot");
+                            Require(snapshot.Visible && snapshot.Text != restore.Text, "Workspace history exposes pending rollback separately from snapshot switching");
+                            var changed = (ListView)Field(history, "changedFiles");
+                            var readable = changed.Items.Cast<ListViewItem>().FirstOrDefault(item => ((PlasticChangesetFile)item.Tag).ItemType == "F" && ((PlasticChangesetFile)item.Tag).Status != "D");
+                            if (readable != null)
+                            {
+                                readable.Selected = true;
+                                Require(((Button)Field(history, "historicalFile")).Enabled, "Selecting a historical file enables compare and export");
+                                var file = (PlasticChangesetFile)readable.Tag;
+                                long revision = ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset;
+                                using (var fileForm = new HistoricalFileForm(new PlasticClient(PlasticClientConfig.Load()), args[1], file.Path, revision))
+                                {
+                                    Prepare(fileForm);
+                                    var comparison = (System.Threading.Tasks.Task)typeof(HistoricalFileForm).GetMethod("CompareAsync", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(fileForm, new object[] { false });
+                                    WaitUntil(() => comparison.IsCompleted, "Historical file comparison finishes without a dialog");
+                                    Require(((TextBox)Field(fileForm, "preview")).Text == "两个版本的文件内容相同。", "Historical comparison renders exact same-version result");
+                                    Save(fileForm, Path.Combine(artifacts, "historical-file.png"));
+                                    fileForm.Size = fileForm.MinimumSize; Application.DoEvents();
+                                    Save(fileForm, Path.Combine(artifacts, "historical-file-minimum.png"));
+                                    fileForm.Close();
+                                }
+                            }
                             Save(history, Path.Combine(artifacts, "history-minimum.png"));
                             history.Close();
                         }

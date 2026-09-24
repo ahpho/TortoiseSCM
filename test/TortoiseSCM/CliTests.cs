@@ -48,6 +48,17 @@ internal static class CliTests
             Run(2, "--command", "status", "--path", temporary, "--external");
             Run(2, "--command", "diff", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"), "--external");
             Run(2, "--command", "merge", "--yes");
+            Run(2, "--command", "remove", "--path", temporary);
+            Run(2, "--command", "ignore", "--path", temporary);
+            Run(2, "--command", "move", "--path", temporary, "--yes");
+            Run(2, "--command", "status", "--path", temporary, "--destination", temporary);
+            Run(2, "--command", "export", "--path", temporary, "--item", "/file.txt", "--changeset", "1", "--output", Path.Combine(temporary, "export.txt"));
+            Run(2, "--command", "export", "--path", temporary, "--changeset", "1", "--output", Path.Combine(temporary, "export.txt"), "--yes");
+            Run(2, "--command", "export", "--path", temporary, "--item", "/file.txt", "--changeset", "1", "--yes");
+            Run(2, "--command", "diff-history", "--path", temporary, "--item", "/file.txt", "--from", "1");
+            Run(2, "--command", "diff-history", "--path", temporary, "--item", "/file.txt", "--from", "-1", "--to", "2");
+            Run(2, "--command", "status", "--path", temporary, "--overwrite");
+            Run(2, "--command", "status", "--path", temporary, "--from", "1");
             Run(2, "--command", "status", "--path", temporary, "--base", temporary);
             Run(2, "--path", "relative.txt");
             Run(2, "--path", "C:relative.txt");
@@ -99,6 +110,7 @@ internal static class CliTests
             Check(partial["output"].ToString().StartsWith("partial\nupdate\n"), "Partial file update preserves its explicit scope");
             TextModeTests();
             ToolTests(controlled);
+            HistoricalFileTests();
             RevisionTests(controlled);
             Console.WriteLine("PASS: " + assertions + " CLI assertions");
             return 0;
@@ -184,7 +196,8 @@ internal static class CliTests
         Run(2, "--command", "rollback", "--changeset", "1", "--yes", "--path", controlled, "--cm", fakeCm);
         Run(2, "--command", "switch", "--changeset", "1", "--yes", "--path", temporary, "--cm", fakeCm);
         File.WriteAllText(clean, "clean");
-        Run(2, "--command", "rollback", "--changeset", "1", "--yes", "--path", temporary, "--cm", fakeCm);
+        var noOpRollback = Run(0, "--command", "rollback", "--changeset", "1", "--yes", "--path", temporary, "--cm", fakeCm);
+        Check(Data(noOpRollback)["operation"].ToString() == "restore-pending", "Root rollback dispatches separately from snapshot switch");
         Run(2, "--command", "switch", "--changeset", "1", "--yes", "--path", controlled, "--cm", fakeCm);
         var rollback = Run(0, "--command", "rollback", "--changeset", "1", "--yes", "--path", controlled, "--cm", fakeCm);
         Check(rollback["output"].ToString().Contains(controlled + "#cs:1") && Data(rollback)["operation"].ToString() == "restore-pending", "Rollback restores the selected path as pending changes");
@@ -193,6 +206,27 @@ internal static class CliTests
         File.WriteAllText(partial, "partial");
         var partialSwitch = Run(0, "--command", "switch", "--changeset", "1", "--yes", "--path", temporary, "--cm", fakeCm);
         Check(partialSwitch["output"].ToString().StartsWith("partial\nupdate\n") && partialSwitch["output"].ToString().Contains("--changeset=1"), "Partial switch uses native loaded-scope changeset update");
+    }
+
+    private static void HistoricalFileTests()
+    {
+        string output = Path.Combine(temporary, "exported 中文.txt"), settings = Path.Combine(temporary, "history-tool.xml");
+        Run(0, "--command", "export", "--path", temporary, "--item", "/deleted 中文.txt", "--changeset", "1", "--output", output, "--yes", "--cm", fakeCm);
+        Check(File.ReadAllText(output, Encoding.UTF8) == "historical one 中文\n", "Historical export writes exact old content without requiring a working file");
+        Run(2, "--command", "export", "--path", temporary, "--item", "/deleted 中文.txt", "--changeset", "2", "--output", output, "--yes", "--cm", fakeCm);
+        Check(File.ReadAllText(output, Encoding.UTF8) == "historical one 中文\n", "Export overwrite refusal leaves destination untouched");
+        Run(0, "--command", "export", "--path", temporary, "--item", "/deleted 中文.txt", "--changeset", "2", "--output", output, "--yes", "--overwrite", "--cm", fakeCm);
+        Check(File.ReadAllText(output, Encoding.UTF8) == "historical two 中文\n", "Explicit export overwrite writes new historical bytes");
+        var diff = Data(Run(0, "--command", "diff-history", "--path", temporary, "--item", "/deleted 中文.txt", "--from", "1", "--to", "2", "--cm", fakeCm));
+        Check((bool)diff["hasChanges"] && diff["diffText"].ToString().Contains("historical two 中文"), "Historical comparison returns structured text diff");
+        var same = Data(Run(0, "--command", "diff-history", "--path", temporary, "--item", "/deleted 中文.txt", "--from", "1", "--to", "1", "--cm", fakeCm));
+        Check(!(bool)same["hasChanges"], "Equal historical endpoints return no changes");
+        Run(2, "--command", "export", "--path", temporary, "--item", "/../outside", "--changeset", "1", "--output", output, "--yes", "--overwrite", "--cm", fakeCm);
+        Run(2, "--command", "export", "--path", temporary, "--item", "/missing.txt", "--changeset", "1", "--output", output, "--yes", "--overwrite", "--cm", fakeCm);
+        Check(File.ReadAllText(output, Encoding.UTF8) == "historical two 中文\n", "Missing historical source never truncates an overwrite destination");
+        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--diff-tool", fakeCm, "--diff-args", "--tool-diff \"{base}\" \"{local}\"");
+        var external = Data(Run(0, "--command", "diff-history", "--path", temporary, "--item", "/deleted 中文.txt", "--from", "1", "--to", "1", "--external", "--cm", fakeCm, "--settings-file", settings));
+        Check((bool)external["external"], "External historical comparison supports identical endpoints");
     }
 
     private static Tuple<int, string, string> Invoke(IEnumerable<string> arguments)
@@ -245,11 +279,15 @@ internal static class CliTests
         else if (args[0] == "find")
             Console.WriteLine(new XElement("PLASTICQUERY", args.Any(arg => arg.Contains("changesetid = 999")) ? null : new XElement("CHANGESET", new XElement("CHANGESETID", "1"),
                 new XElement("DATE", "2026-09-25T00:00:00Z"), new XElement("OWNER", "Test"), new XElement("BRANCH", "/main"), new XElement("COMMENT", "Changeset 中文"), new XElement("REPOSITORY", "test"))).ToString());
+        else if (args[0] == "showselector") Console.WriteLine("repository \"test@server:8087\"\n path \"/\"\n smartbranch \"/main\"");
+        else if (args[0] == "ls") Console.WriteLine(new XElement("LsResults", new XElement("LsItems", args[1] == "/missing.txt" ? null : new XElement("LsItem",
+            new XElement("Name", Path.GetFileName(args[1])), new XElement("CurrentPath", args[1]), new XElement("Type", "txt")))).ToString());
         else if (args[0] == "diff") Console.WriteLine("C|\"/history-folder/file.txt\"|F|\"\"|\"\"");
         else if (args[0] == "fileinfo")
             Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><Type>txt</Type></FileInfo></FileInfos>");
         else if (args[0] == "cat")
-            File.WriteAllText(args.Single(arg => arg.StartsWith("--file=")).Substring(7), "before 中文\n", new UTF8Encoding(false));
+            File.WriteAllText(args.Single(arg => arg.StartsWith("--file=")).Substring(7), args[1].StartsWith("serverpath:") ?
+                (args[1].Contains("#cs:1@") ? "historical one 中文\n" : "historical two 中文\n") : "before 中文\n", new UTF8Encoding(false));
         else
         {
             if (args[0] == "update" || (args[0] == "partial" && args[1] == "update"))
