@@ -1,0 +1,194 @@
+# TortoiseSCM 开发版本
+
+TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control 客户端。
+这次移植建立了独立的 Plastic 运行入口，没有将 Git 命令简单改名后继续执行。
+
+## 构建与运行
+
+要求 Windows x64、.NET Framework 4.8、Visual Studio 2022 或更新版本的 C++ 桌面开发组件与 Windows SDK。
+使用新的解决方案 `src/TortoiseSCM.sln`。构建不依赖 Git、libgit2、MFC 或 NuGet；保留的上游解决方案仍有其原依赖。
+
+```powershell
+cd D:\Work\Juscent\SCM_Study\TortoiseSCM
+.\build-tortoisescm.ps1 -Test
+.\bin\TortoiseSCM\Release\TortoiseSCM.exe --path 'D:\Work\Juscent\SCM_Study\TestSCM'
+```
+
+也可以双击 `TortoiseSCM.exe`，在目录选择器中选择 Plastic 工作区。`--command settings` 打开客户端路径设置。
+
+运行时复用 Plastic 客户端现有的用户配置和认证。新程序不储存密码，也不要求安装 Git。
+首次使用会发现标准安装目录和本机 `D:\Program Files\PlasticSCM5\client`；也可在“设置”中指定路径。
+
+## Explorer 集成
+
+```powershell
+.\contrib\tortoisescm\Register-Shell.ps1
+# 卸载右键菜单
+.\contrib\tortoisescm\Unregister-Shell.ps1
+```
+
+两个脚本使用当前用户的 `HKCU\Software\Classes`，不修改 TortoiseGit 的 CLSID。
+可通过 `-BinaryDirectory` 指向另一个同时含 EXE 和 DLL 的目录。
+菜单显示于工作区内的文件、目录与背景；多选必须来自同一个工作区。
+`.plastic` 元数据目录不显示菜单。Windows 11 使用经典“显示更多选项”菜单。
+
+Explorer 会保持已加载 DLL 的文件锁。如替换 DLL 时失败，先注销当前用户再登录；脚本不会强制结束 Explorer。
+卸载注册不会删除工作区、设置或程序文件。
+
+## 使用
+
+| 操作 | 行为 |
+| --- | --- |
+| 待定更改 | 显示原右键范围内的更改；支持中文、空格和多选路径 |
+| 签入 | 勾选待定项并填写说明；确认后提交所选项。私有项需先添加 |
+| 添加 / 签出 | 操作勾选项；没有勾选时使用原右键范围，执行前显示范围 |
+| 更新 | 完整工作区明确确认整体更新；Partial 工作区使用勾选项或原右键范围。不传入强制覆盖本地更改的参数 |
+| 撤销 | 只操作勾选项，确认提示会明确说明本地更改将丢失 |
+| 差异 | 选择一个受控文件，比较工作区本地版本与其基础版本 |
+| 历史 | 上半部提交记录，下半部选中提交的完整文件明细；文件、目录（含子项内容修改）与整个仓库均可查询 |
+| 范围历史 / 恢复 | 固定使用打开窗口时的文件或目录范围；恢复文件/目录产生待提交更改，根目录操作切换历史快照 |
+| 打开 Gluon | 在官方客户端中打开当前工作区 |
+| 设置 | 配置 cm.exe、gluon.exe、命令超时、外部 diff / merge 程序及参数模板 |
+
+目录操作递归包含子项。签入/撤销一个有更改的目录前应核对其子项。
+勾选目录会勾选其可见后代；取消某个子项会取消父目录的递归选择，避免把该子项隐式提交。
+列表右键提供显示历史、查看差异和丢弃修改，操作对象为高亮行；签入按钮使用勾选项。
+待提交列表按当前路径过滤，移动到范围外的条目不会显示在原目录内。
+CLI 命令根据实际退出码报告结果，错误可在“操作记录 / 历史”查看；失败时不会清空签入说明。
+Gluon 与默认官方差异窗口独立运行，TortoiseSCM 仅确认进程启动。自定义外部工具等待进程退出，报告其退出码。
+命令超时后请刷新核对工作区状态。
+
+## 无界面 CLI
+
+`TortoiseSCM.exe` 同时承担主 GUI 和命令入口的角色。加入 `--cli` 后，在初始化 WinForms 前分流；
+参数错误、服务器错误和超时都不会打开对话框。GUI 与 CLI 共用 `PlasticClient`，CLI 不是绕过产品直接调用 cm 的测试脚本。
+
+```powershell
+$exe = '.\bin\TortoiseSCM\Release\TortoiseSCM.exe'
+& $exe --cli --help | Out-String
+& $exe --cli --command workspace --path 'D:\Work\Juscent\SCM_Study\TestSCM' --json | ConvertFrom-Json
+& $exe --cli --command status --path 'D:\Work\Juscent\SCM_Study\TestSCM' --json | ConvertFrom-Json
+& $exe --cli --command history --path 'D:\Work\Juscent\SCM_Study\TestSCM\README.md' --json | ConvertFrom-Json
+& $exe --cli --command diff --path 'D:\Work\Juscent\SCM_Study\TestSCM\README.md' --json | ConvertFrom-Json
+```
+
+工作区写操作支持 `add`、`checkout`、`checkin`、`undo`、`update`、`rollback`、`switch`，必须显式给 `--yes` 和至少一个 `--path`。
+重复 `--path` 可传递多选；必须来自同一工作区，空选择不表示全库操作。
+签入必须有 `--comment <说明>` 或 `--commentsfile <UTF-8文件>`。
+添加、签出和撤销可带 `--recursive`，签入本身遵循 Plastic 的递归目录语义。
+`--timeout <秒数>` 控制每个 cm 进程的超时，`--cm <绝对路径>` 可临时指定客户端。
+
+完整工作区仅允许显式以工作区根路径执行更新，单文件/子目录更新会在执行前拒绝；Partial 可精确更新单项或多项。
+实际类型通过 Plastic 状态头识别，不以可能仍显示 `Standard` 的本地 metadata 标记作为最终依据。
+CLI `diff` 输出基础版本与本地版本的文本差异，二进制变化单独标记，不启动查看器。
+`gluon` 仅支持 GUI 模式。`settings` 可从 CLI 查询或修改工具配置。
+
+### 历史与恢复
+
+```powershell
+& $exe --cli --command history --path 'D:\workspace\Assets' --json | ConvertFrom-Json
+& $exe --cli --command changeset --path 'D:\workspace' --changeset 42 --json | ConvertFrom-Json
+# 恢复文件或目录为待提交更改，不改写服务器历史
+& $exe --cli --command rollback --path 'D:\workspace\Assets' --changeset 42 --yes --json | ConvertFrom-Json
+# 将整个工作区切换到历史快照，不产生回滚提交
+& $exe --cli --command switch --path 'D:\workspace' --changeset 42 --yes --json | ConvertFrom-Json
+# 从历史快照回到当前分支最新版本
+& $exe --cli --command update --path 'D:\workspace' --yes --json | ConvertFrom-Json
+```
+
+`changeset.data` 包含 `changeset` 元信息和 `files`（`status/path/oldPath/itemType`）。
+仓库根历史包含各分支提交；目录历史通过提交文件路径筛选，也包括只有子文件内容变化的提交。
+当前目录查询需要逐个读取仓库提交明细，大仓库首次查询可能较慢。
+`rollback` 要求目标范围无待定更改，保留范围外更改；`switch` 要求整个工作区干净。
+根目录不能使用 `rollback`，应使用 `switch`；Partial 的切换只影响已加载内容，保留加载规则。
+Partial 目录恢复仅支持目录结构一致的历史内容；涉及增删或移动时会在执行前拒绝，请使用 Standard 工作区完成这类恢复。
+恢复语义遵循原生 [Unity Version Control REVERT](https://docs.unity.com/zh-cn/unity-version-control/uvcs-cli/revert)。
+
+### 外部 diff / merge
+
+设置窗口可选择可执行文件，并指定参数模板。CLI 支持同样配置：
+
+```powershell
+& $exe --cli --command settings --json | ConvertFrom-Json
+& $exe --cli --command settings --diff-tool 'C:\Tools\diff.exe' --diff-args '"{base}" "{local}"' --yes --json | ConvertFrom-Json
+& $exe --cli --command settings --merge-tool 'C:\Tools\merge.exe' --merge-args '"{base}" "{local}" "{remote}" "{merged}"' --yes --json | ConvertFrom-Json
+& $exe --cli --command diff --path 'D:\workspace\file.txt' --external --json | ConvertFrom-Json
+& $exe --cli --command merge --base 'D:\tmp\base.txt' --local 'D:\tmp\local.txt' --remote 'D:\tmp\remote.txt' --output 'D:\tmp\merged.txt' --yes --json | ConvertFrom-Json
+```
+
+工具参数必须符合所选工具的实际命令格式。应使用工具的等待选项（若有），以便临时基础文件在比较结束后才清理。
+diff 留空时 GUI 使用官方查看器；普通 CLI `diff` 仍输出文本，只有 `--external` 才启动工具。
+merge 留空时明确报错。设置窗口的“打开合并工具”允许选择四个文件；当前不自动参与 Plastic 冲突处理，也不标记冲突解决。
+工具通过独立参数调用，不经过命令解释器。`--settings-file <文件>` 可使用隔离配置。
+
+`--json` 的 stdout 为无 BOM UTF-8 单个对象，包括失败：
+
+```json
+{"schemaVersion":1,"command":"status","success":true,"exitCode":0,"output":"","error":"","data":{"workspace":{},"entries":[]}}
+```
+
+状态条目包含 `path/oldPath/status/description/isDirectory`；历史包含 `changeset/owner/branch/comment/revisionSpec`；
+差异包含 `path/baseRevision/diffText/isBinary/hasChanges`。
+退出码为 `0` 成功、`1` SCM/运行错误、`2` 参数或范围错误、`124` 超时。
+本程序为 Windows GUI 子系统：PowerShell 使用管道等待输出；自动化程序使用 `ProcessStartInfo` 重定向 stdout/stderr 并等待退出即可。
+
+## 代码结构
+
+```
+Explorer
+  └─ src/TortoiseShell/PlasticShell.cpp       原生 COM 菜单，仅做本地工作区探测
+       └─ UTF-8 临时路径文件
+            └─ src/TortoiseSCM/Program.cs      独立程序入口
+                 ├─ MainForm.cs               中文待定更改与操作窗口
+                 ├─ HistoryForm.cs            提交 / 文件明细与历史恢复
+                 ├─ SettingsForm.cs           客户端与外部工具设置
+                 ├─ ToolLaunchForm.cs         外部三方合并入口
+                 ├─ CliRunner.cs              无界面命令、JSON 与退出码
+                 └─ Core/                     Plastic 命令、XML 状态与进程后端
+                      └─ cm.exe / gluon.exe
+```
+
+菜单保留 TortoiseGit/TortoiseSVN 的“薄 shell + 独立 GUI 进程”方式，复用仓库图标。
+新 shell 不把 .NET 或 Plastic 命令执行装入 Explorer；不会在右键菜单展开时运行服务器请求。
+Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Plastic 工作区。
+
+## 验证
+
+`build-tortoisescm.ps1 -Test` 编译并运行无服务器的后端测试、真实 EXE 的 CLI 黑盒测试、Shell 测试和设置窗口渲染。
+加入 `-Workspace 'D:\Work\Juscent\SCM_Study\TestSCM'` 会执行实际 cm 集成测试和待定更改窗口渲染。
+集成测试仅创建专用临时文件，测试添加/撤销后清理，不提交服务器，也不修改现有文件。
+渲染图片位于 `bin/TortoiseSCM/qa/Release`。
+注册后可运行 `bin/TortoiseSCM/Release/ShellTests.exe --registered` 验证真实 COM DLL 加载。
+本次结果与未验证范围见 [验证记录](TortoiseSCM-validation.md)。
+
+```powershell
+# 完整服务器测试：会在 TestSCM 中创建专用测试分支和三个独立工作区，并真实签入小型测试文件
+.\build-tortoisescm.ps1 -Integration
+```
+
+该选项从 TestSCM 的空 `cs:0` 创建唯一测试分支，建立 producer、consumer、partial 工作区；
+不会切换原有 TestSCM 的分支。仓库规格从原工作区解析，脚本严格限定仓库名 `TestSCM`。
+每次运行在 `bin/TortoiseSCM/qa/integration-*` 保存 manifest、命令记录及 `cli-integration-results.json`；
+`latest-integration.txt` 指向最近一次的 manifest。测试分支和工作区保留便于复查，不合并到 `/main`。
+
+## 当前边界
+
+### 本轮五项需求对照
+
+| 需求 | GUI | CLI | 限制 |
+| --- | --- | --- | --- |
+| 文件 / 目录更新、历史、恢复 | 更新、历史 / 范围历史内恢复按钮 | `update`、`history`、`rollback --changeset` | 精确范围更新需要 Partial；Standard 明确要求整体更新 |
+| 整仓更新、历史、历史版本 | 根目录打开，历史内切换快照 | 根路径 `update`、`history`、`switch --changeset` | 历史快照切换不生成回滚提交；Partial 仅处理已加载项 |
+| 目录范围提交、勾选及右键 | 按范围显示，勾选签入，右键历史 / 差异 / 丢弃 | `status --path` 获取范围，重复 `--path` 提交所选项，`history` / `undo` | 目录递归操作包含后代；私有文件需先添加 |
+| 上下窗格历史明细 | 上方提交、下方完整提交文件清单 | `history` + `changeset --changeset` 返回结构化记录 | 目录历史首次扫描可能较慢 |
+| 自定义 diff / merge | 设置窗口、差异按钮、合并工具入口 | `settings`、`diff --external`、`merge` | 配置与手动三方合并可用；自动冲突解决尚未接入 |
+
+这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
+尚未提供：Explorer 状态图标覆盖与后台缓存、独立分支/合并/冲突编辑窗口、拖放移动、仓库创建、
+签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
+高级操作通过官方客户端完成。
+部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。
+
+参考：[Unity Gluon 签入说明](https://docs.unity.com/unity-version-control/gluon/check-in-changes)、
+[Unity Gluon 添加新项](https://docs.unity.com/en-us/unity-version-control/gluon/upload-new-items)、
+[Plastic CLI 指南](https://docs-plasticscm.azurewebsites.net/cli/plastic-scm-version-control-cli-guide)。

@@ -1,0 +1,4 @@
+LIBRARY TortoiseSCMShell
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE
