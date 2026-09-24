@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'LockTests', 'MergeTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -73,6 +73,14 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-integration.txt'), $manifest)
         & $integrationOutput (Join-Path $out 'TortoiseSCM.exe') $manifest
         if ($LASTEXITCODE -ne 0) { throw "Server-backed CLI tests failed. Inspect $manifest and cli-integration-results.json beside it." }
+        $mergeIntegrationOutput = Join-Path $out 'MergeIntegrationTests.exe'
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$mergeIntegrationOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\MergeIntegrationTests.cs')
+        if ($LASTEXITCODE -ne 0) { throw 'Merge integration test compilation failed.' }
+        $mergeManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $mergeManifest -or -not (Test-Path -LiteralPath $mergeManifest)) { throw 'Merge workspace setup did not produce a manifest.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-merge-integration.txt'), $mergeManifest)
+        & $mergeIntegrationOutput (Join-Path $out 'TortoiseSCM.exe') $mergeManifest
+        if ($LASTEXITCODE -ne 0) { throw "Server-backed merge tests failed. Inspect $mergeManifest and merge-integration-results.json beside it." }
     }
 }
 Write-Host "Built: $out\TortoiseSCM.exe"

@@ -148,6 +148,15 @@ namespace TortoiseSCM
             operations.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff); });
             operations.Items.Add("所选项历史", null, async delegate { await ExecuteAsync(PlasticCommand.History); });
             operations.Items.Add("当前范围历史 / 恢复", null, async delegate { await ShowScopeHistoryAsync(); });
+            operations.Items.Add("合并变更集 / 解决冲突…", null, async delegate {
+                if (busy || !loaded) return;
+                using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+                await RefreshAsync();
+            });
+            operations.Items.Add("锁管理…", null, delegate {
+                if (busy || !loaded) return;
+                using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+            });
             operations.Items.Add("操作记录…", null, delegate { ShowOutput(); });
             operations.Items.Add(new ToolStripSeparator());
             operations.Items.Add("打开 Gluon", null, async delegate { await ExecuteAsync(PlasticCommand.Gluon); });

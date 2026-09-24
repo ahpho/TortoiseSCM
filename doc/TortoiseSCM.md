@@ -161,8 +161,30 @@ GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件�
 
 工具参数必须符合所选工具的实际命令格式。应使用工具的等待选项（若有），以便临时基础文件在比较结束后才清理。
 diff 留空时 GUI 使用官方查看器；普通 CLI `diff` 仍输出文本，只有 `--external` 才启动工具。
-merge 留空时明确报错。设置窗口的“打开合并工具”允许选择四个文件；当前不自动参与 Plastic 冲突处理，也不标记冲突解决。
+merge 留空时明确报错。设置窗口的“打开合并工具”允许选择四个文件，此入口只编辑文件。
+待定更改窗口的“操作 → 合并变更集 / 解决冲突”提供完整工作区的分支合并流程：预检、开始、三方编辑、确认解决，然后返回待定更改提交。工具退出本身不会标记冲突解决。
 工具通过独立参数调用，不经过命令解释器。`--settings-file <文件>` 可使用隔离配置。
+
+### 分支合并与锁
+
+```powershell
+& $exe --cli --command merge-preview --path 'D:\workspace' --changeset 123 --json | ConvertFrom-Json
+& $exe --cli --command merge-start --path 'D:\workspace' --changeset 123 --yes --json | ConvertFrom-Json
+& $exe --cli --command merge-status --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command merge-prepare --path 'D:\workspace' --changeset 123 --item '/file.txt' --yes --json | ConvertFrom-Json
+# 将 base/local/remote 交给已配置的工具；该命令不会标记解决
+& $exe --cli --command merge-conflict-tool --path 'D:\workspace' --changeset 123 --item '/file.txt' --yes --json | ConvertFrom-Json
+# 检查结果后，单独应用；随后使用常规 checkin 提交
+& $exe --cli --command merge-resolve --path 'D:\workspace' --changeset 123 --item '/file.txt' --result 'D:\tmp\reviewed.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command locks --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command unlock --path 'D:\workspace' --lock-id '00000000-0000-0000-0000-000000000000' --yes --json | ConvertFrom-Json
+```
+
+合并开始要求干净的 Standard 工作区，并在原生 Plastic 合并状态下处理文件冲突。会话保存在当前用户的本地应用数据目录，可以跨进程恢复。
+合并结果需保存在独立文件；应用前核验冲突文件是否被其他程序修改。未解决或中断状态不能直接由本程序签入。
+本版本拒绝目录结构冲突，Partial 工作区的传入冲突也需使用官方客户端；不自动猜测重命名、删除或同路径新增的取舍。
+锁列表限定当前仓库；只有当前用户、当前工作区持有的锁才允许释放，执行前再次读取核验。
+锁获取遵循服务器规则：普通签出并不保证获得锁。本程序不修改服务器锁规则，服务器权限仍决定能否释放。
 
 `--json` 的 stdout 为无 BOM UTF-8 单个对象，包括失败：
 
@@ -186,6 +208,8 @@ Explorer
                  ├─ HistoryForm.cs            提交 / 文件明细与历史恢复
                  ├─ SettingsForm.cs           客户端与外部工具设置
                  ├─ ToolLaunchForm.cs         外部三方合并入口
+                 ├─ MergeForm.cs              分支合并预检与文件冲突处理
+                 ├─ LocksForm.cs              仓库锁列表与自己持有锁的释放
                  ├─ CliRunner.cs              无界面命令、JSON 与退出码
                  └─ Core/                     Plastic 命令、XML 状态与进程后端
                       └─ cm.exe / gluon.exe
@@ -224,10 +248,10 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 整仓更新、历史、历史版本 | 根目录打开，历史内分别回滚待提交和切换快照 | 根路径 `update`、`history`、`rollback`、`switch` | 整仓待提交回滚仅 Standard；Partial 快照仅处理已加载项 |
 | 目录范围提交、勾选及右键 | 按范围显示，勾选签入，右键历史 / 差异 / 丢弃 | `status --path` 获取范围，重复 `--path` 提交所选项，`history` / `undo` | 目录递归操作包含后代；私有文件需先添加 |
 | 上下窗格历史明细 | 上方提交、下方完整提交文件清单 | `history` + `changeset --changeset` 返回结构化记录 | 目录历史首次扫描可能较慢 |
-| 自定义 diff / merge | 设置窗口、差异按钮、合并工具入口 | `settings`、`diff --external`、`merge` | 配置与手动三方合并可用；自动冲突解决尚未接入 |
+| 自定义 diff / merge | 设置窗口、差异按钮、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*` | 分支合并仅 Standard；目录结构冲突仍需官方客户端 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：Explorer 状态图标覆盖与后台缓存、独立分支/合并/冲突编辑窗口、拖放移动、仓库创建、
+尚未提供：Explorer 状态图标覆盖与后台缓存、分支浏览与目录冲突编辑窗口、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

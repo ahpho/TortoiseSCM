@@ -25,7 +25,8 @@ internal static class CliTests
         // The test executable doubles as a cm substitute; this exercises real process
         // transport and exact argument parsing without requiring a server or UI.
         if (args.Length > 0 && !args[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return FakeCm(args);
-        temporary = Path.Combine(Path.GetTempPath(), "TortoiseSCM-CLI-" + Guid.NewGuid().ToString("N") + " 中文 空格");
+        // Leave headroom below legacy helper MAX_PATH for nested private merge artifacts.
+        temporary = Path.Combine(Path.GetTempPath(), "TSCMCLI-" + Guid.NewGuid().ToString("N").Substring(0, 12) + " 中文 空格");
         try
         {
             if (args.Length != 1) throw new ArgumentException("Usage: CliTests.exe <TortoiseSCM.exe>");
@@ -33,7 +34,7 @@ internal static class CliTests
             fakeCm = Assembly.GetExecutingAssembly().Location;
             Directory.CreateDirectory(Path.Combine(temporary, ".plastic"));
             File.WriteAllText(Path.Combine(temporary, ".plastic", "plastic.workspace"), "CLI 中文\r\nguid\r\nStandard\r\n", new UTF8Encoding(false));
-            File.WriteAllText(Path.Combine(temporary, ".plastic", "plastic.selector"), "repository \"test@server:8087\"\n path \"/\"\n smartbranch \"/main\"\n");
+            File.WriteAllText(Path.Combine(temporary, ".plastic", "plastic.selector"), "repository \"test@server:8087\"\r\n path \"/\"\r\n smartbranch \"/main\"\r\n");
             Check(Run(0, "--help")["output"].ToString().Contains("--commentsfile"), "Help is machine-readable without paths");
             Run(2, "--unknown");
             Run(2, "--command", "gluon", "--path", temporary);
@@ -48,6 +49,18 @@ internal static class CliTests
             Run(2, "--command", "status", "--path", temporary, "--external");
             Run(2, "--command", "diff", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"), "--external");
             Run(2, "--command", "merge", "--yes");
+            Run(2, "--command", "merge-preview", "--path", temporary);
+            Run(2, "--command", "merge-start", "--path", temporary, "--changeset", "1");
+            Run(2, "--command", "merge-resolve", "--path", temporary, "--changeset", "1", "--item", "/file.txt", "--yes");
+            Run(2, "--command", "merge-resolve", "--path", temporary, "--changeset", "1", "--result", Path.Combine(temporary, "result.txt"), "--yes");
+            Run(2, "--command", "merge-prepare", "--path", temporary, "--changeset", "1", "--item", "/file.txt");
+            Run(2, "--command", "merge-conflict-tool", "--path", temporary, "--changeset", "1", "--item", "/file.txt");
+            Run(2, "--command", "merge-status", "--path", temporary, "--changeset", "1");
+            Run(2, "--command", "status", "--path", temporary, "--result", Path.Combine(temporary, "result.txt"));
+            Run(2, "--command", "unlock", "--path", temporary, "--lock-id", Guid.NewGuid().ToString());
+            Run(2, "--command", "unlock", "--path", temporary, "--yes");
+            Run(2, "--command", "unlock", "--path", temporary, "--lock-id", "not-a-guid", "--yes");
+            Run(2, "--command", "locks", "--path", temporary, "--lock-id", Guid.NewGuid().ToString());
             Run(2, "--command", "remove", "--path", temporary);
             Run(2, "--command", "ignore", "--path", temporary);
             Run(2, "--command", "move", "--path", temporary, "--yes");
@@ -111,11 +124,19 @@ internal static class CliTests
             TextModeTests();
             ToolTests(controlled);
             HistoricalFileTests();
+            LockTests();
             RevisionTests(controlled);
+            MergeWorkflowTests();
             Console.WriteLine("PASS: " + assertions + " CLI assertions");
             return 0;
         }
-        catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            string log = Path.Combine(temporary, ".plastic", "cli-cm-calls.log");
+            if (File.Exists(log)) Console.Error.WriteLine("Last fake cm calls:\n" + String.Join("\n", File.ReadAllLines(log).Reverse().Take(12).Reverse()));
+            return 1;
+        }
         finally { if (Directory.Exists(temporary)) Directory.Delete(temporary, true); }
     }
 
@@ -229,6 +250,55 @@ internal static class CliTests
         Check((bool)external["external"], "External historical comparison supports identical endpoints");
     }
 
+    private static void LockTests()
+    {
+        const string id = "77bdbba7-82e8-407b-8132-76d772be21c5";
+        var locks = (IList)Data(Run(0, "--command", "locks", "--path", temporary, "--cm", fakeCm))["locks"];
+        var own = (Dictionary<string, object>)locks[0];
+        Check(locks.Count == 1 && own["lockId"].ToString() == id && own["workspace"].ToString() == "CLI 中文" && (bool)own["canUnlock"], "Structured lock list includes current ownership and Unicode workspace");
+        Run(0, "--command", "unlock", "--path", temporary, "--lock-id", id, "--yes", "--cm", fakeCm);
+        Check(File.ReadAllText(Path.Combine(temporary, "fake-unlock.log")).Contains(id), "Own lock unlock sends its explicit GUID");
+        File.Delete(Path.Combine(temporary, "fake-unlock.log"));
+        File.WriteAllText(Path.Combine(temporary, "fake-other-lock.marker"), "other owner");
+        locks = (IList)Data(Run(0, "--command", "locks", "--path", temporary, "--cm", fakeCm))["locks"];
+        Check(!(bool)((Dictionary<string, object>)locks[0])["canUnlock"], "Foreign lock is visible but cannot be unlocked");
+        Run(1, "--command", "unlock", "--path", temporary, "--lock-id", id, "--yes", "--cm", fakeCm);
+        Check(!File.Exists(Path.Combine(temporary, "fake-unlock.log")), "Foreign ownership refusal never launches unlock");
+    }
+
+    private static void MergeWorkflowTests()
+    {
+        File.Delete(Path.Combine(temporary, "fake-partial.marker"));
+        File.WriteAllText(Path.Combine(temporary, "fake-clean.marker"), "clean");
+        string file = Path.Combine(temporary, "merge-conflict.txt"), settings = Path.Combine(temporary, "merge-config", "settings.xml");
+        File.WriteAllText(file, "merge local 中文\n", new UTF8Encoding(false));
+        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--merge-tool", fakeCm, "--merge-args", "--tool-merge \"{base}\" \"{local}\" \"{remote}\" \"{merged}\"");
+        Check(Data(Run(0, "--command", "merge-status", "--path", temporary, "--cm", fakeCm, "--settings-file", settings))["sessionId"] == null, "Merge status reports no active session without opening UI");
+        Run(2, "--command", "merge-prepare", "--path", temporary, "--changeset", "2", "--item", "/merge-conflict.txt", "--yes", "--cm", fakeCm, "--settings-file", settings);
+        var plan = (Dictionary<string, object>)Data(Run(0, "--command", "merge-preview", "--path", temporary, "--changeset", "2", "--cm", fakeCm, "--settings-file", settings))["plan"];
+        Check(((IList)plan["fileConflicts"]).Count == 1 && Convert.ToInt64(plan["sourceChangeset"]) == 2 && Convert.ToInt64(plan["baseChangeset"]) == 0, "Merge preview returns structured contributors and file conflict");
+        var started = Data(Run(0, "--command", "merge-start", "--path", temporary, "--changeset", "2", "--yes", "--cm", fakeCm, "--settings-file", settings));
+        var resumed = Data(Run(0, "--command", "merge-status", "--path", temporary, "--cm", fakeCm, "--settings-file", settings));
+        Check(started["sessionId"].ToString() == resumed["sessionId"].ToString(), "Merge session survives separate CLI processes");
+        var files = Data(Run(0, "--command", "merge-prepare", "--path", temporary, "--changeset", "2", "--item", "/merge-conflict.txt", "--yes", "--cm", fakeCm, "--settings-file", settings));
+        Check(File.ReadAllText((string)files["basePath"]) == "merge base 中文\n" && File.ReadAllText((string)files["localPath"]) == "merge local 中文\n" &&
+            File.ReadAllText((string)files["remotePath"]) == "merge remote 中文\n", "Merge preparation downloads all three distinct versions");
+        var tool = Data(Run(0, "--command", "merge-conflict-tool", "--path", temporary, "--changeset", "2", "--item", "/merge-conflict.txt", "--yes", "--cm", fakeCm, "--settings-file", settings));
+        string result = (string)tool["resultPath"];
+        Check(File.ReadAllText(result) == "merged 中文" && File.ReadAllText(file) == "merge local 中文\n", "Conflict tool creates separate result without applying it");
+        Run(2, "--command", "merge-resolve", "--path", temporary, "--changeset", "3", "--item", "/merge-conflict.txt", "--result", result, "--yes", "--cm", fakeCm, "--settings-file", settings);
+        File.WriteAllText(file, "later local edit");
+        Run(2, "--command", "merge-resolve", "--path", temporary, "--changeset", "2", "--item", "/merge-conflict.txt", "--result", result, "--yes", "--cm", fakeCm, "--settings-file", settings);
+        Check(File.ReadAllText(file) == "later local edit", "Stale merge resolution preserves later workspace edits");
+        File.WriteAllText(file, "merge local 中文\n", new UTF8Encoding(false));
+        Run(0, "--command", "merge-resolve", "--path", temporary, "--changeset", "2", "--item", "/merge-conflict.txt", "--result", result, "--yes", "--cm", fakeCm, "--settings-file", settings);
+        Check(File.ReadAllText(file) == "merged 中文", "Explicit conflict resolution applies only the selected result");
+        var resolved = (Dictionary<string, object>)Data(Run(0, "--command", "merge-status", "--path", temporary, "--cm", fakeCm, "--settings-file", settings))["plan"];
+        Check((bool)((Dictionary<string, object>)((IList)resolved["fileConflicts"])[0])["resolved"], "Merge status persists resolved state");
+        // Session input files are deliberately read-only; normalize only our fixture artifacts for cleanup.
+        foreach (string artifact in Directory.GetFiles(Path.Combine(temporary, "merge-config"), "*", SearchOption.AllDirectories)) File.SetAttributes(artifact, FileAttributes.Normal);
+    }
+
     private static Tuple<int, string, string> Invoke(IEnumerable<string> arguments)
     {
         var start = new ProcessStartInfo { FileName = application,
@@ -255,6 +325,8 @@ internal static class CliTests
     private static int FakeCm(string[] args)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
+        string metadata = Path.Combine(Environment.CurrentDirectory, ".plastic");
+        if (Directory.Exists(metadata)) File.AppendAllText(Path.Combine(metadata, "cli-cm-calls.log"), Json.Serialize(args) + Environment.NewLine);
         if (args[0] == "--tool-diff")
         {
             if (!File.Exists(args[1]) || !File.Exists(args[2])) return 9;
@@ -280,14 +352,36 @@ internal static class CliTests
             Console.WriteLine(new XElement("PLASTICQUERY", args.Any(arg => arg.Contains("changesetid = 999")) ? null : new XElement("CHANGESET", new XElement("CHANGESETID", "1"),
                 new XElement("DATE", "2026-09-25T00:00:00Z"), new XElement("OWNER", "Test"), new XElement("BRANCH", "/main"), new XElement("COMMENT", "Changeset 中文"), new XElement("REPOSITORY", "test"))).ToString());
         else if (args[0] == "showselector") Console.WriteLine("repository \"test@server:8087\"\n path \"/\"\n smartbranch \"/main\"");
+        else if (args[0] == "lock")
+        {
+            if (args[1] == "list")
+            {
+                if (args.Contains("--onlycurrentuser") && File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-other-lock.marker"))) return 0;
+                Console.WriteLine("TSLOCK|test|42|77bdbba7-82e8-407b-8132-76d772be21c5|2026-09-25|/main|1|/main|1|Locked|fixture-owner|CLI 中文|/folder/中文 file.txt|END");
+            }
+            else if (args[1] == "unlock") File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "fake-unlock.log"), String.Join("|", args));
+            return 0;
+        }
+        else if (args[0] == "merge")
+        {
+            if (args.Contains("--merge"))
+            {
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".plastic", "plastic.mergeprogress"), "fake native merge in progress");
+                if (args.Contains("--keepdestination")) File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".plastic", "fake-merge-resolved.marker"), "resolved");
+                Console.WriteLine("Fake native merge applied"); return 0;
+            }
+            Console.WriteLine("CONTRIBUTOR|SRC|2|cs:2@test@server:8087|source\nCONTRIBUTOR|DST|1|cs:1@test@server:8087|local\nCONTRIBUTOR|BASE|0|cs:0@test@server:8087|base");
+            if (!File.Exists(Path.Combine(Environment.CurrentDirectory, ".plastic", "fake-merge-resolved.marker"))) Console.WriteLine("FILE_CONFLICT|/merge-conflict.txt|0|2|1|42");
+        }
         else if (args[0] == "ls") Console.WriteLine(new XElement("LsResults", new XElement("LsItems", args[1] == "/missing.txt" ? null : new XElement("LsItem",
-            new XElement("Name", Path.GetFileName(args[1])), new XElement("CurrentPath", args[1]), new XElement("Type", "txt")))).ToString());
+            new XElement("Name", Path.GetFileName(args[1])), new XElement("CurrentPath", args[1]), new XElement("ItemId", "42"), new XElement("Type", "txt")))).ToString());
         else if (args[0] == "diff") Console.WriteLine("C|\"/history-folder/file.txt\"|F|\"\"|\"\"");
         else if (args[0] == "fileinfo")
             Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><Type>txt</Type></FileInfo></FileInfos>");
         else if (args[0] == "cat")
             File.WriteAllText(args.Single(arg => arg.StartsWith("--file=")).Substring(7), args[1].StartsWith("serverpath:") ?
-                (args[1].Contains("#cs:1@") ? "historical one 中文\n" : "historical two 中文\n") : "before 中文\n", new UTF8Encoding(false));
+                (args[1].Contains("/merge-conflict.txt#") ? (args[1].Contains("#cs:0@") ? "merge base 中文\n" : args[1].Contains("#cs:1@") ? "merge local 中文\n" : "merge remote 中文\n") :
+                    (args[1].Contains("#cs:1@") ? "historical one 中文\n" : "historical two 中文\n")) : "before 中文\n", new UTF8Encoding(false));
         else
         {
             if (args[0] == "update" || (args[0] == "partial" && args[1] == "update"))

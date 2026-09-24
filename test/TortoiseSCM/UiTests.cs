@@ -51,6 +51,57 @@ namespace TortoiseSCM
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 if (args.Length > 1)
                 {
+                    using (var merge = new MergeForm(new PlasticClient(PlasticClientConfig.Load()), args[1]))
+                    {
+                        Prepare(merge);
+                        WaitUntil(() => !(bool)Field(merge, "busy"), "Merge session lookup completes");
+                        var plan = new PlasticMergePlan { SourceChangeset = 17, DestinationChangeset = 18, BaseChangeset = 16 };
+                        ((NumericUpDown)Field(merge, "source")).Value = 17;
+                        ((TextBox)Field(merge, "details")).Text = "将指定变更集合并到当前分支。\r\n文件冲突需使用三方工具编辑，然后单独确认解决；完成后回到待定更改界面提交。";
+                        plan.FileConflicts.Add(new PlasticMergeConflict { RepositoryPath = "/中文 空格/conflict.txt" });
+                        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                        typeof(MergeForm).GetField("plan", flags).SetValue(merge, plan);
+                        typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
+                        Require(((Button)Field(merge, "start")).Enabled && !((Button)Field(merge, "apply")).Enabled, "Merge preview permits start but cannot resolve before native merge session");
+                        plan.DirectoryConflicts.Add(new PlasticDirectoryConflict { Kind = "EVILTWIN", SourcePath = "/collision.txt", Description = "需要结构冲突处理" });
+                        typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
+                        Require(!((Button)Field(merge, "start")).Enabled, "Directory conflicts block unsupported merge start");
+                        plan.DirectoryConflicts.Clear();
+                        typeof(MergeForm).GetField("session", flags).SetValue(merge, new PlasticMergeSession { SessionId = "UI-fixture", Plan = plan });
+                        typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
+                        var conflicts = (ListView)Field(merge, "items"); conflicts.Items[0].Selected = true;
+                        Application.DoEvents();
+                        Require(((Button)Field(merge, "prepare")).Enabled && ((Button)Field(merge, "apply")).Enabled && !((NumericUpDown)Field(merge, "source")).Enabled, "Active selected conflict permits explicit resolution and fixes source changeset");
+                        Save(merge, Path.Combine(artifacts, "merge-conflicts.png"));
+                        merge.Size = merge.MinimumSize; Application.DoEvents();
+                        var apply = (Button)Field(merge, "apply");
+                        Require(merge.RectangleToScreen(merge.ClientRectangle).Contains(apply.RectangleToScreen(apply.ClientRectangle)), "Merge resolution button remains visible at minimum size");
+                        Save(merge, Path.Combine(artifacts, "merge-conflicts-minimum.png"));
+                        plan.FileConflicts[0].Resolved = true;
+                        typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
+                        conflicts.Items[0].Selected = true; Application.DoEvents();
+                        Require(!((Button)Field(merge, "apply")).Enabled && !((Button)Field(merge, "prepare")).Enabled, "Resolved conflicts cannot be accidentally reapplied");
+                        merge.Close();
+                    }
+                    using (var locks = new LocksForm(new PlasticClient(PlasticClientConfig.Load()), args[1]))
+                    {
+                        Prepare(locks);
+                        WaitUntil(() => !(bool)Field(locks, "busy"), "Lock list read completes");
+                        Require(!((Button)Field(locks, "unlock")).Enabled, "Lock release requires an explicit selected lock");
+                        var list = (ListView)Field(locks, "items");
+                        list.Items.Clear();
+                        var foreign = new ListViewItem(new[] { "/someone-else.txt", "other", "other-workspace", "Locked" }) { Tag = new PlasticLockItem { CanUnlock = false } };
+                        list.Items.Add(foreign); foreign.Selected = true; Application.DoEvents();
+                        Require(!((Button)Field(locks, "unlock")).Enabled, "Foreign locks cannot be released from the UI");
+                        foreign.Selected = false;
+                        var owned = new ListViewItem(new[] { "/自己的文件.txt", "current user", "current workspace", "Locked" }) { Tag = new PlasticLockItem { CanUnlock = true } };
+                        list.Items.Add(owned); owned.Selected = true; Application.DoEvents();
+                        Require(((Button)Field(locks, "unlock")).Enabled, "Current user and workspace lock enables explicit release");
+                        Save(locks, Path.Combine(artifacts, "locks.png"));
+                        locks.Size = locks.MinimumSize; Application.DoEvents();
+                        Save(locks, Path.Combine(artifacts, "locks-minimum.png"));
+                        locks.Close();
+                    }
                     string sample = Path.Combine(args[1], "TortoiseSCM-UI-" + Guid.NewGuid().ToString("N") + " 中文 空格.txt");
                     using (var stream = new FileStream(sample, FileMode.CreateNew, FileAccess.Write))
                     using (var writer = new StreamWriter(stream)) writer.Write("Disposable UI status fixture.");

@@ -179,7 +179,7 @@ namespace TortoiseSCM
                 var actualWorkspace = await GetWorkspaceAsync(planned.WorkingDirectory, cancellationToken).ConfigureAwait(false);
                 ApplyWorkspaceMode(planned, actualWorkspace.IsPartial);
             }
-            PlasticCommandResult result = await ExecuteAsync(planned, cancellationToken).ConfigureAwait(false);
+            PlasticCommandResult result = await ExecuteWithMergeGuardAsync(planned, request, cancellationToken).ConfigureAwait(false);
             if (request.Command == PlasticCommand.History && result.Succeeded)
             {
                 var history = new StringBuilder();

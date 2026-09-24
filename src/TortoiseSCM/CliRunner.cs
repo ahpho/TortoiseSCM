@@ -16,6 +16,8 @@ namespace TortoiseSCM
         internal const string Help = "TortoiseSCM --cli --command <command> --path <absolute-path> [--path ...]\r\n" +
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, remove, move, ignore, settings, merge\r\n" +
+            "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
+            "          locks, unlock\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -24,6 +26,11 @@ namespace TortoiseSCM
             "Compare: diff-history --path <workspace> --item </repository/file> --from N --to N [--external]\r\n" +
             "Files: remove|ignore --path <file> --yes; move --path <source> --destination <absolute-path> --yes\r\n" +
             "Tools: diff --external; merge --base <file> --local <file> --remote <file> --output <file> --yes\r\n" +
+            "Workspace merge: merge-preview|merge-start --path <root> --changeset <source> [--yes]\r\n" +
+            "  merge-status --path <root>; merge-prepare|merge-conflict-tool --path <root> --changeset N --item </file> --yes\r\n" +
+            "  merge-resolve --path <root> --changeset N --item </file> --result <absolute-file> --yes\r\n" +
+            "Merge results remain pending; checkin is always a separate command.\r\n" +
+            "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
             "Settings: --diff-tool <exe> --diff-args <template> --merge-tool <exe> --merge-args <template>\r\n" +
             "          --settings-file <file> (optional isolated configuration); no tool options reads settings.\r\n" +
             "Write commands require --yes. Checkin requires a nonempty comment.\r\n" +
@@ -93,6 +100,58 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "locks")
+            {
+                var locks = client.GetLocksAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, locks = locks.Select(item => new {
+                    lockId = item.LockId.ToString(), repository = item.Repository, itemId = item.ItemId, date = item.Date,
+                    destinationBranch = item.DestinationBranch, destinationRevision = item.DestinationRevision,
+                    holderBranch = item.HolderBranch, holderRevision = item.HolderRevision, status = item.Status,
+                    owner = item.Owner, workspace = item.Workspace, path = item.Path, canUnlock = item.CanUnlock }).ToArray() };
+                response.output = String.Join(Environment.NewLine, locks.Select(item => item.LockId + "\t" + item.Owner + "\t" + item.Path));
+                return;
+            }
+            if (options.Command == "unlock")
+            {
+                SetResult(response, client.UnlockOwnAsync(options.Paths[0], options.LockId.Value, CancellationToken.None).GetAwaiter().GetResult());
+                response.data = new { workspace = workspaceData, lockId = options.LockId.Value.ToString() };
+                return;
+            }
+            if (options.Command.StartsWith("merge-", StringComparison.Ordinal))
+            {
+                if (options.Command == "merge-preview")
+                {
+                    var plan = client.PreviewMergeAsync(options.Paths[0], options.Changeset.Value, CancellationToken.None).GetAwaiter().GetResult();
+                    response.data = new { workspace = workspaceData, plan = MergePlanData(plan) };
+                    response.output = MergePlanText(plan); return;
+                }
+                if (options.Command == "merge-start" || options.Command == "merge-status")
+                {
+                    var session = options.Command == "merge-start" ? client.BeginMergeAsync(options.Paths[0], options.Changeset.Value, CancellationToken.None).GetAwaiter().GetResult() :
+                        client.GetMergeSessionAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                    if (session == null)
+                    {
+                        response.data = new { workspace = workspaceData, sessionId = (string)null, plan = (object)null };
+                        response.output = "No active TortoiseSCM merge session."; return;
+                    }
+                    response.data = new { workspace = workspaceData, sessionId = session.SessionId, plan = MergePlanData(session.Plan) };
+                    response.output = MergePlanText(session.Plan); return;
+                }
+                if (options.Command == "merge-resolve")
+                {
+                    SetResult(response, client.ApplyMergeFileResolutionAsync(options.Paths[0], options.Changeset.Value, options.Item, options.Result,
+                        CancellationToken.None).GetAwaiter().GetResult());
+                    response.data = new { workspace = workspaceData, sourceChangeset = options.Changeset.Value, item = options.Item, resultPath = options.Result };
+                    return;
+                }
+                var files = client.PrepareMergeConflictAsync(options.Paths[0], options.Changeset.Value, options.Item, CancellationToken.None).GetAwaiter().GetResult();
+                if (options.Command == "merge-conflict-tool")
+                    SetResult(response, client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, CancellationToken.None).GetAwaiter().GetResult());
+                else response.output = "Conflict inputs prepared. Write the resolved content to " + files.ResultPath + " and use merge-resolve to apply it.";
+                response.data = new { workspace = workspaceData, sessionId = files.SessionId, item = files.RepositoryPath,
+                    basePath = files.BasePath, localPath = files.LocalPath, remotePath = files.RemotePath, resultPath = files.ResultPath };
+                return;
+            }
             if (options.Command == "remove" || options.Command == "move" || options.Command == "ignore")
             {
                 var result = options.Command == "remove" ? client.RemoveAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult() :
@@ -225,6 +284,25 @@ namespace TortoiseSCM
                 response.error = "Plastic SCM exited with code " + result.ExitCode.ToString(CultureInfo.InvariantCulture) + ".";
         }
 
+        private static object MergePlanData(PlasticMergePlan plan)
+        {
+            return new { workspaceRoot = plan.WorkspaceRoot, repository = plan.Repository, sourceChangeset = plan.SourceChangeset,
+                destinationChangeset = plan.DestinationChangeset, baseChangeset = plan.BaseChangeset, alreadyConnected = plan.AlreadyConnected,
+                fileConflicts = plan.FileConflicts.Select(conflict => new { item = conflict.RepositoryPath, baseChangeset = conflict.BaseChangeset,
+                    sourceChangeset = conflict.SourceChangeset, destinationChangeset = conflict.DestinationChangeset, itemId = conflict.ItemId, resolved = conflict.Resolved }).ToArray(),
+                operations = plan.Operations.Select(operation => new { kind = operation.Kind, path = operation.Path, destinationPath = operation.DestinationPath }).ToArray(),
+                directoryConflicts = plan.DirectoryConflicts.Select(conflict => new { index = conflict.Index, kind = conflict.Kind, description = conflict.Description,
+                    sourcePath = conflict.SourcePath, destinationPath = conflict.DestinationPath }).ToArray() };
+        }
+
+        private static string MergePlanText(PlasticMergePlan plan)
+        {
+            return "Merge cs:" + plan.SourceChangeset.ToString(CultureInfo.InvariantCulture) + " into cs:" + plan.DestinationChangeset.ToString(CultureInfo.InvariantCulture) +
+                "\r\nContent conflicts: " + plan.FileConflicts.Count.ToString(CultureInfo.InvariantCulture) +
+                "\r\nDirectory conflicts: " + plan.DirectoryConflicts.Count.ToString(CultureInfo.InvariantCulture) +
+                "\r\nOperations: " + plan.Operations.Count.ToString(CultureInfo.InvariantCulture);
+        }
+
         // WinExe retains inherited redirected handles. Attach only when neither output
         // handle exists, so attaching can never replace a caller's stdout/stderr pipes.
         private static void WriteOutput(string text, bool error)
@@ -274,10 +352,11 @@ namespace TortoiseSCM
     internal sealed class CliOptions
     {
         internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile;
-        internal string Base, Local, Remote, Output, Item, Destination;
+        internal string Base, Local, Remote, Output, Item, Destination, Result;
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout;
         internal long? Changeset, From, To;
+        internal Guid? LockId;
         internal bool ChangesSettings { get { return DiffTool != null || DiffArgs != null || MergeTool != null || MergeArgs != null; } }
         internal readonly List<string> Paths = new List<string>();
 
@@ -292,7 +371,7 @@ namespace TortoiseSCM
                     case "--command": case "--path": case "--comment": case "--commentsfile": case "--cm": case "--timeout": ++i; break;
                     case "--changeset": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
-                    case "--item": case "--from": case "--to": case "--destination": ++i; break;
+                    case "--item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": ++i; break;
                 }
             }
             return false;
@@ -335,6 +414,11 @@ namespace TortoiseSCM
                     case "--output": options.Output = AbsolutePath(Value(args, ref i)); break;
                     case "--item": options.Item = Value(args, ref i); break;
                     case "--destination": options.Destination = AbsolutePath(Value(args, ref i)); break;
+                    case "--result": options.Result = AbsolutePath(Value(args, ref i)); break;
+                    case "--lock-id":
+                        Guid lockId;
+                        if (!Guid.TryParse(Value(args, ref i), out lockId) || lockId == Guid.Empty) throw new ArgumentException("--lock-id must be a nonempty GUID.");
+                        options.LockId = lockId; break;
                     case "--from": options.From = Revision(Value(args, ref i)); break;
                     case "--to": options.To = Revision(Value(args, ref i)); break;
                     case "--changeset":
@@ -353,22 +437,30 @@ namespace TortoiseSCM
                 }
             }
             if (options.Help) return options;
-            if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "remove", "move", "ignore" }.Contains(options.Command))
+            if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "remove", "move", "ignore",
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "locks", "unlock" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "merge", "export", "remove", "move", "ignore" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
             if (options.ChangesSettings && options.Command != "settings") throw new ArgumentException("Tool configuration options require --command settings.");
             if (new[] { "remove", "move", "ignore" }.Contains(options.Command) && options.Paths.Count != 1) throw new ArgumentException("File operations require exactly one explicit --path.");
             if ((options.Command == "move") != (options.Destination != null)) throw new ArgumentException("--destination is required only for move.");
-            bool needsChangeset = new[] { "changeset", "rollback", "switch", "export" }.Contains(options.Command);
-            if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("--changeset is required only for changeset, rollback, switch and export commands.");
+            if ((options.Command == "unlock") != options.LockId.HasValue) throw new ArgumentException("--lock-id is required only for unlock.");
+            if ((options.Command == "locks" || options.Command == "unlock") && options.Paths.Count != 1) throw new ArgumentException("Lock operations require exactly one workspace root.");
+            bool mergeWorkflow = options.Command.StartsWith("merge-", StringComparison.Ordinal);
+            bool conflictFile = options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
+            bool needsChangeset = new[] { "changeset", "rollback", "switch", "export", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool" }.Contains(options.Command);
+            if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("This command " + (needsChangeset ? "requires" : "does not accept") + " --changeset.");
             if (needsChangeset && options.Paths.Count != 1) throw new ArgumentException("Select exactly one file or directory scope for this command.");
+            if (mergeWorkflow && options.Paths.Count != 1) throw new ArgumentException("Workspace merge operations require exactly one explicit workspace root.");
+            if (conflictFile && String.IsNullOrWhiteSpace(options.Item)) throw new ArgumentException("This merge operation requires a repository --item path.");
+            if ((options.Command == "merge-resolve") != (options.Result != null)) throw new ArgumentException("--result is required only for merge-resolve.");
             if (options.External && ((options.Command != "diff" && options.Command != "diff-history") || options.Paths.Count != 1)) throw new ArgumentException("--external requires diff or diff-history with exactly one scope.");
             bool historyFile = options.Command == "export" || options.Command == "diff-history";
             if (historyFile && (options.Paths.Count != 1 || String.IsNullOrWhiteSpace(options.Item))) throw new ArgumentException("Historical file operations require one --path and a repository --item path.");
-            if (options.Item != null && !historyFile) throw new ArgumentException("--item is valid only for export and diff-history.");
+            if (options.Item != null && !historyFile && !conflictFile) throw new ArgumentException("--item is valid only for historical file or merge conflict operations.");
             if (options.Command == "diff-history" && (!options.From.HasValue || !options.To.HasValue)) throw new ArgumentException("diff-history requires --from and --to changeset numbers.");
             if (options.Command != "diff-history" && (options.From.HasValue || options.To.HasValue)) throw new ArgumentException("--from and --to are valid only for diff-history.");
             if (options.Overwrite && options.Command != "export") throw new ArgumentException("--overwrite is valid only for export.");
