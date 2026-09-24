@@ -34,6 +34,17 @@ namespace TortoiseSCM
                 {
                     Prepare(settings);
                     Save(settings, Path.Combine(artifacts, "settings.png"));
+                    var tree = Descendants(settings).OfType<TreeView>().Single();
+                    tree.SelectedNode = tree.Nodes[1];
+                    Application.DoEvents();
+                    Require(((TextBox)Field(settings, "diffTool")).Visible && !((TextBox)Field(settings, "cm")).Visible, "Settings navigation shows the selected diff page");
+                    Save(settings, Path.Combine(artifacts, "settings-diff.png"));
+                    tree.SelectedNode = tree.Nodes[1].Nodes[0];
+                    Application.DoEvents();
+                    Require(((TextBox)Field(settings, "mergeTool")).Visible && !((TextBox)Field(settings, "diffTool")).Visible, "Settings navigation shows the selected merge page");
+                    settings.Size = settings.MinimumSize;
+                    Application.DoEvents();
+                    Save(settings, Path.Combine(artifacts, "settings-merge-minimum.png"));
                     settings.Close();
                 }
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
@@ -60,9 +71,13 @@ namespace TortoiseSCM
                             Require(list.Items.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).Path.Equals(sample, StringComparison.OrdinalIgnoreCase)), "Live private UTF-8 file is displayed");
                             Require(list.CheckedItems.Count == 0, "No unreviewed changes selected automatically");
                             Require(list.ContextMenuStrip != null && list.ContextMenuStrip.Items.Count == 3, "Pending context menu provides history, diff and discard");
+                            var message = (TextBox)Field(form, "comment");
+                            Require(message.PointToScreen(Point.Empty).Y < list.PointToScreen(Point.Empty).Y, "Tortoise commit layout places message above changed files");
+                            Require(!list.GridLines && list.Columns[0].Text == "路径", "Pending list uses native path-first layout without a grid");
                             Save(form, Path.Combine(artifacts, "pending-changes.png"));
                             form.Size = form.MinimumSize;
                             Application.DoEvents();
+                            Require(form.RectangleToScreen(form.ClientRectangle).Contains(((Button)Field(form, "checkin")).RectangleToScreen(((Button)Field(form, "checkin")).ClientRectangle)), "Commit button remains visible at minimum size");
                             Save(form, Path.Combine(artifacts, "pending-changes-minimum.png"));
                             form.Close();
                         }
@@ -87,6 +102,17 @@ namespace TortoiseSCM
                             parent.Selected = false; child.Selected = true;
                             var highlighted = (System.Collections.Generic.List<string>)typeof(MainForm).GetMethod("HighlightedPaths", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(scoped, null);
                             Require(highlighted.Count == 1 && highlighted[0] == ((PlasticStatusItem)child.Tag).Path, "Context commands target highlighted rows independently from checked rows");
+                            ((PlasticStatusItem)parent.Tag).StatusCode = "CO";
+                            ((PlasticStatusItem)child.Tag).StatusCode = "PR";
+                            var controlled = new ListViewItem("controlled") { Tag = new PlasticStatusItem { Path = Path.Combine(directory, "controlled.txt"), StatusCode = "CH" } };
+                            list.Items.Add(controlled);
+                            var clickLink = typeof(LinkLabel).GetMethod("OnLinkClicked", BindingFlags.Instance | BindingFlags.NonPublic);
+                            var privateLink = Descendants(scoped).OfType<LinkLabel>().Single(link => link.Text == "未版本控制");
+                            clickLink.Invoke(privateLink, new object[] { new LinkLabelLinkClickedEventArgs(privateLink.Links[0]) });
+                            Require(child.Checked && !controlled.Checked && !parent.Checked, "Unversioned selection link selects only private rows");
+                            var versionedLink = Descendants(scoped).OfType<LinkLabel>().Single(link => link.Text == "已版本控制");
+                            clickLink.Invoke(versionedLink, new object[] { new LinkLabelLinkClickedEventArgs(versionedLink.Links[0]) });
+                            Require(!child.Checked && controlled.Checked && !parent.Checked, "Versioned selection link excludes private children without recursive parent selection");
                             scoped.Close();
                         }
                         string scopeDirectory = Path.Combine(args[1], "TortoiseSCM-scope-" + Guid.NewGuid().ToString("N"));
@@ -115,6 +141,14 @@ namespace TortoiseSCM
                             Require(((ListView)Field(history, "revisions")).Items.Count > 0, "Upper history pane contains real changesets");
                             Require(((ListView)Field(history, "changedFiles")).Items.Count > 0, "Lower history pane contains real changed files");
                             var revisions = (ListView)Field(history, "revisions");
+                            int total = revisions.Items.Count;
+                            var filter = (TextBox)Field(history, "filter");
+                            filter.Text = "no-matching-commit-" + Guid.NewGuid().ToString("N");
+                            Application.DoEvents();
+                            Require(revisions.Items.Count == 0 && ((ListView)Field(history, "changedFiles")).Items.Count == 0 && !((Button)Field(history, "restore")).Enabled, "Empty history filter clears stale details and disables restore");
+                            filter.Clear();
+                            WaitUntil(() => ((Button)Field(history, "restore")).Enabled, "Clearing history filter reloads details");
+                            Require(revisions.Items.Count == total, "Clearing history filter restores complete loaded history");
                             if (revisions.Items.Count > 2)
                             {
                                 revisions.Items[0].Selected = false; revisions.Items[1].Selected = true;
@@ -144,6 +178,11 @@ namespace TortoiseSCM
         { if (!value) throw new Exception(label); Console.WriteLine("PASS: " + label); }
         private static object Field(object target, string name)
         { return target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(target); }
+        private static System.Collections.Generic.IEnumerable<Control> Descendants(Control parent)
+        {
+            foreach (Control child in parent.Controls)
+            { yield return child; foreach (Control nested in Descendants(child)) yield return nested; }
+        }
         private static void WaitUntil(Func<bool> ready, string label)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(55);

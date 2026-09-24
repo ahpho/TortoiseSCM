@@ -1,5 +1,6 @@
 // TortoiseSCM - GPL-2.0-or-later.
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -19,58 +20,90 @@ namespace TortoiseSCM
         private readonly TextBox description = new TextBox();
         private readonly Label status = new Label();
         private readonly Button restore = new Button();
+        private readonly TextBox filter = new TextBox();
+        private readonly Button close = new Button();
+        private readonly List<PlasticHistoryItem> entries = new List<PlasticHistoryItem>();
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private CancellationTokenSource detailRequest;
         private bool writing;
         private int generation;
+        private bool filtering;
 
         public HistoryForm(PlasticClient client, string path, string workspaceRoot)
         {
             this.client = client;
             this.path = path;
             wholeWorkspace = path.TrimEnd('\\', '/').Equals(workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
-            Text = "TortoiseSCM — 历史";
-            Font = new Font("Microsoft YaHei UI", 9F);
-            Size = new Size(1120, 760);
-            MinimumSize = new Size(860, 600);
+            Text = "历史记录 - TortoiseSCM";
+            Font = SystemFonts.MessageBoxFont;
+            Size = new Size(1080, 740);
+            MinimumSize = new Size(860, 580);
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Dpi;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 3 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 4 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-            layout.Controls.Add(new Label { Text = "历史范围：" + path + "\r\n选择提交后，下方显示该次提交的完整文件明细。", Dock = DockStyle.Fill, AutoEllipsis = true }, 0, 0);
-            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Size = new Size(1000, 560), SplitterDistance = 260, Panel1MinSize = 120, Panel2MinSize = 120 };
-            ConfigureList(revisions, "提交历史", new[] { "版本", "日期", "作者", "分支", "说明" }, new[] { 80, 165, 130, 150, 490 });
-            revisions.SelectedIndexChanged += async delegate { await LoadDetailsAsync(); };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
+            header.Controls.Add(new Label { Text = "范围：" + path, Dock = DockStyle.Fill, AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, Margin = new Padding(0, 0, 12, 3) }, 0, 0);
+            header.Controls.Add(new Label { Text = "筛选(&F):", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 1, 0);
+            filter.Dock = DockStyle.Fill;
+            filter.AccessibleName = "筛选历史：版本、日期、作者、分支或说明";
+            filter.Margin = new Padding(3, 2, 0, 4);
+            filter.TextChanged += async delegate { await ApplyFilterAsync(); };
+            header.Controls.Add(filter, 2, 0);
+            layout.Controls.Add(header, 0, 0);
+            // Follow IDD_LOGMESSAGE: revision list, commit message and changed paths,
+            // separated by native splitters rather than framed panels or tabs.
+            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Margin = Padding.Empty,
+                Size = new Size(1040, 570), SplitterDistance = 270, SplitterWidth = 5, Panel1MinSize = 100, Panel2MinSize = 180 };
+            ConfigureList(revisions, "提交历史", new[] { "版本", "日期", "作者", "分支", "说明" }, new[] { 70, 155, 120, 210, 440 });
+            revisions.SelectedIndexChanged += async delegate { if (!filtering) await LoadDetailsAsync(); };
             split.Panel1.Controls.Add(revisions);
-            var lower = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-            lower.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            lower.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));
-            lower.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var lower = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Margin = Padding.Empty,
+                Size = new Size(1040, 295), SplitterDistance = 100, SplitterWidth = 5, Panel1MinSize = 55, Panel2MinSize = 90 };
             description.Multiline = true;
             description.ReadOnly = true;
             description.ScrollBars = ScrollBars.Vertical;
             description.Dock = DockStyle.Fill;
-            ConfigureList(changedFiles, "本次提交的文件", new[] { "状态", "路径", "原路径", "类型" }, new[] { 100, 500, 320, 85 });
-            lower.Controls.Add(description, 0, 0);
-            lower.Controls.Add(changedFiles, 0, 1);
+            description.BorderStyle = BorderStyle.FixedSingle;
+            description.BackColor = SystemColors.Window;
+            description.AccessibleName = "提交说明";
+            ConfigureList(changedFiles, "本次提交的文件", new[] { "操作", "路径", "原路径", "类型" }, new[] { 75, 570, 280, 70 });
+            lower.Panel1.Controls.Add(description);
+            lower.Panel2.Controls.Add(changedFiles);
             split.Panel2.Controls.Add(lower);
             layout.Controls.Add(split, 0, 1);
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Margin = Padding.Empty };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
             status.Dock = DockStyle.Fill;
             status.AutoEllipsis = true;
-            restore.Text = wholeWorkspace ? "整个工作区切换到所选版本…" : "将此范围恢复到所选版本…";
+            status.TextAlign = ContentAlignment.MiddleLeft;
+            status.Margin = Padding.Empty;
+            layout.Controls.Add(status, 0, 2);
+            restore.Text = wholeWorkspace ? "切换工作区到此版本(&R)..." : "恢复此范围到此版本(&R)...";
             restore.Dock = DockStyle.Fill;
+            restore.Margin = new Padding(3, 3, 6, 3);
             restore.Enabled = false;
             restore.Click += async delegate { await RestoreAsync(); };
-            footer.Controls.Add(status, 0, 0);
             footer.Controls.Add(restore, 1, 0);
-            layout.Controls.Add(footer, 0, 2);
+            close.Text = "关闭";
+            close.Dock = DockStyle.Fill;
+            close.Margin = new Padding(3, 3, 0, 3);
+            close.DialogResult = DialogResult.Cancel;
+            footer.Controls.Add(close, 2, 0);
+            CancelButton = close;
+            layout.Controls.Add(footer, 0, 3);
             Controls.Add(layout);
+            DialogStyle.Apply(this);
             Shown += async delegate { await LoadHistoryAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (writing) e.Cancel = true; else lifetime.Cancel(); };
             FormClosed += delegate { if (detailRequest != null) detailRequest.Cancel(); };
@@ -85,6 +118,7 @@ namespace TortoiseSCM
             list.MultiSelect = false;
             list.AccessibleName = name;
             for (int i = 0; i < columns.Length; i++) list.Columns.Add(columns[i], widths[i]);
+            DialogStyle.ApplyList(list);
         }
 
         private async Task LoadHistoryAsync()
@@ -92,19 +126,44 @@ namespace TortoiseSCM
             status.Text = "正在读取历史…";
             try
             {
-                var entries = await client.GetHistoryAsync(path, lifetime.Token);
+                var loadedEntries = await client.GetHistoryAsync(path, lifetime.Token);
                 if (lifetime.IsCancellationRequested) return;
-                foreach (var entry in entries.OrderByDescending(e => e.Changeset))
+                entries.Clear();
+                entries.AddRange(loadedEntries.OrderByDescending(e => e.Changeset));
+                await ApplyFilterAsync();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "读取失败：" + ex.Message; }
+        }
+
+        private async Task ApplyFilterAsync()
+        {
+            if (writing || lifetime.IsCancellationRequested) return;
+            long? selected = revisions.SelectedItems.Count == 1 ? (long?)((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset : null;
+            string query = filter.Text.Trim();
+            filtering = true;
+            revisions.BeginUpdate();
+            try
+            {
+                revisions.Items.Clear();
+                foreach (var entry in entries.Where(e => MatchesFilter(e, query)))
                 {
                     var row = new ListViewItem(new[] { entry.Changeset.ToString(), entry.CreationDate, entry.Owner, entry.Branch,
                         (entry.Comment ?? "").Replace("\r", " ").Replace("\n", " ") }) { Tag = entry };
                     revisions.Items.Add(row);
+                    if (selected.HasValue && entry.Changeset == selected.Value) row.Selected = true;
                 }
-                status.Text = entries.Count + " 个提交";
-                if (revisions.Items.Count > 0) revisions.Items[0].Selected = true;
+                if (revisions.SelectedItems.Count == 0 && revisions.Items.Count > 0) revisions.Items[0].Selected = true;
             }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "读取失败：" + ex.Message; }
+            finally { revisions.EndUpdate(); filtering = false; }
+            status.Text = revisions.Items.Count + " / " + entries.Count + " 个提交";
+            await LoadDetailsAsync();
+        }
+
+        private static bool MatchesFilter(PlasticHistoryItem entry, string query)
+        {
+            return query.Length == 0 || new[] { entry.Changeset.ToString(), entry.CreationDate, entry.Owner, entry.Branch, entry.Comment }
+                .Any(value => (value ?? "").IndexOf(query, StringComparison.CurrentCultureIgnoreCase) >= 0);
         }
 
         private async Task LoadDetailsAsync()
@@ -144,7 +203,7 @@ namespace TortoiseSCM
             if (MessageBox.Show(this, explanation + "\r\n\r\n" + path + "\r\n目标 cs:" + entry.Changeset + "\r\n\r\n继续？",
                 "TortoiseSCM — 恢复历史版本", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             writing = true;
-            revisions.Enabled = restore.Enabled = false;
+            revisions.Enabled = restore.Enabled = filter.Enabled = close.Enabled = false;
             status.Text = "正在恢复历史版本…";
             try
             {
@@ -154,7 +213,7 @@ namespace TortoiseSCM
                 if (!result.Succeeded) MessageBox.Show(this, result.Output + "\r\n" + result.Error, "恢复未成功", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex) { status.Text = "恢复失败：" + ex.Message; MessageBox.Show(this, ex.Message, "恢复未成功"); }
-            finally { writing = false; revisions.Enabled = restore.Enabled = true; }
+            finally { writing = false; revisions.Enabled = restore.Enabled = filter.Enabled = close.Enabled = true; }
         }
     }
 }

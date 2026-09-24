@@ -20,14 +20,13 @@ namespace TortoiseSCM
         private readonly ListView files = new ListView();
         private readonly TextBox comment = new TextBox();
         private readonly TextBox output = new TextBox();
-        private readonly ToolStrip toolbar = new ToolStrip();
-        private readonly ToolStripStatusLabel status = new ToolStripStatusLabel();
+        private readonly Button actions = new Button();
+        private readonly Label status = new Label();
         private readonly ProgressBar progress = new ProgressBar();
         private readonly Label scope = new Label();
-        private readonly TabControl tabs = new TabControl();
         private readonly Button checkin = new Button();
-        private readonly Button selectAll = new Button();
-        private readonly Button selectNone = new Button();
+        private readonly LinkLabel selectAll = new LinkLabel();
+        private readonly LinkLabel selectNone = new LinkLabel();
         private bool busy;
         private bool loaded;
         private bool changingChecks;
@@ -36,11 +35,11 @@ namespace TortoiseSCM
         {
             launch = request;
             Text = "TortoiseSCM — 待定更改";
-            Font = new Font("Microsoft YaHei UI", 9F);
+            DialogStyle.Apply(this);
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(820, 590);
-            Size = new Size(1080, 760);
+            MinimumSize = new Size(760, 580);
+            Size = new Size(930, 720);
             AutoScaleMode = AutoScaleMode.Dpi;
             BuildLayout();
             Shown += async delegate { await InitializeAsync(); };
@@ -56,44 +55,56 @@ namespace TortoiseSCM
 
         private void BuildLayout()
         {
-            AddTool("刷新", async delegate { await RefreshAsync(); });
-            AddTool("更新", async delegate { await ExecuteAsync(PlasticCommand.Update); });
-            toolbar.Items.Add(new ToolStripSeparator());
-            AddTool("添加", async delegate { await ExecuteAsync(PlasticCommand.Add); });
-            AddTool("签出", async delegate { await ExecuteAsync(PlasticCommand.Checkout); });
-            AddTool("撤销更改", async delegate { await ExecuteAsync(PlasticCommand.Undo); });
-            toolbar.Items.Add(new ToolStripSeparator());
-            AddTool("差异", async delegate { await ExecuteAsync(PlasticCommand.Diff); });
-            AddTool("历史", async delegate { await ExecuteAsync(PlasticCommand.History); });
-            AddTool("范围历史 / 恢复", async delegate { await ShowScopeHistoryAsync(); });
-            AddTool("打开 Gluon", async delegate { await ExecuteAsync(PlasticCommand.Gluon); });
-            AddTool("设置", delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = new PlasticClient(PlasticClientConfig.Load()); });
-            toolbar.GripStyle = ToolStripGripStyle.Hidden;
-            toolbar.Padding = new Padding(6, 7, 6, 7);
-            toolbar.Dock = DockStyle.Top;
-
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
+            // Follow IDD_COMMITDLG: message above changes, selection links, bottom command row.
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             scope.Dock = DockStyle.Fill;
+            scope.UseMnemonic = false;
             scope.AutoEllipsis = true;
             scope.Text = "正在识别工作区…";
             layout.Controls.Add(scope, 0, 0);
 
-            tabs.Dock = DockStyle.Fill;
-            var changesTab = new TabPage("待定更改");
-            var outputTab = new TabPage("操作记录 / 历史");
+            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal,
+                Size = new Size(880, 520), SplitterDistance = 155, Panel1MinSize = 100, Panel2MinSize = 160, SplitterWidth = 5 };
+            split.Name = "commitSplit";
+            var messageGroup = new GroupBox { Text = "提交说明 (&M)", Dock = DockStyle.Fill, Padding = new Padding(8, 6, 8, 8) };
+            comment.Multiline = true;
+            comment.AcceptsReturn = true;
+            comment.ScrollBars = ScrollBars.Vertical;
+            comment.Dock = DockStyle.Fill;
+            comment.AccessibleName = "签入说明";
+            messageGroup.Controls.Add(comment);
+            split.Panel1.Controls.Add(messageGroup);
+
+            var changesGroup = new GroupBox { Text = "更改的文件", Dock = DockStyle.Fill, Padding = new Padding(8, 6, 8, 8) };
+            var changes = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+            changes.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            changes.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+            changes.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var selectionBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+            selectionBar.Controls.Add(new Label { Text = "选择：", AutoSize = true, Margin = new Padding(0, 3, 2, 0) });
+            selectAll.Text = "全部 (&A)";
+            selectNone.Text = "无 (&N)";
+            selectAll.AutoSize = selectNone.AutoSize = true;
+            selectAll.Margin = selectNone.Margin = new Padding(0, 3, 12, 0);
+            selectAll.LinkClicked += delegate { foreach (ListViewItem item in files.Items) item.Checked = true; };
+            selectNone.LinkClicked += delegate { foreach (ListViewItem item in files.Items) item.Checked = false; };
+            selectionBar.Controls.Add(selectAll);
+            selectionBar.Controls.Add(selectNone);
+            AddSelectionLink(selectionBar, "已版本控制", item => !IsPrivate(item.StatusCode));
+            AddSelectionLink(selectionBar, "未版本控制", item => IsPrivate(item.StatusCode));
+            changes.Controls.Add(selectionBar, 0, 0);
             files.Dock = DockStyle.Fill;
             files.View = View.Details;
             files.CheckBoxes = true;
-            files.FullRowSelect = true;
-            files.HideSelection = false;
-            files.GridLines = true;
-            files.Columns.Add("状态", 160);
-            files.Columns.Add("路径", 700);
+            DialogStyle.ApplyList(files);
+            files.Columns.Add("路径", 570);
+            files.Columns.Add("扩展名", 80);
+            files.Columns.Add("状态", 150);
             files.AccessibleName = "待定更改列表";
             files.ItemChecked += OnItemChecked;
             files.DoubleClick += async delegate { await ExecuteAsync(PlasticCommand.Diff); };
@@ -103,69 +114,96 @@ namespace TortoiseSCM
             menu.Items.Add("丢弃所选行的修改…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo, HighlightedPaths()); });
             menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { e.Cancel = busy || files.SelectedItems.Count == 0; };
             files.ContextMenuStrip = menu;
-            changesTab.Controls.Add(files);
-            output.Multiline = true;
-            output.ReadOnly = true;
-            output.WordWrap = false;
-            output.ScrollBars = ScrollBars.Both;
-            output.Dock = DockStyle.Fill;
-            output.Font = new Font("Consolas", 10F);
-            output.AccessibleName = "操作输出";
-            outputTab.Controls.Add(output);
-            tabs.TabPages.Add(changesTab);
-            tabs.TabPages.Add(outputTab);
-            layout.Controls.Add(tabs, 0, 1);
+            changes.Controls.Add(files, 0, 1);
+            changesGroup.Controls.Add(changes);
+            split.Panel2.Controls.Add(changesGroup);
+            layout.Controls.Add(split, 0, 1);
+            status.Dock = DockStyle.Fill;
+            status.TextAlign = ContentAlignment.MiddleLeft;
+            status.AutoEllipsis = true;
+            layout.Controls.Add(status, 0, 2);
 
-            var selectionBar = new FlowLayoutPanel { Dock = DockStyle.Fill };
-            selectAll.Text = "全选";
-            selectNone.Text = "全不选";
-            selectAll.Click += delegate { foreach (ListViewItem item in files.Items) item.Checked = true; };
-            selectNone.Click += delegate { foreach (ListViewItem item in files.Items) item.Checked = false; };
-            selectionBar.Controls.Add(selectAll);
-            selectionBar.Controls.Add(selectNone);
-            selectionBar.Controls.Add(new Label { Text = "签入与撤销仅应用于勾选项；双击单个文件查看差异。", AutoSize = true, Padding = new Padding(8, 5, 0, 0) });
-            layout.Controls.Add(selectionBar, 0, 2);
-
-            var commentPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-            commentPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-            commentPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            commentPanel.Controls.Add(new Label { Text = "签入说明", Dock = DockStyle.Fill }, 0, 0);
-            comment.Multiline = true;
-            comment.ScrollBars = ScrollBars.Vertical;
-            comment.Dock = DockStyle.Fill;
-            comment.AccessibleName = "签入说明";
-            commentPanel.Controls.Add(comment, 0, 1);
-            layout.Controls.Add(commentPanel, 0, 3);
-
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-            progress.Dock = DockStyle.Fill;
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var left = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+            var refresh = new Button { Text = "刷新 (&R)", Size = new Size(86, 26), Margin = new Padding(0, 4, 6, 0) };
+            refresh.Click += async delegate { await RefreshAsync(); };
+            actions.Text = "操作 (&O) ▾";
+            actions.Size = new Size(94, 26);
+            actions.Margin = new Padding(0, 4, 6, 0);
+            var operations = new ContextMenuStrip();
+            operations.Items.Add("更新…", null, async delegate { await ExecuteAsync(PlasticCommand.Update); });
+            operations.Items.Add("添加…", null, async delegate { await ExecuteAsync(PlasticCommand.Add); });
+            operations.Items.Add("签出…", null, async delegate { await ExecuteAsync(PlasticCommand.Checkout); });
+            operations.Items.Add("撤销勾选项…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo); });
+            operations.Items.Add(new ToolStripSeparator());
+            operations.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff); });
+            operations.Items.Add("所选项历史", null, async delegate { await ExecuteAsync(PlasticCommand.History); });
+            operations.Items.Add("当前范围历史 / 恢复", null, async delegate { await ShowScopeHistoryAsync(); });
+            operations.Items.Add("操作记录…", null, delegate { ShowOutput(); });
+            operations.Items.Add(new ToolStripSeparator());
+            operations.Items.Add("打开 Gluon", null, async delegate { await ExecuteAsync(PlasticCommand.Gluon); });
+            operations.Items.Add("设置…", null, delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = new PlasticClient(PlasticClientConfig.Load()); });
+            actions.Click += delegate { operations.Show(actions, new Point(0, actions.Height)); };
+            left.Controls.Add(refresh);
+            left.Controls.Add(actions);
+            progress.Size = new Size(110, 16);
             progress.Style = ProgressBarStyle.Marquee;
             progress.Visible = false;
-            progress.Margin = new Padding(0, 12, 16, 12);
-            checkin.Text = "签入所选项…";
-            checkin.Dock = DockStyle.Fill;
+            progress.Margin = new Padding(4, 9, 0, 0);
+            left.Controls.Add(progress);
+            footer.Controls.Add(left, 0, 0);
+            var right = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+            checkin.Text = "提交 (&C)";
+            checkin.Size = new Size(95, 26);
+            checkin.Margin = new Padding(6, 4, 0, 0);
             checkin.Click += async delegate { await ExecuteAsync(PlasticCommand.Checkin); };
-            footer.Controls.Add(progress, 0, 0);
-            footer.Controls.Add(checkin, 1, 0);
-            layout.Controls.Add(footer, 0, 4);
-            var statusBar = new StatusStrip();
-            status.Spring = true;
-            status.TextAlign = ContentAlignment.MiddleLeft;
-            statusBar.Items.Add(status);
+            var close = new Button { Text = "关闭", Size = new Size(86, 26), Margin = new Padding(6, 4, 0, 0) };
+            close.Click += delegate { Close(); };
+            right.Controls.Add(checkin);
+            right.Controls.Add(close);
+            footer.Controls.Add(right, 1, 0);
+            layout.Controls.Add(footer, 0, 3);
             Controls.Add(layout);
-            Controls.Add(toolbar);
-            Controls.Add(statusBar);
+            CancelButton = close;
+            output.Multiline = true;
+            output.ReadOnly = true;
         }
 
-        private void AddTool(string text, EventHandler action)
+        private void AddSelectionLink(FlowLayoutPanel panel, string text, Func<PlasticStatusItem, bool> predicate)
         {
-            var button = new ToolStripButton(text) { DisplayStyle = ToolStripItemDisplayStyle.Text, Padding = new Padding(4) };
-            button.Click += action;
-            toolbar.Items.Add(button);
+            var link = new LinkLabel { Text = text, AutoSize = true, Margin = new Padding(0, 3, 12, 0) };
+            link.LinkClicked += delegate
+            {
+                if (busy) return;
+                // Filter selection is exact: do not let a recursive directory reselect excluded children.
+                changingChecks = true;
+                try
+                {
+                    foreach (ListViewItem item in files.Items) item.Checked = predicate((PlasticStatusItem)item.Tag);
+                    foreach (ListViewItem parent in files.Items)
+                        if (((PlasticStatusItem)parent.Tag).IsDirectory && files.Items.Cast<ListViewItem>().Any(child =>
+                            !child.Checked && ((PlasticStatusItem)child.Tag).Path.StartsWith(((PlasticStatusItem)parent.Tag).Path.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)))
+                            parent.Checked = false;
+                }
+                finally { changingChecks = false; }
+                UpdateSelectionCount();
+            };
+            panel.Controls.Add(link);
         }
 
+        private void ShowOutput()
+        {
+            using (var dialog = new Form { Text = "操作记录 - TortoiseSCM", Size = new Size(850, 520), MinimumSize = new Size(600, 360), StartPosition = FormStartPosition.CenterParent })
+            {
+                DialogStyle.Apply(dialog);
+                var text = new TextBox { Text = output.Text, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill };
+                var close = new Button { Text = "关闭", Dock = DockStyle.Bottom, Height = 28, DialogResult = DialogResult.Cancel };
+                dialog.Controls.Add(text); dialog.Controls.Add(close); dialog.CancelButton = close;
+                dialog.ShowDialog(this);
+            }
+        }
         private async Task InitializeAsync()
         {
             SetBusy(true, "正在识别工作区…");
@@ -180,7 +218,7 @@ namespace TortoiseSCM
                     if (other == null || !string.Equals(other.RootPath, workspace.RootPath, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("请一次只选择同一 Plastic 工作区内的文件。");
                 }
-                Text = "TortoiseSCM — " + Path.GetFileName(workspace.RootPath);
+                Text = string.Join("; ", launch.Paths.ToArray()) + " - 提交 - TortoiseSCM";
                 scope.Text = "工作区：" + workspace.RootPath + (workspace.IsPartial ? "  ·  Gluon / 部分工作区" : "  ·  完整工作区") +
                     "\r\n范围：" + string.Join("；", launch.Paths.ToArray());
                 loaded = true;
@@ -219,8 +257,9 @@ namespace TortoiseSCM
                         string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
                             ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
                         if (!string.IsNullOrEmpty(item.OldPath)) relative = item.OldPath + " → " + relative;
-                        var row = new ListViewItem(item.Status + "  " + item.StatusDescription) { Tag = item, Checked = checkedPaths.Contains(item.Path) };
-                        row.SubItems.Add(relative);
+                        var row = new ListViewItem(relative) { Tag = item, Checked = checkedPaths.Contains(item.Path) };
+                        row.SubItems.Add(item.IsDirectory ? "" : Path.GetExtension(item.Path));
+                        row.SubItems.Add(item.StatusDescription);
                         files.Items.Add(row);
                     }
                 }
@@ -317,9 +356,8 @@ namespace TortoiseSCM
                 AppendOutput(result.Output);
                 AppendOutput(result.Error);
                 AppendOutput(result.TimedOut ? "操作超时；请刷新核对当前工作区状态。" : "退出码：" + result.ExitCode);
-                tabs.SelectedIndex = 1;
                 if (!result.Succeeded)
-                    MessageBox.Show(this, "操作未成功。请查看“操作记录 / 历史”中的详细信息。", "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show(this, "操作未成功。请从“操作”菜单打开“操作记录”查看详细信息。", "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 else if (command == PlasticCommand.Checkin) comment.Clear();
                 if (!read)
                     foreach (string path in paths) SHChangeNotify(0x00002000, 0x0005, path, IntPtr.Zero);
@@ -354,7 +392,7 @@ namespace TortoiseSCM
         private void SetBusy(bool value, string text)
         {
             busy = value;
-            toolbar.Enabled = !value;
+            actions.Enabled = !value;
             checkin.Enabled = !value && loaded;
             files.Enabled = !value;
             comment.Enabled = !value;
@@ -372,7 +410,6 @@ namespace TortoiseSCM
         private void ShowError(Exception ex)
         {
             AppendOutput(ex.Message);
-            tabs.SelectedIndex = 1;
             status.Text = "操作未成功";
             MessageBox.Show(this, ex.Message, "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }

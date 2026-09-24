@@ -26,7 +26,7 @@
 | Shell/COM 单元检查 | 26 项通过 |
 | 当前用户注册后的真实 COM DLL 激活 | 20 项通过 |
 | UTF-8 多选路径文件交接与消费清理 | 通过 |
-| WinForms 工作区加载、范围过滤、勾选、历史加载及快速切换 | 21 项通过 |
+| WinForms 工作区加载、范围过滤、勾选、历史加载、筛选、快速切换、分类设置及布局 | 31 项通过 |
 | 默认窗口、最小窗口、设置 / 历史 / 合并窗口渲染 | 通过，已查看图片 |
 | `git diff --check` | 通过 |
 | TestSCM 测试后 `cm status --short --machinereadable` | 空输出，干净 |
@@ -76,6 +76,16 @@ CLI 黑盒测试启动真实 `TortoiseSCM.exe`，验证 UTF-8 stdout/stderr、JS
 `pending-changes.png`、`pending-changes-minimum.png`、`settings.png`、`history.png`、`history-minimum.png`、`merge-tool.png`。
 这些是程序内 WinForms 渲染，不是实际 Explorer 桌面截图。
 最终构建和本机回归日志为 `bin/TortoiseSCM/qa/final-validation.log`。
+
+## 原生对话框外观调整
+
+2026-09-25：参考上游资源调整提交、历史、设置、三方合并窗口；共享字体、系统颜色、Explorer 列表主题。
+提交窗口改为说明在上、文件在下、底部标准操作按钮；历史为双分隔条三段区域；设置改为左树右页。
+原生风格调整后再次通过完整 `-Test -Workspace`，日志为 `bin/TortoiseSCM/qa/native-dialog-validation.log`。
+GUI 新增检查覆盖最小尺寸提交按钮、路径优先列表、设置分类切换、历史筛选后清空旧明细和恢复列表，
+以及已版本控制 / 未版本控制选择链接不会通过递归父目录选中排除的子项。
+新增渲染图为 `settings-diff.png`、`settings-merge-minimum.png`；上列其他窗口图片均已重新生成和查看。
+本轮仅改变 GUI，不重复服务器写入流程；CLI 382 项黑盒、后端 47 项、工具 18 项、版本 6 项及 Shell 26 项仍全部通过。
 
 ## 尚未验证
 
