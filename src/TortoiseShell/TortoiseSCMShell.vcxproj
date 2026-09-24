@@ -13,6 +13,6 @@
     <ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><LanguageStandard>stdcpp17</LanguageStandard><PreprocessorDefinitions>UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><RuntimeLibrary>MultiThreaded</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling><SDLCheck>true</SDLCheck><ControlFlowGuard>Guard</ControlFlowGuard><Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization></ClCompile>
     <Link><ModuleDefinitionFile>PlasticShell.def</ModuleDefinitionFile><AdditionalDependencies>shell32.lib;ole32.lib;uuid.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies><SubSystem>Windows</SubSystem></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="PlasticShell.cpp" /><ResourceCompile Include="PlasticShell.rc" /><None Include="PlasticShell.def" /></ItemGroup>
+  <ItemGroup><ClCompile Include="PlasticShell.cpp" /><ClInclude Include="PlasticOverlay.h" /><ResourceCompile Include="PlasticShell.rc" /><None Include="PlasticShell.def" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

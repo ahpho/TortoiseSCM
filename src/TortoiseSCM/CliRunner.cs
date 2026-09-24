@@ -17,7 +17,7 @@ namespace TortoiseSCM
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
-            "          locks, unlock\r\n" +
+            "          locks, unlock, cache-refresh\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -100,6 +100,13 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "cache-refresh")
+            {
+                int count = OverlayCacheHost.RefreshAsync(config, options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, entries = count, cacheFile = new OverlayCacheStore(OverlayCacheStore.DefaultDirectory).SnapshotPath };
+                response.output = "Refreshed " + count + " cached overlay paths.";
+                return;
+            }
             if (options.Command == "locks")
             {
                 var locks = client.GetLocksAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
@@ -438,12 +445,13 @@ namespace TortoiseSCM
             }
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "remove", "move", "ignore",
-                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "locks", "unlock" }.Contains(options.Command))
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "locks", "unlock", "cache-refresh" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
             bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
+            if (options.Command == "cache-refresh" && (options.Paths.Count != 1 || !yes)) throw new ArgumentException("cache-refresh requires one workspace root and --yes to write the local cache.");
             if (options.ChangesSettings && options.Command != "settings") throw new ArgumentException("Tool configuration options require --command settings.");
             if (new[] { "remove", "move", "ignore" }.Contains(options.Command) && options.Paths.Count != 1) throw new ArgumentException("File operations require exactly one explicit --path.");
             if ((options.Command == "move") != (options.Destination != null)) throw new ArgumentException("--destination is required only for move.");

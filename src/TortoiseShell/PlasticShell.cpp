@@ -12,10 +12,16 @@
 #include <new>
 #include <string>
 #include <vector>
+#include "PlasticOverlay.h"
 
 namespace
 {
 constexpr CLSID ShellClsid = {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd2}};
+constexpr CLSID OverlayClsids[] = {
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd3}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd4}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd5}}
+};
 HINSTANCE moduleInstance;
 std::atomic<long> moduleReferences{0};
 struct Command { const wchar_t* name; const wchar_t* label; const wchar_t* chineseLabel; };
@@ -281,11 +287,59 @@ public:
     }
 };
 
+class Overlay final : public IShellIconOverlayIdentifier
+{
+    std::atomic<ULONG> references{1};
+    const PlasticOverlay::State state;
+public:
+    explicit Overlay(PlasticOverlay::State value) : state(value) { ++moduleReferences; }
+    ~Overlay() { --moduleReferences; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** output) override
+    {
+        if (!output) return E_POINTER;
+        *output = nullptr;
+        if (iid != IID_IUnknown && iid != IID_IShellIconOverlayIdentifier) return E_NOINTERFACE;
+        *output = static_cast<IShellIconOverlayIdentifier*>(this); AddRef(); return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+    ULONG STDMETHODCALLTYPE Release() override { const ULONG count = --references; if (!count) delete this; return count; }
+    HRESULT STDMETHODCALLTYPE IsMemberOf(LPCWSTR path, DWORD) override
+    {
+        if (!path) return E_INVALIDARG;
+        try
+        {
+            const size_t length = wcsnlen_s(path, PlasticOverlay::MaxPathChars + 1);
+            if (!length || length > PlasticOverlay::MaxPathChars) return S_FALSE;
+            return PlasticOverlay::SharedCache().Lookup(std::wstring(path, length)) == state ? S_OK : S_FALSE;
+        }
+        catch (...) { return S_FALSE; }
+    }
+    HRESULT STDMETHODCALLTYPE GetPriority(int* priority) override
+    {
+        if (!priority) return E_POINTER;
+        *priority = state == PlasticOverlay::Conflict ? 0 : state == PlasticOverlay::Modified ? 1 : 2;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetOverlayInfo(LPWSTR file, int capacity, int* index, DWORD* flags) override
+    {
+        if (!file || !index || !flags) return E_POINTER;
+        if (capacity <= 0) return E_INVALIDARG;
+        *index = 0; *flags = 0;
+        const DWORD length = GetModuleFileNameW(moduleInstance, file, static_cast<DWORD>(capacity));
+        if (!length || length >= static_cast<DWORD>(capacity)) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        // Resource order: context-menu icon 1, then overlays 101, 102 and 103.
+        *index = static_cast<int>(state);
+        *flags = ISIOI_ICONFILE | ISIOI_ICONINDEX;
+        return S_OK;
+    }
+};
+
 class Factory final : public IClassFactory
 {
     std::atomic<ULONG> references{1};
+    const PlasticOverlay::State overlayState;
 public:
-    Factory() { ++moduleReferences; }
+    explicit Factory(PlasticOverlay::State state = PlasticOverlay::None) : overlayState(state) { ++moduleReferences; }
     ~Factory() { --moduleReferences; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** output) override
     {
@@ -301,6 +355,12 @@ public:
         if (!output) return E_POINTER;
         *output = nullptr;
         if (outer) return CLASS_E_NOAGGREGATION;
+        if (overlayState != PlasticOverlay::None)
+        {
+            auto overlay = new (std::nothrow) Overlay(overlayState);
+            if (!overlay) return E_OUTOFMEMORY;
+            const HRESULT result = overlay->QueryInterface(iid, output); overlay->Release(); return result;
+        }
         auto shell = new (std::nothrow) PlasticShell;
         if (!shell) return E_OUTOFMEMORY;
         const HRESULT result = shell->QueryInterface(iid, output); shell->Release(); return result;
@@ -319,8 +379,14 @@ extern "C" HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** o
 {
     if (!output) return E_POINTER;
     *output = nullptr;
-    if (clsid != ShellClsid) return CLASS_E_CLASSNOTAVAILABLE;
-    auto factory = new (std::nothrow) Factory;
+    PlasticOverlay::State state = PlasticOverlay::None;
+    if (clsid != ShellClsid)
+    {
+        for (size_t i = 0; i < ARRAYSIZE(OverlayClsids); ++i)
+            if (clsid == OverlayClsids[i]) state = static_cast<PlasticOverlay::State>(i + 1);
+        if (state == PlasticOverlay::None) return CLASS_E_CLASSNOTAVAILABLE;
+    }
+    auto factory = new (std::nothrow) Factory(state);
     if (!factory) return E_OUTOFMEMORY;
     const HRESULT result = factory->QueryInterface(iid, output); factory->Release(); return result;
 }

@@ -157,6 +157,13 @@ namespace TortoiseSCM
                 if (busy || !loaded) return;
                 using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);
             });
+            operations.Items.Add("刷新 Explorer 状态图标", null, async delegate {
+                if (busy || !loaded) return;
+                SetBusy(true, "正在刷新状态图标…");
+                try { int count = await OverlayCacheHost.RefreshAsync(PlasticClientConfig.Load(), workspace.RootPath, CancellationToken.None); status.Text = "已缓存 " + count + " 个路径的状态。"; }
+                catch (Exception ex) { ShowError(ex); }
+                finally { SetBusy(false, status.Text); }
+            });
             operations.Items.Add("操作记录…", null, delegate { ShowOutput(); });
             operations.Items.Add(new ToolStripSeparator());
             operations.Items.Add("打开 Gluon", null, async delegate { await ExecuteAsync(PlasticCommand.Gluon); });
@@ -273,6 +280,7 @@ namespace TortoiseSCM
                 scope.Text = "工作区：" + workspace.RootPath + (workspace.IsPartial ? "  ·  Gluon / 部分工作区" : "  ·  完整工作区") +
                     "\r\n范围：" + string.Join("；", launch.Paths.ToArray());
                 loaded = true;
+                OverlayCacheHost.TrackAndStart(workspace.RootPath);
                 SetBusy(false, "");
                 await RefreshAsync();
                 if (launch.Command == "history") await ExecuteAsync(PlasticCommand.History);

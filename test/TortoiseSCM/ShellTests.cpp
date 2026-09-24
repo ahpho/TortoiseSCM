@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <cassert>
+#include <chrono>
 
 class Selection : public IDataObject {
     std::vector<std::wstring> entries;
@@ -34,6 +35,101 @@ public:
 void require(bool condition, const char* label) {
     if (!condition) { std::cerr << "FAIL " << label << '\n'; std::exit(1); }
     std::cout << "PASS " << label << '\n';
+}
+
+std::vector<unsigned char> Snapshot(const std::vector<std::pair<std::wstring, uint32_t>>& values, uint64_t now)
+{
+    std::vector<unsigned char> result{'T','S','C','M','O','V','L','1'};
+    const auto append = [&](const void* data, size_t length) { const auto first = static_cast<const unsigned char*>(data); result.insert(result.end(), first, first + length); };
+    const uint32_t version = 1, count = static_cast<uint32_t>(values.size());
+    append(&version, 4); append(&count, 4); append(&now, 8);
+    for (const auto& item : values)
+    {
+        const uint32_t chars = static_cast<uint32_t>(item.first.size());
+        append(&item.second, 4); append(&chars, 4); append(item.first.data(), chars * sizeof(wchar_t));
+    }
+    return result;
+}
+
+void OverlayTests(const std::filesystem::path& directory)
+{
+    const uint64_t now = PlasticOverlay::UtcNow();
+    const std::wstring path = L"D:\\fixture\\中文 file.txt";
+    auto good = Snapshot({{path, 2}, {L"D:\\fixture", 3}, {L"D:\\fixture\\clean.txt", 1}}, now);
+    PlasticOverlay::Entries parsed; uint64_t generated = 0;
+    require(PlasticOverlay::Parse(good, now, parsed, generated) && parsed.size() == 3 && parsed.at(path) == PlasticOverlay::Modified, "overlay binary Unicode schema");
+    require(parsed.find(L"d:\\FIXTURE\\中文 FILE.TXT") != parsed.end(), "overlay Windows ordinal case comparison");
+    require(PlasticOverlay::Parse(Snapshot({}, now), now, parsed, generated) && parsed.empty(), "empty snapshot is valid");
+    auto bad = good; bad[0] = 0; require(!PlasticOverlay::Parse(bad, now, parsed, generated), "bad overlay magic rejected");
+    bad = good; bad[8] = 2; require(!PlasticOverlay::Parse(bad, now, parsed, generated), "unknown overlay version rejected");
+    bad = good; bad.pop_back(); require(!PlasticOverlay::Parse(bad, now, parsed, generated), "truncated snapshot rejected");
+    bad = good; bad.push_back(0); require(!PlasticOverlay::Parse(bad, now, parsed, generated), "trailing snapshot bytes rejected");
+    bad = good; const uint32_t excessive = 200001; memcpy(bad.data() + 12, &excessive, 4);
+    require(!PlasticOverlay::Parse(bad, now, parsed, generated), "excessive entry count rejected");
+    bad = good; const uint32_t longPath = 32768; memcpy(bad.data() + 28, &longPath, 4);
+    require(!PlasticOverlay::Parse(bad, now, parsed, generated), "excessive path length rejected");
+    bad.assign(PlasticOverlay::MaxBytes + 1, 0);
+    require(!PlasticOverlay::Parse(bad, now, parsed, generated), "oversized snapshot rejected before parsing");
+    require(!PlasticOverlay::Parse(Snapshot({{path, 4}}, now), now, parsed, generated), "unknown overlay state rejected");
+    require(!PlasticOverlay::Parse(Snapshot({{path, 1}, {L"d:\\FIXTURE\\中文 FILE.TXT", 3}}, now), now, parsed, generated), "duplicate case-insensitive path rejected");
+    require(!PlasticOverlay::Parse(Snapshot({{path, 1}}, now - 121 * PlasticOverlay::Second), now, parsed, generated), "expired snapshot rejected");
+    require(!PlasticOverlay::Parse(Snapshot({{path, 1}}, now + 6 * PlasticOverlay::Second), now, parsed, generated), "future timestamp rejected");
+    for (const auto& invalid : std::vector<std::wstring>{L"relative.txt", L"D:\\fixture\\..\\file", L"D:\\fixture\\.plastic\\plastic.workspace", L"D:\\fixture\\bad.", L"\\\\?\\C:\\file", std::wstring(L"D:\\bad\0name", 11), L"D:\\bad\xd800"})
+        require(!PlasticOverlay::Parse(Snapshot({{invalid, 1}}, now), now, parsed, generated), "noncanonical overlay path rejected");
+    const auto cacheFile = directory / L"overlay.bin";
+    const auto write = [&](const std::vector<unsigned char>& value) { std::ofstream stream(cacheFile, std::ios::binary | std::ios::trunc); stream.write(reinterpret_cast<const char*>(value.data()), static_cast<std::streamsize>(value.size())); };
+    write(good);
+    PlasticOverlay::Cache cache(cacheFile.native());
+    require(cache.Lookup(path, now, 0) == PlasticOverlay::Modified, "cache reads explicit modified path");
+    require(cache.Lookup(L"D:\\fixture\\absent.txt", now, 0) == PlasticOverlay::None, "absent entry never inferred normal");
+    write(Snapshot({{path, 3}}, now));
+    require(cache.Lookup(path, now, 999) == PlasticOverlay::Modified, "one second poll throttle retains prior snapshot");
+    require(cache.Lookup(path, now, 1000) == PlasticOverlay::Conflict, "next poll observes replacement snapshot");
+    require(cache.Lookup(path, now + 121 * PlasticOverlay::Second, 1001) == PlasticOverlay::None, "expiry enforced even between polls");
+    write(std::vector<unsigned char>{1,2,3});
+    require(cache.Lookup(path, now, 2000) == PlasticOverlay::None, "malformed refresh drops previous snapshot");
+    std::filesystem::remove(cacheFile);
+    require(cache.Lookup(path, now, 3000) == PlasticOverlay::None, "missing snapshot returns no overlay");
+    write(good);
+    require(cache.Lookup(path, now, 4000) == PlasticOverlay::Modified, "cache recovers after valid snapshot returns");
+    const auto begin = std::chrono::steady_clock::now();
+    bool lookupsMatch = true;
+    for (unsigned i = 0; i < 10000; ++i) lookupsMatch &= cache.Lookup(path, now, 4001) == PlasticOverlay::Modified;
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+    require(lookupsMatch && duration < 2000, "10000 cached lookups complete within two seconds");
+    std::cout << "Overlay 10000 cached lookups: " << duration << " ms\n";
+    for (size_t i = 0; i < ARRAYSIZE(OverlayClsids); ++i)
+    {
+        IClassFactory* factory = nullptr; IShellIconOverlayIdentifier* overlay = nullptr;
+        require(SUCCEEDED(DllGetClassObject(OverlayClsids[i], IID_IClassFactory, reinterpret_cast<void**>(&factory))), "overlay factory available");
+        require(SUCCEEDED(factory->CreateInstance(nullptr, IID_IShellIconOverlayIdentifier, reinterpret_cast<void**>(&overlay))), "factory creates overlay interface");
+        require(overlay->IsMemberOf(nullptr, 0) == E_INVALIDARG && overlay->GetPriority(nullptr) == E_POINTER, "overlay validates COM pointers");
+        int priority = -1; require(SUCCEEDED(overlay->GetPriority(&priority)) && priority == 2 - static_cast<int>(i), "own overlay conflict priority first");
+        wchar_t file[32768]{}; int index = -1; DWORD flags = 0;
+        require(SUCCEEDED(overlay->GetOverlayInfo(file, ARRAYSIZE(file), &index, &flags)) && index == static_cast<int>(i + 1) && flags == (ISIOI_ICONFILE | ISIOI_ICONINDEX), "overlay reports stable resource index");
+        require(overlay->GetOverlayInfo(file, 1, &index, &flags) == HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER), "short icon buffer rejected");
+        require(overlay->IsMemberOf(L"relative-path", 0) == S_FALSE, "invalid query requests no overlay");
+        void* unsupported = nullptr;
+        require(overlay->QueryInterface(IID_IContextMenu, &unsupported) == E_NOINTERFACE && !unsupported, "overlay exposes no context menu interface");
+        overlay->Release(); factory->Release();
+    }
+    require(DllCanUnloadNow() == S_OK, "overlay objects release module references");
+}
+
+void RegisteredOverlayProbe(const wchar_t* path, int expected)
+{
+    for (size_t i = 0; i < ARRAYSIZE(OverlayClsids); ++i)
+    {
+        IShellIconOverlayIdentifier* overlay = nullptr;
+        require(SUCCEEDED(CoCreateInstance(OverlayClsids[i], nullptr, CLSCTX_INPROC_SERVER, IID_IShellIconOverlayIdentifier,
+            reinterpret_cast<void**>(&overlay))), "registered overlay activation");
+        require(overlay->IsMemberOf(path, 0) == (expected == static_cast<int>(i + 1) ? S_OK : S_FALSE), "registered overlay returns expected explicit state");
+        wchar_t file[32768]{}; int index = -1; DWORD flags = 0;
+        require(SUCCEEDED(overlay->GetOverlayInfo(file, ARRAYSIZE(file), &index, &flags)), "registered overlay icon location");
+        HICON icon = nullptr;
+        require(ExtractIconExW(file, index, nullptr, &icon, 1) == 1 && icon != nullptr, "registered overlay resource extracts successfully");
+        DestroyIcon(icon); overlay->Release();
+    }
 }
 
 void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::path& second)
@@ -106,8 +202,15 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 4 && wcscmp(argv[1], L"--overlay-probe") == 0)
+    {
+        const int expected = _wtoi(argv[3]);
+        if (expected < 0 || expected > 3) return 2;
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        RegisteredOverlayProbe(argv[2], expected); CoUninitialize(); return 0;
+    }
     const bool registered = argc == 2 && wcscmp(argv[1], L"--registered") == 0;
-    if (argc > 1 && !registered) { std::cerr << "Usage: ShellTests.exe [--registered]\n"; return 2; }
+    if (argc > 1 && !registered) { std::cerr << "Usage: ShellTests.exe [--registered | --overlay-probe <path> <state 0..3>]\n"; return 2; }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     auto base = std::filesystem::temp_directory_path() / (L"TortoiseSCMShellTest-" + std::to_wstring(GetCurrentProcessId()));
     std::filesystem::create_directories(base / L"first/.plastic");
@@ -122,6 +225,7 @@ int wmain(int argc, wchar_t** argv) {
         RegisteredSmoke(first, second);
     else
     {
+    OverlayTests(base);
     require(WorkspaceRoot((first / L"child/file.txt").native()) == first.native(), "nested file workspace");
     require(WorkspaceRoot((first / L".plastic/plastic.workspace").native()).empty(), "metadata excluded");
     require(WorkspaceRoot(base.native()).empty(), "outside workspace excluded");

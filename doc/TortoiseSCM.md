@@ -27,13 +27,41 @@ cd D:\Work\Juscent\SCM_Study\TortoiseSCM
 .\contrib\tortoisescm\Unregister-Shell.ps1
 ```
 
-两个脚本使用当前用户的 `HKCU\Software\Classes`，不修改 TortoiseGit 的 CLSID。
+默认注册使用当前用户的 `HKCU\Software\Classes`，不修改 TortoiseGit 的 CLSID。
 可通过 `-BinaryDirectory` 指向另一个同时含 EXE 和 DLL 的目录。
 菜单显示于工作区内的文件、目录与背景；多选必须来自同一个工作区。
 `.plastic` 元数据目录不显示菜单。Windows 11 使用经典“显示更多选项”菜单。
 
 Explorer 会保持已加载 DLL 的文件锁。如替换 DLL 时失败，先注销当前用户再登录；脚本不会强制结束 Explorer。
 卸载注册不会删除工作区、设置或程序文件。
+
+### 状态图标与后台缓存
+
+提供正常、修改、冲突三个图标，目录会汇总受控子项的状态。未版本控制、忽略和未加载项不会被当作正常文件。
+Explorer 只读取本地缓存，不在图标查询中执行 cm、访问服务器或扫描工作区。
+打开工作区窗口会启动独立后台进程，监视文件变化并定期刷新；过期、损坏或失败的缓存不显示图标。
+Windows 图标槽位有限，其他扩展已占满时，即使注册成功也可能无法显示。
+
+Windows 的图标覆盖发现使用机器级注册。需要在管理员 PowerShell 中执行：
+
+```powershell
+.\contrib\tortoisescm\Register-Shell.ps1 -EnableMachineOverlays
+# 移除本产品的机器级图标注册
+.\contrib\tortoisescm\Unregister-Shell.ps1 -RemoveMachineOverlays
+```
+
+该选项同时配置当前用户登录时启动缓存进程；不会移除或重新排列其他产品的图标注册。
+GUI 的“操作 → 刷新 Explorer 状态图标”可手动刷新；CLI 也可单次生成缓存：
+
+```powershell
+& $exe --cli --command cache-refresh --path 'D:\workspace' --yes --json | ConvertFrom-Json
+& $exe --cache-worker   # 独立后台刷新进程（每用户一个）
+& $exe --cache-stop
+```
+
+缓存位于 `%LOCALAPPDATA%\TortoiseSCM`，使用显式路径和时间戳；不以“没有发现更改”推断受控文件。
+当前后台监视最多 64 个已打开的本地工作区，缓存最多 200,000 条 / 32 MiB；超过限制会停止显示对应状态，而非截断后显示正常。
+Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲突文件时，工作区根目录显示需检查的冲突状态。
 
 ## 使用
 
@@ -251,7 +279,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 自定义 diff / merge | 设置窗口、差异按钮、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*` | 分支合并仅 Standard；目录结构冲突仍需官方客户端 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：Explorer 状态图标覆盖与后台缓存、分支浏览与目录冲突编辑窗口、拖放移动、仓库创建、
+尚未提供：分支浏览与目录冲突编辑窗口、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

@@ -14,6 +14,8 @@ namespace TortoiseSCM
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--cache-worker") return OverlayCacheHost.Run();
+            if (args.Length == 1 && args[0] == "--cache-stop") return OverlayCacheHost.Stop();
             // Dispatch before any WinForms setup: automation must never show a dialog,
             // including when parsing or loading settings fails.
             if (args.Any(argument => argument.Equals("--cli", StringComparison.OrdinalIgnoreCase)))
