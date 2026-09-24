@@ -17,10 +17,12 @@ namespace TortoiseSCM
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
-            "          locks, unlock, cache-refresh\r\n" +
+            "          locks, unlock, cache-refresh, history-page\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
+            "Paged history: history-page --path <scope> [--before <exclusive-changeset>] [--limit <1..100>]\r\n" +
+            "  Default scan limit is 50; path pages may be empty with older history still available.\r\n" +
             "rollback restores selected content as pending changes; switch replaces the whole workspace revision.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
             "Compare: diff-history --path <workspace> --item </repository/file> --from N --to N [--external]\r\n" +
@@ -138,10 +140,10 @@ namespace TortoiseSCM
                         client.GetMergeSessionAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
                     if (session == null)
                     {
-                        response.data = new { workspace = workspaceData, sessionId = (string)null, plan = (object)null };
+                        response.data = new { workspace = workspaceData, sessionId = (string)null, isRollback = false, plan = (object)null };
                         response.output = "No active TortoiseSCM merge session."; return;
                     }
-                    response.data = new { workspace = workspaceData, sessionId = session.SessionId, plan = MergePlanData(session.Plan) };
+                    response.data = new { workspace = workspaceData, sessionId = session.SessionId, isRollback = session.IsRollback, plan = MergePlanData(session.Plan) };
                     response.output = MergePlanText(session.Plan); return;
                 }
                 if (options.Command == "merge-resolve")
@@ -220,6 +222,20 @@ namespace TortoiseSCM
                     path = item.Path, oldPath = item.OldPath, status = item.StatusCode,
                     description = item.StatusDescription, isDirectory = item.IsDirectory }).ToArray() };
                 response.output = output.ToString();
+                return;
+            }
+            if (options.Command == "history-page")
+            {
+                var page = client.GetHistoryPageAsync(options.Paths[0], options.Before, options.Limit ?? 50, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, repository = page.Repository, scope = page.Scope,
+                    scannedChangesets = page.ScannedChangesets, hasMore = page.HasMore, nextBeforeChangeset = page.NextBeforeChangeset,
+                    entries = page.Items.Select(entry => new { path = entry.Path, revisionSpec = entry.RevisionSpec, changeset = entry.Changeset,
+                        creationDate = entry.CreationDate, owner = entry.Owner, branch = entry.Branch, comment = entry.Comment, repository = entry.Repository }).ToArray() };
+                response.output = String.Join(Environment.NewLine, page.Items.Select(entry =>
+                    "Changeset " + entry.Changeset.ToString(CultureInfo.InvariantCulture) + " | " + entry.Owner + " | " + entry.Branch + "\r\n" + entry.Comment));
+                response.output += Environment.NewLine + "Scanned " + page.ScannedChangesets + " changesets; " + page.Items.Count + " matched. " +
+                    (page.HasMore ? "Older history remains; continue with --before " + page.NextBeforeChangeset.Value.ToString(CultureInfo.InvariantCulture) + "." : "No older history remains.");
+                if (page.Scope != "/") response.output += Environment.NewLine + "Path publication history includes rollback commits; it does not follow renamed items through their older paths.";
                 return;
             }
             if (options.Command == "history")
@@ -361,8 +377,8 @@ namespace TortoiseSCM
         internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile;
         internal string Base, Local, Remote, Output, Item, Destination, Result;
         internal bool Help, Recursive, External, Overwrite;
-        internal int? Timeout;
-        internal long? Changeset, From, To;
+        internal int? Timeout, Limit;
+        internal long? Changeset, From, To, Before;
         internal Guid? LockId;
         internal bool ChangesSettings { get { return DiffTool != null || DiffArgs != null || MergeTool != null || MergeArgs != null; } }
         internal readonly List<string> Paths = new List<string>();
@@ -378,7 +394,7 @@ namespace TortoiseSCM
                     case "--command": case "--path": case "--comment": case "--commentsfile": case "--cm": case "--timeout": ++i; break;
                     case "--changeset": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
-                    case "--item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": ++i; break;
+                    case "--item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit": ++i; break;
                 }
             }
             return false;
@@ -428,6 +444,12 @@ namespace TortoiseSCM
                         options.LockId = lockId; break;
                     case "--from": options.From = Revision(Value(args, ref i)); break;
                     case "--to": options.To = Revision(Value(args, ref i)); break;
+                    case "--before": options.Before = Revision(Value(args, ref i)); break;
+                    case "--limit":
+                        int limit;
+                        if (!Int32.TryParse(Value(args, ref i), NumberStyles.None, CultureInfo.InvariantCulture, out limit) || limit < 1 || limit > 100)
+                            throw new ArgumentException("--limit must be an integer from 1 to 100.");
+                        options.Limit = limit; break;
                     case "--changeset":
                         long changeset;
                         if (!Int64.TryParse(Value(args, ref i), NumberStyles.None, CultureInfo.InvariantCulture, out changeset))
@@ -445,13 +467,15 @@ namespace TortoiseSCM
             }
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "remove", "move", "ignore",
-                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "locks", "unlock", "cache-refresh" }.Contains(options.Command))
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "locks", "unlock", "cache-refresh", "history-page" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
             bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
             if (options.Command == "cache-refresh" && (options.Paths.Count != 1 || !yes)) throw new ArgumentException("cache-refresh requires one workspace root and --yes to write the local cache.");
+            if (options.Command == "history-page" && options.Paths.Count != 1) throw new ArgumentException("history-page requires exactly one file, directory or workspace scope.");
+            if (options.Command != "history-page" && (options.Before.HasValue || options.Limit.HasValue)) throw new ArgumentException("--before and --limit are supported only for history-page.");
             if (options.ChangesSettings && options.Command != "settings") throw new ArgumentException("Tool configuration options require --command settings.");
             if (new[] { "remove", "move", "ignore" }.Contains(options.Command) && options.Paths.Count != 1) throw new ArgumentException("File operations require exactly one explicit --path.");
             if ((options.Command == "move") != (options.Destination != null)) throw new ArgumentException("--destination is required only for move.");

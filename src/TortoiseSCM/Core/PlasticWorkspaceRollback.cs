@@ -18,6 +18,14 @@ namespace TortoiseSCM
         {
             var workspace = await GetWorkspaceAsync(root, token).ConfigureAwait(false);
             if (workspace.IsPartial) throw new ArgumentException("整仓回滚为待提交更改目前只支持完整工作区；部分工作区请使用文件回滚，或切换已加载内容的历史快照。");
+            using (var gate = OpenMergeGate(root))
+                return await RollbackWorkspaceLockedAsync(workspace, root, target, token).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> RollbackWorkspaceLockedAsync(PlasticWorkspace workspace, string root, long target, CancellationToken token)
+        {
+            if (System.IO.File.Exists(System.IO.Path.Combine(root, ".plastic", "plastic.mergeprogress")))
+                throw new ArgumentException("请先完成或撤销当前合并，再执行整仓回滚。");
             await ValidateCleanRevisionOperationAsync(root, root, token).ConfigureAwait(false);
             var selector = await ExecuteAsync(RevisionCommand(root, new [] { "showselector" }), token).ConfigureAwait(false);
             RequireSuccess(selector);
@@ -48,6 +56,7 @@ namespace TortoiseSCM
             if (!String.Equals(selector.Output.Trim(), beforeMergeSelector.Output.Trim(), StringComparison.Ordinal))
                 throw new ArgumentException("预检期间工作区选择器发生变化；请刷新后重试。未执行回滚。");
             args.Add("--merge");
+            var tracking = TrackWorkspaceRollback(workspace, loaded, target);
             var result = await ExecuteAsync(RevisionCommand(root, args), token).ConfigureAwait(false);
             if (!result.Succeeded)
             {
@@ -59,6 +68,7 @@ namespace TortoiseSCM
                 return new PlasticCommandResult { ExitCode = -1, Output = result.Output,
                     Error = "减法合并已执行，但选择器验证失败；请检查工作区状态。更改未自动提交。\r\n" + after.Error };
             result.Output += "\r\n已将整个工作区恢复为 cs:" + target + " 的待提交更改；分支选择器与已加载版本保持不变。请检查差异后提交。";
+            tracking.RollbackProgress = RollbackProgressHash(root); tracking.Ready = true; SaveMergeState(tracking);
             return result;
         }
 

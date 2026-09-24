@@ -64,6 +64,7 @@ namespace TortoiseSCM
     {
         public string SessionId { get; set; }
         public PlasticMergePlan Plan { get; set; }
+        public bool IsRollback { get; set; }
     }
 
     public sealed class PlasticMergeConflictFiles
@@ -149,6 +150,7 @@ namespace TortoiseSCM
                 // A selector/tree change makes an old session inactive. Do not attach saved
                 // resolutions to a workspace the user switched or committed in the meantime.
                 await ValidateMergeSessionAsync(state, workspace, cancellationToken).ConfigureAwait(false);
+                if (state.Session.IsRollback) return state.Session;
                 var current = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);
                 foreach (var conflict in state.Session.Plan.FileConflicts)
                     conflict.Resolved = !current.FileConflicts.Any(item => item.RepositoryPath == conflict.RepositoryPath);
@@ -255,6 +257,13 @@ namespace TortoiseSCM
             if (state.Applying) throw new InvalidOperationException("A previous resolution application did not finish reliably. Checkin is blocked: inspect native conflicts and retained result/backup in the official client, then complete or undo the merge there.");
             if (!SamePath(state.Session.Plan.WorkspaceRoot, workspace.RootPath) || state.Session.Plan.Repository != workspace.Repository || NormalizeMergeSelector(state.Selector) != NormalizeMergeSelector(workspace.Selector))
                 throw new ArgumentException("Workspace configuration changed since the merge began. The saved session cannot be applied.");
+            if (state.Session.IsRollback)
+            {
+                if (await LoadedChangesetAsync(workspace.RootPath, false, cancellationToken).ConfigureAwait(false) != state.Session.Plan.DestinationChangeset ||
+                    RollbackProgressHash(workspace.RootPath) != state.RollbackProgress)
+                    throw new ArgumentException("The native rollback state changed. Inspect or undo it before checking in.");
+                return;
+            }
             var current = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);
             if (current.DestinationChangeset != state.Session.Plan.DestinationChangeset)
                 throw new ArgumentException("The workspace revision changed since the merge began. Start a fresh merge preview.");
@@ -349,6 +358,7 @@ namespace TortoiseSCM
             internal string Selector;
             internal bool Ready;
             internal bool Applying;
+            internal string RollbackProgress;
             internal readonly Dictionary<string, string> Hashes = new Dictionary<string, string>(StringComparer.Ordinal);
         }
 
@@ -395,7 +405,7 @@ namespace TortoiseSCM
                 SourceChangeset = MergeNumber((string)element.Element("Source")), DestinationChangeset = MergeNumber((string)element.Element("Destination")),
                 BaseChangeset = MergeNumber((string)element.Element("Base")) };
             if (!SamePath(plan.WorkspaceRoot, root)) throw new InvalidDataException("Merge session belongs to another workspace.");
-            var state = new MergeSessionState { Session = new PlasticMergeSession { SessionId = id, Plan = plan }, Selector = (string)element.Element("Selector"), Ready = (bool)element.Element("Ready"), Applying = (bool?)element.Element("Applying") ?? false };
+            var state = new MergeSessionState { Session = new PlasticMergeSession { SessionId = id, Plan = plan, IsRollback = (bool?)element.Element("IsRollback") ?? false }, Selector = (string)element.Element("Selector"), Ready = (bool)element.Element("Ready"), Applying = (bool?)element.Element("Applying") ?? false, RollbackProgress = (string)element.Element("RollbackProgress") ?? "" };
             foreach (var conflict in element.Elements("Conflict"))
             {
                 string path = (string)conflict.Attribute("path"); ValidateRepositoryFilePath(path);
@@ -414,6 +424,7 @@ namespace TortoiseSCM
             var element = new XElement("MergeSession", new XElement("Root", plan.WorkspaceRoot), new XElement("Repository", plan.Repository),
                 new XElement("Source", plan.SourceChangeset), new XElement("Destination", plan.DestinationChangeset), new XElement("Base", plan.BaseChangeset),
                 new XElement("Selector", state.Selector), new XElement("Ready", state.Ready), new XElement("Applying", state.Applying));
+            element.Add(new XElement("IsRollback", state.Session.IsRollback), new XElement("RollbackProgress", state.RollbackProgress ?? ""));
             foreach (var conflict in plan.FileConflicts)
             {
                 string hash; state.Hashes.TryGetValue(conflict.RepositoryPath, out hash);
@@ -445,6 +456,20 @@ namespace TortoiseSCM
         private static string MergeHash(string path)
         { RejectReparsePath(path); using (var stream = File.OpenRead(path)) using (var hash = SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", ""); }
 
+        public bool HasSavedMergeSession(string root) { return File.Exists(MergeIndex(Path.GetFullPath(root))); }
+        private static string RollbackProgressHash(string root)
+        { string path = Path.Combine(root, ".plastic", "plastic.mergeprogress"); return File.Exists(path) ? MergeHash(path) : ""; }
+
+        private MergeSessionState TrackWorkspaceRollback(PlasticWorkspace workspace, long loaded, long target)
+        {
+            var state = new MergeSessionState { Selector = workspace.Selector,
+                Session = new PlasticMergeSession { SessionId = Guid.NewGuid().ToString("N"), IsRollback = true,
+                    Plan = new PlasticMergePlan { WorkspaceRoot = workspace.RootPath, Repository = workspace.Repository,
+                        SourceChangeset = loaded, DestinationChangeset = loaded, BaseChangeset = target } } };
+            CreatePrivateMergeDirectory(MergeSessionDirectory(state.Session.SessionId)); SaveMergeState(state);
+            WriteMergeIndex(workspace.RootPath, state.Session.SessionId); return state;
+        }
+
         private async Task<bool> RetireCompletedMergeAsync(string root, CancellationToken cancellationToken)
         {
             if (File.Exists(Path.Combine(root, ".plastic", "plastic.mergeprogress"))) return false;
@@ -457,8 +482,14 @@ namespace TortoiseSCM
 
         private async Task<PlasticCommandResult> ExecuteWithMergeGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken)
         {
-            if ((request.Command != PlasticCommand.Checkin && request.Command != PlasticCommand.Undo) || !File.Exists(MergeIndex(command.WorkingDirectory)))
+            if (request.Command != PlasticCommand.Checkin && request.Command != PlasticCommand.Undo)
                 return await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            if (!File.Exists(MergeIndex(command.WorkingDirectory)))
+            {
+                if (request.Command == PlasticCommand.Checkin && File.Exists(Path.Combine(command.WorkingDirectory, ".plastic", "plastic.mergeprogress")))
+                    throw new ArgumentException("This native merge has no session for the current client settings. Complete it in the client that started it; no checkin was performed.");
+                return await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            }
             using (var gate = OpenMergeGate(command.WorkingDirectory))
             {
                 if (request.Command == PlasticCommand.Checkin && !await RetireCompletedMergeAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false))
@@ -466,9 +497,12 @@ namespace TortoiseSCM
                     var workspace = await MergeWorkspaceAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false);
                     var state = LoadMergeState(workspace.RootPath, true);
                     await ValidateMergeSessionAsync(state, workspace, cancellationToken).ConfigureAwait(false);
-                    var plan = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);
-                    if (plan.FileConflicts.Count != 0 || plan.DirectoryConflicts.Count != 0)
-                        throw new ArgumentException("Resolve all native merge conflicts before checking in. No checkin was performed.");
+                    if (!state.Session.IsRollback)
+                    {
+                        var plan = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);
+                        if (plan.FileConflicts.Count != 0 || plan.DirectoryConflicts.Count != 0)
+                            throw new ArgumentException("Resolve all native merge conflicts before checking in. No checkin was performed.");
+                    }
                     if (request.Paths.Count != 1 || !SamePath(Path.GetFullPath(Path.IsPathRooted(request.Paths[0]) ? request.Paths[0] : Path.Combine(request.WorkingDirectory, request.Paths[0])), workspace.RootPath))
                         throw new ArgumentException("Check in the explicit workspace root to include the complete native merge.");
                 }

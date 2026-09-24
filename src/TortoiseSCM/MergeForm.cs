@@ -94,6 +94,7 @@ namespace TortoiseSCM
             foreach (var conflict in plan.DirectoryConflicts) items.Items.Add(new ListViewItem(new[] { conflict.SourcePath, "目录冲突：" + conflict.Kind + " — " + conflict.Description }));
             status.Text = "cs:" + plan.SourceChangeset + " → cs:" + plan.DestinationChangeset + " · " + plan.FileConflicts.Count(c => !c.Resolved) + " 个待解决文件冲突";
             if (plan.DirectoryConflicts.Count > 0) status.Text = "存在目录结构冲突，请在官方 Plastic 客户端处理。尚未开始合并。";
+            else if (session != null && session.IsRollback) status.Text = "整仓回滚已准备（目标 cs:" + plan.BaseChangeset + "）。关闭窗口，检查更改后提交整个工作区。";
             else if (plan.AlreadyConnected) status.Text = "来源已合并。请检查待定更改，按需提交。";
             else if (session != null && plan.FileConflicts.All(c => c.Resolved)) status.Text = "合并处理完成。关闭此窗口，检查待定更改并提交。";
             UpdateButtons();

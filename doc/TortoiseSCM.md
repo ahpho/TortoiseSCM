@@ -19,6 +19,22 @@ cd D:\Work\Juscent\SCM_Study\TortoiseSCM
 运行时复用 Plastic 客户端现有的用户配置和认证。新程序不储存密码，也不要求安装 Git。
 首次使用会发现标准安装目录和本机 `D:\Program Files\PlasticSCM5\client`；也可在“设置”中指定路径。
 
+### 可安装包
+
+```powershell
+.\contrib\tortoisescm\Package.ps1 -Version '0.2.0-preview'
+```
+
+产物位于 `bin/TortoiseSCM/packages`：Windows x64 ZIP、SHA-256 校验文件，ZIP 内含逐文件校验清单。
+解压后运行 `Install.ps1`，默认安装到 `%LOCALAPPDATA%\Programs\TortoiseSCM` 并注册当前用户右键菜单。
+`Install.ps1 -WhatIf` 可预览；需要状态图标时，在管理员 PowerShell 使用 `Install.ps1 -EnableMachineOverlays`。
+每次安装使用新版本目录，不覆盖 Explorer 已加载的 DLL。旧版本保留，注册失败时恢复原注册。
+运行 `Uninstall.ps1` 卸载当前版本；有机器级图标注册时需管理员执行并添加 `-RemoveMachineOverlays`。
+卸载仅清理属于该包且哈希未变化的文件，保留设置、工作区和用户新增/修改的文件。被锁定的文件会保留，注销后可重试。
+包当前未数字签名，也不提供自动更新。
+
+GitHub Actions 的 Windows 2022 工作流执行无服务器构建/测试、隔离安装测试并上传 ZIP 工件；真实 Plastic 服务器集成测试仍需本地授权的测试仓库。
+
 ## Explorer 集成
 
 ```powershell
@@ -68,6 +84,8 @@ Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲
 主窗口沿用 Tortoise 提交对话框布局：上方提交说明，下方带复选框的路径列表，底部刷新、操作、提交、关闭。
 添加、更新、历史、差异、设置和操作记录位于底部“操作”菜单。文件列表的右键菜单用于所选行操作。
 历史窗口使用“提交列表 / 提交说明 / 文件明细”三段布局，两个分隔条均可拖动；顶部筛选框过滤已加载记录。
+历史分批加载，单批最多扫描 50 个提交；窗口显示已扫描、已加载及是否还有更早记录。“加载更早”继续查询，“取消加载”保留已有结果。
+文件/目录页面按路径事件筛选提交，能显示复用旧修订的回滚发布。重命名前的历史需查询旧路径；路径曾被删除再创建时，本页面会包含该路径的多次使用。
 设置使用左侧分类树和右侧设置页。所有窗口共用系统对话框字体、颜色和 Explorer 列表主题。
 
 布局参考上游 `src/Resources/TortoiseProcENG.rc` 的 `IDD_COMMITDLG`、`IDD_LOGMESSAGE`、
@@ -210,6 +228,8 @@ merge 留空时明确报错。设置窗口的“打开合并工具”允许选�
 
 合并开始要求干净的 Standard 工作区，并在原生 Plastic 合并状态下处理文件冲突。会话保存在当前用户的本地应用数据目录，可以跨进程恢复。
 合并结果需保存在独立文件；应用前核验冲突文件是否被其他程序修改。未解决或中断状态不能直接由本程序签入。
+合并和整仓回滚必须整体提交：点击“提交”后会明确确认整个工作区的受控更改范围；CLI 使用根目录 `checkin`。
+放弃这类操作时，可用“操作 → 撤销整个合并 / 回滚”，或根目录 `undo --yes`。失败的整仓回滚同样保留会话，不能绕过检查直接发布。
 本版本拒绝目录结构冲突，Partial 工作区的传入冲突也需使用官方客户端；不自动猜测重命名、删除或同路径新增的取舍。
 锁列表限定当前仓库；只有当前用户、当前工作区持有的锁才允许释放，执行前再次读取核验。
 锁获取遵循服务器规则：普通签出并不保证获得锁。本程序不修改服务器锁规则，服务器权限仍决定能否释放。
@@ -224,6 +244,17 @@ merge 留空时明确报错。设置窗口的“打开合并工具”允许选�
 差异包含 `path/baseRevision/diffText/isBinary/hasChanges`。
 退出码为 `0` 成功、`1` SCM/运行错误、`2` 参数或范围错误、`124` 超时。
 本程序为 Windows GUI 子系统：PowerShell 使用管道等待输出；自动化程序使用 `ProcessStartInfo` 重定向 stdout/stderr 并等待退出即可。
+
+分页历史用于大仓库和路径事件历史；原 `history` 命令保留其兼容行为：
+
+```powershell
+& $exe --cli --command history-page --path 'D:\workspace\directory' --limit 50 --json | ConvertFrom-Json
+# 使用上一页返回的 nextBeforeChangeset 作为 --before；编号为排除上界
+& $exe --cli --command history-page --path 'D:\workspace\directory' --before 123 --limit 50 --json | ConvertFrom-Json
+```
+
+`history-page` 返回 `entries/scannedChangesets/hasMore/nextBeforeChangeset`。某页没有路径匹配记录并不意味着历史结束，必须检查 `hasMore`。
+单页限制是扫描的提交数，不保证有等量的匹配记录。`--limit` 范围 1–100；查询可取消，GUI 内复用有容量限制的不可变提交明细缓存。
 
 ## 代码结构
 
@@ -275,7 +306,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 文件 / 目录更新、历史、恢复 | 更新、历史 / 范围历史内恢复按钮 | `update`、`history`、`rollback --changeset` | 精确范围更新需要 Partial；Standard 明确要求整体更新 |
 | 整仓更新、历史、历史版本 | 根目录打开，历史内分别回滚待提交和切换快照 | 根路径 `update`、`history`、`rollback`、`switch` | 整仓待提交回滚仅 Standard；Partial 快照仅处理已加载项 |
 | 目录范围提交、勾选及右键 | 按范围显示，勾选签入，右键历史 / 差异 / 丢弃 | `status --path` 获取范围，重复 `--path` 提交所选项，`history` / `undo` | 目录递归操作包含后代；私有文件需先添加 |
-| 上下窗格历史明细 | 上方提交、下方完整提交文件清单 | `history` + `changeset --changeset` 返回结构化记录 | 目录历史首次扫描可能较慢 |
+| 上下窗格历史明细 | 上方分页提交、下方完整提交文件清单 | `history-page` / `history` + `changeset --changeset` | 路径过滤分页可能为空，需继续查询直到 hasMore=false |
 | 自定义 diff / merge | 设置窗口、差异按钮、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*` | 分支合并仅 Standard；目录结构冲突仍需官方客户端 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。

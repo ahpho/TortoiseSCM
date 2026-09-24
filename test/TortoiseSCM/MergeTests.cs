@@ -28,6 +28,13 @@ internal static class MergeOperationTests
             File.WriteAllText(local, "destination");
             var config = new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location, SettingsPath = Path.Combine(temporary, "settings.xml"), Timeout = TimeSpan.FromSeconds(10) };
             var client = new PlasticClient(config);
+            Check(Checkin(client, root).Succeeded && File.ReadAllLines(Marker(root, "checkin-calls")).Length == 1,
+                "Ordinary checkin without native merge marker remains available");
+            File.WriteAllText(Marker(root, "plastic.mergeprogress"), "native merge started outside TortoiseSCM");
+            Reject(() => Checkin(client, root), "Native merge without a saved session blocks checkin");
+            Check(File.ReadAllLines(Marker(root, "checkin-calls")).Length == 1 && File.Exists(Marker(root, "plastic.mergeprogress")) && File.ReadAllText(local) == "destination",
+                "Unknown merge is rejected before native checkin and preserves workspace state");
+            File.Delete(Marker(root, "plastic.mergeprogress"));
             var plan = client.PreviewMergeAsync(root, 3, Token).GetAwaiter().GetResult();
             Check(plan.BaseChangeset == 0 && plan.FileConflicts.Single().BaseChangeset == 1, "Per-file ancestor is independent of overall merge base");
             Check(plan.Operations.Single().Path == "/automatic.txt", "Automatic operation retained");
@@ -47,6 +54,11 @@ internal static class MergeOperationTests
             Check(session.Plan.FileConflicts.Count == 1 && File.ReadAllText(local) == "destination", "Begin leaves conflicting destination bytes untouched");
             Check(new PlasticClient(config).GetMergeSessionAsync(root, Token).GetAwaiter().GetResult().SessionId == session.SessionId, "Session survives new client and CRLF XML normalization");
             Reject(() => Checkin(client, root), "Unresolved native conflict blocks shared Core checkin");
+            var alternateSettingsClient = new PlasticClient(new PlasticClientConfig { CmPath = config.CmPath,
+                SettingsPath = Path.Combine(temporary, "alternate-settings", "settings.xml"), Timeout = config.Timeout });
+            Reject(() => Checkin(alternateSettingsClient, root), "Different settings directory cannot bypass native merge checkin guard");
+            Check(File.ReadAllLines(Marker(root, "checkin-calls")).Length == 1 && File.Exists(Marker(root, "plastic.mergeprogress")),
+                "Settings-path bypass attempts never invoke native checkin");
             Reject(() => client.PrepareMergeConflictAsync(root, 4, "/conflict.txt", Token).GetAwaiter().GetResult(), "Mismatched source rejected");
             File.WriteAllText(Marker(root, "wrong-item"), "");
             Reject(() => client.PrepareMergeConflictAsync(root, 3, "/conflict.txt", Token).GetAwaiter().GetResult(), "Historical path reuse rejected by item identity");
@@ -158,6 +170,7 @@ internal static class MergeOperationTests
         }
         if (args[0] == "checkin" || args[0] == "undo")
         {
+            if (args[0] == "checkin") File.AppendAllText(Marker(root, "checkin-calls"), "checkin\n");
             File.Delete(Marker(root, "plastic.mergeprogress")); File.Delete(Marker(root, "dirty"));
             Console.WriteLine("done"); return 0;
         }

@@ -6,10 +6,11 @@ TortoiseSCM — Plastic SCM / Unity Version Control for Windows
 通过已安装的 `cm.exe` 操作工作区。原有 `TortoiseGit.sln` 是保留的上游工程，仍然是 Git 客户端。
 
 当前提供：工作区识别、目录范围待定更改与勾选签入、右键历史/丢弃修改、添加、签出、更新、撤销、
-差异、双窗格提交历史与文件明细、文件/目录历史恢复、工作区历史快照切换，以及 Gluon 入口。
+差异、分页提交历史与文件明细、历史比较/导出、文件/目录恢复、整仓待提交回滚、快照切换、删除/移动/忽略，以及 Gluon 入口。
 `TortoiseSCM.exe --cli` 提供与 GUI 共用后端的无界面模式，支持 JSON 输出及自动化测试。
-支持配置外部 diff/merge 工具，GUI 与 CLI 均可启动。此版本尚未迁移 TortoiseGit 的全部对话框；
-图标覆盖、分支图、集成冲突解决、安装包和 Windows 11 一级菜单仍待实现。
+支持外部 diff/merge 配置、Standard 工作区文件冲突处理、锁管理，以及独立后台缓存驱动的 Explorer 状态图标。
+提供带校验清单的 Windows x64 安装 ZIP 和 Windows CI；此版本尚未迁移 TortoiseGit 的全部对话框。
+目录结构冲突、Partial 传入冲突仍需官方客户端；分支图、签名 MSI、自动更新和 Windows 11 一级菜单尚未提供。
 
 ```powershell
 # Visual Studio 2022+：C++ 桌面开发、Windows SDK、.NET Framework 4.8 targeting pack
@@ -21,7 +22,9 @@ TortoiseSCM — Plastic SCM / Unity Version Control for Windows
 ```
 
 右键点击 Plastic 工作区里的文件、文件夹或文件夹空白处，选择 **TortoiseSCM**。
-Windows 11 先选择“显示更多选项”。注册仅影响当前用户，不需要管理员权限。
+Windows 11 先选择“显示更多选项”。默认右键菜单注册仅影响当前用户，不需要管理员权限。
+状态图标的 Windows 发现注册需要管理员执行 `Register-Shell.ps1 -EnableMachineOverlays`。
+使用 `contrib/tortoisescm/Package.ps1` 打包，解压后运行 `Install.ps1` 可安装到当前用户的独立版本目录。
 设置中可修改 `cm.exe`、`gluon.exe` 与外部 diff/merge 工具路径和参数。
 
 详见 [构建、安装与使用说明](doc/TortoiseSCM.md)。许可证沿用 [GPL](LICENSE)，图标来自本仓库。

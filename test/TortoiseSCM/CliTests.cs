@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -39,6 +40,16 @@ internal static class CliTests
             Run(2, "--unknown");
             Run(2, "--command", "gluon", "--path", temporary);
             Run(2, "--command", "settings", "--path", temporary);
+            Run(2, "--command", "cache-refresh", "--path", temporary);
+            Run(2, "--command", "cache-refresh", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"), "--yes");
+            Run(2, "--command", "history-page", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"));
+            Run(2, "--command", "history-page", "--path", temporary, "--before", "-1");
+            Run(2, "--command", "history-page", "--path", temporary, "--before", "9223372036854775808");
+            Run(2, "--command", "history-page", "--path", temporary, "--limit", "0");
+            Run(2, "--command", "history-page", "--path", temporary, "--limit", "101");
+            Run(2, "--command", "history-page", "--path", temporary, "--limit", "1.5");
+            Run(2, "--command", "history", "--path", temporary, "--before", "1");
+            Run(2, "--command", "status", "--path", temporary, "--limit", "2");
             Run(2, "--command", "changeset", "--path", temporary);
             Run(2, "--command", "changeset", "--path", temporary, "--changeset", "-1");
             Run(2, "--command", "changeset", "--path", temporary, "--changeset", "9223372036854775808");
@@ -126,6 +137,8 @@ internal static class CliTests
             HistoricalFileTests();
             LockTests();
             RevisionTests(controlled);
+            HistoryPageTests();
+            UnknownMergeSessionTests();
             MergeWorkflowTests();
             Console.WriteLine("PASS: " + assertions + " CLI assertions");
             return 0;
@@ -141,6 +154,47 @@ internal static class CliTests
     }
 
     private static Dictionary<string, object> Data(Dictionary<string, object> response) { return (Dictionary<string, object>)response["data"]; }
+
+    private static void HistoryPageTests()
+    {
+        var first = Data(Run(0, "--command", "history-page", "--path", temporary, "--limit", "2", "--cm", fakeCm));
+        var entries = ((IList)first["entries"]).Cast<Dictionary<string, object>>().ToList();
+        Check(entries.Select(item => Convert.ToInt32(item["changeset"])).SequenceEqual(new[] { 3, 2 }), "Paged CLI history returns latest changesets in order");
+        Check(Convert.ToBoolean(first["hasMore"]) && Convert.ToInt32(first["nextBeforeChangeset"]) == 2 && Convert.ToInt32(first["scannedChangesets"]) == 2,
+            "Paged CLI history exposes scan count and exclusive continuation cursor");
+        var last = Data(Run(0, "--command", "history-page", "--path", temporary, "--before", "2", "--limit", "2", "--cm", fakeCm));
+        Check(((IList)last["entries"]).Count == 2 && !Convert.ToBoolean(last["hasMore"]) && last["nextBeforeChangeset"] == null, "Final CLI history page has no continuation");
+        var empty = Data(Run(0, "--command", "history-page", "--path", Path.Combine(temporary, "missing-scope"), "--limit", "2", "--cm", fakeCm));
+        Check(((IList)empty["entries"]).Count == 0 && Convert.ToBoolean(empty["hasMore"]) && Convert.ToInt32(empty["nextBeforeChangeset"]) == 2,
+            "Empty CLI path page clearly remains incomplete");
+        var path = Data(Run(0, "--command", "history-page", "--path", Path.Combine(temporary, "history-folder", "file.txt"), "--limit", "2", "--cm", fakeCm));
+        Check(path["scope"].ToString() == "/history-folder/file.txt" && ((IList)path["entries"]).Count == 2, "File path CLI page includes changeset publication events");
+        var defaults = Data(Run(0, "--command", "history-page", "--path", temporary, "--cm", fakeCm));
+        Check(((IList)defaults["entries"]).Count == 4 && !Convert.ToBoolean(defaults["hasMore"]), "Default CLI page uses bounded fifty-commit scan");
+        var zero = Data(Run(0, "--command", "history-page", "--path", temporary, "--before", "0", "--cm", fakeCm));
+        Check(((IList)zero["entries"]).Count == 0 && Convert.ToInt32(zero["scannedChangesets"]) == 0 && !Convert.ToBoolean(zero["hasMore"]), "Zero cursor terminates CLI history");
+        var text = Invoke(new[] { "--cli", "--command", "history-page", "--path", Path.Combine(temporary, "missing-scope"), "--limit", "2", "--cm", fakeCm });
+        Check(text.Item1 == 0 && text.Item2.Contains("Older history remains") && text.Item2.Contains("--before 2") && text.Item2.Contains("does not follow renamed"), "Text CLI reports continuation and path-history semantics");
+        var invalid = Invoke(new[] { "--cli", "--command", "history-page", "--path", temporary, "--limit", "--json" });
+        Check(invalid.Item1 == 2 && invalid.Item2.Length == 0 && invalid.Item3.Contains("--limit"), "Option-looking limit value cannot enable JSON mode");
+    }
+
+    private static void UnknownMergeSessionTests()
+    {
+        string progress = Path.Combine(temporary, ".plastic", "plastic.mergeprogress");
+        string calls = Path.Combine(temporary, ".plastic", "cli-cm-calls.log");
+        int before = File.ReadAllLines(calls).Count(line => line.StartsWith("[\"checkin\",", StringComparison.Ordinal));
+        File.WriteAllText(progress, "native merge from another session");
+        try
+        {
+            Run(2, "--command", "checkin", "--path", temporary, "--comment", "unknown native merge", "--yes", "--cm", fakeCm,
+                "--settings-file", Path.Combine(temporary, "alternate-merge-settings.xml"));
+            Check(File.ReadAllLines(calls).Count(line => line.StartsWith("[\"checkin\",", StringComparison.Ordinal)) == before,
+                "Alternate settings cannot bypass unknown native merge checkin guard");
+            Check(File.Exists(progress), "Rejected unknown merge checkin preserves native state");
+        }
+        finally { File.Delete(progress); }
+    }
     private static void Check(bool condition, string description) { assertions++; if (!condition) throw new Exception(description); }
 
     private static Dictionary<string, object> Run(int expectedExit, params string[] arguments)
@@ -348,6 +402,14 @@ internal static class CliTests
         else if (args[0] == "history")
             Console.WriteLine(new XElement("RevisionHistoriesResult", new XElement("RevisionHistory", new XElement("ItemName", args[1]),
                 new XElement("Revision", new XElement("ChangesetNumber", "1"), new XElement("Comment", "History 中文")))).ToString());
+        else if (args[0] == "find" && args.Any(arg => arg.Contains("order by changesetid desc limit")))
+        {
+            string query = args[2];
+            var before = Regex.Match(query, @"changesetid < (\d+)");
+            int limit = Int32.Parse(Regex.Match(query, @"limit (\d+)").Groups[1].Value);
+            var ids = Enumerable.Range(0, 4).Reverse().Where(id => !before.Success || id < Int64.Parse(before.Groups[1].Value)).Take(limit);
+            Console.WriteLine(new XElement("PLASTICQUERY", ids.Select(id => new XElement("CHANGESET", new XElement("CHANGESETID", id), new XElement("COMMENT", "Published 中文 " + id), new XElement("BRANCH", "/main")))));
+        }
         else if (args[0] == "find")
             Console.WriteLine(new XElement("PLASTICQUERY", args.Any(arg => arg.Contains("changesetid = 999")) ? null : new XElement("CHANGESET", new XElement("CHANGESETID", "1"),
                 new XElement("DATE", "2026-09-25T00:00:00Z"), new XElement("OWNER", "Test"), new XElement("BRANCH", "/main"), new XElement("COMMENT", "Changeset 中文"), new XElement("REPOSITORY", "test"))).ToString());

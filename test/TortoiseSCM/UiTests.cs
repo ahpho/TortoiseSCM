@@ -192,6 +192,33 @@ namespace TortoiseSCM
                             Require(((ListView)Field(history, "revisions")).Items.Count > 0, "Upper history pane contains real changesets");
                             Require(((ListView)Field(history, "changedFiles")).Items.Count > 0, "Lower history pane contains real changed files");
                             var revisions = (ListView)Field(history, "revisions");
+                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Initial bounded history page finishes");
+                            Require(revisions.Items.Count <= 50, "History opens with at most fifty commits");
+                            var older = (Button)Field(history, "loadMore");
+                            if (older.Enabled)
+                            {
+                                int firstPageCount = revisions.Items.Count;
+                                older.PerformClick();
+                                WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Load older history page finishes");
+                                Require(revisions.Items.Count > firstPageCount && revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).Distinct().Count() == revisions.Items.Count,
+                                    "Load older appends repository commits without duplicates");
+                                var refreshButton = (Button)Field(history, "refreshHistory");
+                                Require(refreshButton.Enabled && refreshButton.CanSelect, "History refresh is available after loading older records");
+                                refreshButton.PerformClick();
+                                WaitUntil(() => !(bool)Field(history, "loadingHistory"), "History refresh returns to newest page");
+                                Require(older.Enabled && revisions.Items.Count <= 50, "Refreshed history retains its continuation");
+                                int retained = revisions.Items.Count;
+                                older.PerformClick();
+                                Require(((Button)Field(history, "cancelHistory")).Enabled, "Paging exposes cancellation while loading");
+                                ((Button)Field(history, "cancelHistory")).PerformClick();
+                                WaitUntil(() => !(bool)Field(history, "loadingHistory"), "History page cancellation completes");
+                                Require(revisions.Items.Count == retained && older.Enabled, "Cancelled page preserves loaded records and remains retryable");
+                            }
+                            var beforeRefresh = revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).ToArray();
+                            ((Button)Field(history, "refreshHistory")).PerformClick();
+                            ((Button)Field(history, "cancelHistory")).PerformClick();
+                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "History refresh cancellation completes");
+                            Require(revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).SequenceEqual(beforeRefresh), "Cancelled refresh preserves existing loaded history");
                             int total = revisions.Items.Count;
                             var filter = (TextBox)Field(history, "filter");
                             filter.Text = "no-matching-commit-" + Guid.NewGuid().ToString("N");
@@ -214,6 +241,16 @@ namespace TortoiseSCM
                             Application.DoEvents();
                             var restore = (Button)Field(history, "restore");
                             Require(history.RectangleToScreen(history.ClientRectangle).Contains(restore.RectangleToScreen(restore.ClientRectangle)), "History restore button remains visible at minimum size");
+                            foreach (string name in new[] { "refreshHistory", "loadMore", "cancelHistory", "close" })
+                            {
+                                var button = (Button)Field(history, name);
+                                Rectangle bounds = button.RectangleToScreen(button.ClientRectangle);
+                                Require(history.RectangleToScreen(history.ClientRectangle).Contains(bounds) && button.Parent.RectangleToScreen(button.Parent.ClientRectangle).Contains(bounds),
+                                    "History " + name + " remains visible without clipping at minimum size");
+                            }
+                            Require(((Label)Field(history, "historySummary")).Text.Contains("已扫描") && ((Label)Field(history, "historySummary")).Text.Contains("已加载"), "History summary distinguishes scanned and loaded records");
+                            var summary = (Label)Field(history, "historySummary");
+                            Require(summary.Width > 250 && summary.Height >= summary.Font.Height && summary.Visible, "History completeness summary has visible readable bounds at minimum size");
                             var snapshot = (Button)Field(history, "snapshot");
                             Require(snapshot.Visible && snapshot.Text != restore.Text, "Workspace history exposes pending rollback separately from snapshot switching");
                             var changed = (ListView)Field(history, "changedFiles");

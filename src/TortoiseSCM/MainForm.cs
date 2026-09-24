@@ -153,6 +153,12 @@ namespace TortoiseSCM
                 using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
                 await RefreshAsync();
             });
+            operations.Items.Add("撤销整个合并 / 回滚…", null, async delegate {
+                if (busy || !loaded) return;
+                if (!client.HasSavedMergeSession(workspace.RootPath) && !File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress")))
+                { MessageBox.Show(this, "当前没有合并或整仓回滚会话。", "TortoiseSCM"); return; }
+                await ExecuteAsync(PlasticCommand.Undo, new List<string> { workspace.RootPath });
+            });
             operations.Items.Add("锁管理…", null, delegate {
                 if (busy || !loaded) return;
                 using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -181,7 +187,7 @@ namespace TortoiseSCM
             checkin.Text = "提交 (&C)";
             checkin.Size = new Size(95, 26);
             checkin.Margin = new Padding(6, 4, 0, 0);
-            checkin.Click += async delegate { await ExecuteAsync(PlasticCommand.Checkin); };
+            checkin.Click += async delegate { await CheckinAsync(); };
             var close = new Button { Text = "关闭", Size = new Size(86, 26), Margin = new Padding(6, 4, 0, 0) };
             close.Click += delegate { Close(); };
             right.Controls.Add(checkin);
@@ -369,6 +375,26 @@ namespace TortoiseSCM
 
         private Task ExecuteAsync(PlasticCommand command) { return ExecuteAsync(command, null); }
 
+        private async Task CheckinAsync()
+        {
+            if (busy || !loaded) return;
+            if (!workspace.IsPartial && (client.HasSavedMergeSession(workspace.RootPath) || File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress"))))
+            {
+                SetBusy(true, "正在检查合并状态…");
+                try
+                {
+                    var session = await client.GetMergeSessionAsync(workspace.RootPath, CancellationToken.None);
+                    if (session == null) throw new InvalidOperationException("当前合并没有本程序的会话，请在启动该合并的 Plastic 客户端完成提交。");
+                    if (session.Plan.FileConflicts.Any(item => !item.Resolved) || session.Plan.DirectoryConflicts.Count != 0)
+                        throw new InvalidOperationException("请先在“操作 → 合并变更集 / 解决冲突”中解决所有冲突。");
+                }
+                catch (Exception ex) { ShowError(ex); SetBusy(false, "合并尚不能提交"); return; }
+                SetBusy(false, "合并已解决，请确认整个工作区的提交范围。");
+                await ExecuteAsync(PlasticCommand.Checkin, new List<string> { workspace.RootPath });
+            }
+            else await ExecuteAsync(PlasticCommand.Checkin);
+        }
+
         private async Task ExecuteAsync(PlasticCommand command, List<string> explicitPaths)
         {
             if (busy || !loaded) return;
@@ -397,6 +423,8 @@ namespace TortoiseSCM
                 if (paths.Any(Directory.Exists) || files.CheckedItems.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).IsDirectory))
                     note += "目录操作会包含其全部子项，包括没有单独勾选的子项。\r\n";
                 if (command == PlasticCommand.Checkin) note += "更改将提交到当前 Plastic 服务器。\r\n";
+                if (command == PlasticCommand.Checkin && paths.Count == 1 && paths[0] == workspace.RootPath && (client.HasSavedMergeSession(workspace.RootPath) || File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress"))))
+                    note += "这是整个合并的提交，将包含工作区内全部受控更改，不受当前勾选范围限制。\r\n";
                 if (MessageBox.Show(this, note + "\r\n" + string.Join("\r\n", paths.Take(12).ToArray()) +
                     (paths.Count > 12 ? "\r\n… 共 " + paths.Count + " 项" : "") + "\r\n\r\n继续" + CommandName(command) + "？",
                     "TortoiseSCM — " + CommandName(command), MessageBoxButtons.OKCancel,

@@ -19,6 +19,10 @@ namespace TortoiseSCM
         private readonly ListView changedFiles = new ListView();
         private readonly TextBox description = new TextBox();
         private readonly Label status = new Label();
+        private readonly Label historySummary = new Label();
+        private readonly Button loadMore = new Button();
+        private readonly Button refreshHistory = new Button();
+        private readonly Button cancelHistory = new Button();
         private readonly Button restore = new Button();
         private readonly Button snapshot = new Button();
         private readonly Button historicalFile = new Button();
@@ -27,6 +31,12 @@ namespace TortoiseSCM
         private readonly List<PlasticHistoryItem> entries = new List<PlasticHistoryItem>();
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private CancellationTokenSource detailRequest;
+        private CancellationTokenSource historyRequest;
+        private bool loadingHistory;
+        private bool hasMoreHistory = true;
+        private long? beforeChangeset;
+        private int scannedChangesets;
+        private string historyRepository;
         private bool writing;
         private int generation;
         private bool filtering;
@@ -42,10 +52,11 @@ namespace TortoiseSCM
             MinimumSize = new Size(860, 580);
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Dpi;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 4 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 5 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
@@ -56,7 +67,7 @@ namespace TortoiseSCM
                 TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, Margin = new Padding(0, 0, 12, 3) }, 0, 0);
             header.Controls.Add(new Label { Text = "筛选(&F):", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 1, 0);
             filter.Dock = DockStyle.Fill;
-            filter.AccessibleName = "筛选历史：版本、日期、作者、分支或说明";
+            filter.AccessibleName = "筛选已加载历史：版本、日期、作者、分支或说明";
             filter.Margin = new Padding(3, 2, 0, 4);
             filter.TextChanged += async delegate { await ApplyFilterAsync(); };
             header.Controls.Add(filter, 2, 0);
@@ -98,7 +109,12 @@ namespace TortoiseSCM
             status.AutoEllipsis = true;
             status.TextAlign = ContentAlignment.MiddleLeft;
             status.Margin = Padding.Empty;
-            layout.Controls.Add(status, 0, 2);
+            historySummary.Dock = DockStyle.Fill; historySummary.AutoEllipsis = true;
+            historySummary.TextAlign = ContentAlignment.MiddleLeft; historySummary.Margin = Padding.Empty;
+            var historyNavigation = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
+            historyNavigation.Controls.Add(historySummary);
+            layout.Controls.Add(historyNavigation, 0, 2);
+            layout.Controls.Add(status, 0, 3);
             restore.Text = wholeWorkspace ? "整仓回滚为待提交(&R)..." : "恢复此范围到此版本(&R)...";
             restore.Dock = DockStyle.Fill;
             restore.Margin = new Padding(3, 3, 6, 3);
@@ -108,6 +124,20 @@ namespace TortoiseSCM
             historicalFile.Dock = DockStyle.Fill; historicalFile.Enabled = false;
             historicalFile.Click += delegate { OpenHistoricalFile(); };
             footer.Controls.Add(historicalFile, 0, 0);
+            var paging = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 234, Margin = Padding.Empty, WrapContents = false };
+            refreshHistory.Text = "刷新"; refreshHistory.Width = 60;
+            refreshHistory.Click += async delegate { await LoadHistoryPageAsync(true); };
+            loadMore.Text = "加载更早"; loadMore.Width = 78;
+            loadMore.Click += async delegate { await LoadHistoryPageAsync(false); };
+            cancelHistory.Text = "取消加载"; cancelHistory.Width = 72; cancelHistory.Enabled = false;
+            cancelHistory.Click += delegate
+            {
+                if (historyRequest != null) historyRequest.Cancel();
+                if (detailRequest != null) detailRequest.Cancel();
+                status.Text = "已取消加载；已加载历史保留，可重试。";
+            };
+            paging.Controls.Add(refreshHistory); paging.Controls.Add(loadMore); paging.Controls.Add(cancelHistory);
+            historyNavigation.Controls.Add(paging);
             snapshot.Text = "切换历史快照…";
             snapshot.Dock = DockStyle.Fill; snapshot.Visible = wholeWorkspace; snapshot.Enabled = false;
             snapshot.Click += async delegate { await RestoreAsync(true); };
@@ -119,10 +149,10 @@ namespace TortoiseSCM
             close.DialogResult = DialogResult.Cancel;
             footer.Controls.Add(close, 4, 0);
             CancelButton = close;
-            layout.Controls.Add(footer, 0, 3);
+            layout.Controls.Add(footer, 0, 4);
             Controls.Add(layout);
             DialogStyle.Apply(this);
-            Shown += async delegate { await LoadHistoryAsync(); };
+            Shown += async delegate { await LoadHistoryPageAsync(true); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (writing) e.Cancel = true; else lifetime.Cancel(); };
             FormClosed += delegate { if (detailRequest != null) detailRequest.Cancel(); };
         }
@@ -139,19 +169,46 @@ namespace TortoiseSCM
             DialogStyle.ApplyList(list);
         }
 
-        private async Task LoadHistoryAsync()
+        private async Task LoadHistoryPageAsync(bool reset)
         {
-            status.Text = "正在读取历史…";
+            if (loadingHistory || writing || lifetime.IsCancellationRequested || (!reset && !hasMoreHistory)) return;
+            loadingHistory = true;
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+            historyRequest = cancellation;
+            refreshHistory.Enabled = loadMore.Enabled = false; cancelHistory.Enabled = true;
+            status.Text = wholeWorkspace ? "正在读取最多 50 个提交…" : "正在检查最多 50 个提交的路径；可随时取消…";
             try
             {
-                var loadedEntries = await client.GetHistoryAsync(path, lifetime.Token);
-                if (lifetime.IsCancellationRequested) return;
-                entries.Clear();
-                entries.AddRange(loadedEntries.OrderByDescending(e => e.Changeset));
+                var page = await client.GetHistoryPageAsync(path, reset ? null : beforeChangeset, 50, cancellation.Token);
+                if (cancellation.IsCancellationRequested) return;
+                if (!reset && historyRepository != null && page.Repository != historyRepository) throw new InvalidOperationException("工作区仓库已改变，请刷新历史。");
+                // Publish the refreshed page only after success: failed or cancelled
+                // refreshes keep the visible history and its continuation cursor intact.
+                if (reset) { entries.Clear(); scannedChangesets = 0; }
+                historyRepository = page.Repository;
+                entries.AddRange(page.Items);
+                scannedChangesets += page.ScannedChangesets; hasMoreHistory = page.HasMore; beforeChangeset = page.NextBeforeChangeset;
                 await ApplyFilterAsync();
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消本页加载；已加载历史保留，可重试。"; }
             catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "读取失败：" + ex.Message; }
+            finally
+            {
+                historyRequest = null; cancellation.Dispose();
+                if (!lifetime.IsCancellationRequested)
+                {
+                    refreshHistory.Enabled = !writing; loadMore.Enabled = !writing && hasMoreHistory; cancelHistory.Enabled = false;
+                    UpdateHistorySummary();
+                }
+                loadingHistory = false;
+            }
+        }
+
+        private void UpdateHistorySummary()
+        {
+            historySummary.Text = revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
+                " 个提交；" + (hasMoreHistory ? "更早历史尚未加载" : "已扫描全部历史") +
+                (wholeWorkspace ? "（筛选仅作用于已加载项）" : "（路径历史，不追溯重命名前的其他路径；筛选仅作用于已加载项）");
         }
 
         private async Task ApplyFilterAsync()
@@ -175,6 +232,7 @@ namespace TortoiseSCM
             }
             finally { revisions.EndUpdate(); filtering = false; }
             status.Text = revisions.Items.Count + " / " + entries.Count + " 个提交";
+            UpdateHistorySummary();
             await LoadDetailsAsync();
         }
 
@@ -238,6 +296,8 @@ namespace TortoiseSCM
             if (MessageBox.Show(this, explanation + "\r\n\r\n" + path + "\r\n目标 cs:" + entry.Changeset + "\r\n\r\n继续？",
                 "TortoiseSCM — 恢复历史版本", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             writing = true;
+            if (historyRequest != null) historyRequest.Cancel();
+            refreshHistory.Enabled = loadMore.Enabled = cancelHistory.Enabled = false;
             revisions.Enabled = restore.Enabled = snapshot.Enabled = historicalFile.Enabled = filter.Enabled = close.Enabled = false;
             status.Text = "正在恢复历史版本…";
             try
@@ -248,7 +308,11 @@ namespace TortoiseSCM
                 if (!result.Succeeded) MessageBox.Show(this, result.Output + "\r\n" + result.Error, "恢复未成功", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex) { status.Text = "恢复失败：" + ex.Message; MessageBox.Show(this, ex.Message, "恢复未成功"); }
-            finally { writing = false; revisions.Enabled = restore.Enabled = snapshot.Enabled = filter.Enabled = close.Enabled = true; UpdateFileAction(); }
+            finally
+            {
+                writing = false; revisions.Enabled = restore.Enabled = snapshot.Enabled = filter.Enabled = close.Enabled = true;
+                refreshHistory.Enabled = !loadingHistory; loadMore.Enabled = !loadingHistory && hasMoreHistory; UpdateFileAction();
+            }
         }
     }
 }

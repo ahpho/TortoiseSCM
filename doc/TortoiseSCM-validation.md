@@ -133,3 +133,12 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - `qa/integration-20260925-034524-0a8dec59/conflict-overlay-results.json` 验证现有真实未解决冲突通过实际 COM 组件返回文件及根目录 Conflict 状态；文件、selector、原生 mergeprogress 和保存会话的哈希均未变化。
 - GUI 与 CLI 均有单次缓存刷新入口；文件监视只负责触发独立进程的扫描。缓存过期、损坏或扫描失败时不把未知状态当作正常。
 - 当前会话非管理员，仅执行了当前用户的 COM 注册与激活测试；未执行机器级 Explorer 图标发现注册，也未声称真实 Explorer 窗口已经显示图标。随附 `Register-Shell.ps1 -EnableMachineOverlays` 需要管理员 PowerShell；图标槽位和 Explorer 重登录行为仍受 Windows 限制。
+# 第四阶段：分页历史、完整发布回归与安装包（2026-09-25）
+
+- 最终 `build-tortoisescm.ps1 -Integration -Workspace D:\Work\Juscent\SCM_Study\TestSCM` 通过，日志 `qa/stage4-validation.log`。CLI 黑盒 740、GUI 63、原生 Shell 80 项检查通过。
+- 后端 47、外部工具 18、历史恢复 6、整仓回滚 21、文件操作 7、历史文件 39、锁 39、合并保护 40、缓存 49、分页历史 27 项断言通过。
+- 全流程真实服务器测试 70 项，另有真实合并 25 项通过；`qa/latest-integration.txt` 和 `latest-merge-integration.txt` 指向本轮独立分支的完整结果。验证整仓回滚可作为待提交更改发布、合并元数据完整、独立 consumer 内容一致。
+- 额外只读分页实测确认历史 cs44 的回滚发布出现在 Unicode 文件路径历史中。GUI 检查加载更早、刷新、取消保留记录以及最小尺寸下分页按钮和完整性提示可见。
+- 合并/整仓回滚由主界面提交时使用明确的整仓范围确认；未保存会话的原生合并、未完成回滚和被外部改动的原生回滚状态阻止签入。整仓撤销可清理失败状态。
+- 安装包 25 项验证通过（`qa/package-final-results.log`）：清单校验、解包 CLI 启动、独立版本安装、卸载保留用户文件/空目录/锁定 DLL、注册回退、跨进程互斥。测试期间实际 Explorer 注册保持不变。
+- GitHub Windows CI 已加入源代码；本地验证通过。当前 GitHub API 无认证查询遭遇速率限制，未把远端工作流执行结果作为已通过证据。未验证签名 MSI、ARM64、32 位 Explorer、真实多显示器 DPI 切换或机器级图标安装。
