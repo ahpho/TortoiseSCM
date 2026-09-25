@@ -52,6 +52,9 @@ namespace TortoiseSCM
             internal string FullUpdateHash, FullOutsideIdentityKey;
             internal string LoadNamespace = "", PendingLoadNamespace = "", OutsideSnapshot = "";
             internal bool OutsideSnapshotRecorded;
+            internal bool Readding;
+            internal readonly HashSet<string> AddIntents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            internal readonly Dictionary<string, long> AddedIdentities = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             internal string[] LoadRules, ScopedLoadRules;
             internal readonly Dictionary<string, string> LocalHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             internal readonly Dictionary<string, string> BaseHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -106,7 +109,7 @@ namespace TortoiseSCM
                 {
                     await ValidateDirectoryDecisionPreviewAsync(workspace, conflict, loaded, tree, token).ConfigureAwait(false);
                     conflict.ResolutionOptions.Add("take-incoming");
-                    if (conflict.Kind == "incoming-directory-move") conflict.ResolutionOptions.Add("keep-local");
+                    conflict.ResolutionOptions.Add("keep-local");
                 }
                 catch (ArgumentException error) { conflict.Reason = error.Message; }
             }
@@ -333,7 +336,9 @@ namespace TortoiseSCM
                 try
                 {
                     await ApplyDirectoryDecisionIncomingAsync(state, workspace, false, token).ConfigureAwait(false);
-                    if (resolution == "keep-local")
+                    if (resolution == "keep-local" && state.Session.Conflict.Kind == "incoming-directory-delete")
+                        await RestoreDeletedDirectoryAsync(state, workspace, token).ConfigureAwait(false);
+                    else if (resolution == "keep-local")
                     {
                         foreach (var item in state.Session.Conflict.Items.Where(item => !item.IsDirectory && item.HasLocalChanges))
                         {
@@ -348,7 +353,9 @@ namespace TortoiseSCM
                     }
                     await VerifyDirectoryDecisionFinalAsync(state, workspace, resolution == "keep-local", token).ConfigureAwait(false);
                     File.Delete(DirectoryDecisionIndex(root));
-                    return new PlasticCommandResult { Output = "Applied the reviewed directory decision. Backups remain at " + state.Session.RecoveryDirectory + ". Local content changes require a separate checkin." };
+                    return new PlasticCommandResult { Output = (resolution == "keep-local" && state.Session.Conflict.Kind == "incoming-directory-delete" ?
+                        "Restored the original local directory contents as NEW pending additions. The deleted identities and history were not restored. " : "Applied the reviewed directory decision. ") +
+                        "Backups remain at " + state.Session.RecoveryDirectory + ". Pending changes require a separate checkin." };
                 }
                 catch (Exception error) { throw new InvalidOperationException("The directory decision did not finish. Other writes remain blocked. Recover explicitly to the reviewed incoming subtree; backups remain at " + state.Session.RecoveryDirectory + ". " + error.Message, error); }
             }
@@ -361,7 +368,8 @@ namespace TortoiseSCM
                 var state = LoadDirectoryDecisionState(root, true);
                 if (state.Session.Ready && !state.Session.Applying) throw new ArgumentException("This directory preparation has not been applied; cancel it instead.");
                 ValidateDirectoryDecisionConfiguration(state, workspace, true);
-                await ApplyDirectoryDecisionIncomingAsync(state, workspace, true, token).ConfigureAwait(false);
+                if (state.Readding) await RecoverReaddedDirectoryAsync(state, workspace, token).ConfigureAwait(false);
+                else await ApplyDirectoryDecisionIncomingAsync(state, workspace, true, token).ConfigureAwait(false);
                 await VerifyDirectoryDecisionFinalAsync(state, workspace, false, token).ConfigureAwait(false);
                 File.Delete(DirectoryDecisionIndex(root));
                 return new PlasticCommandResult { Output = "Recovered the selected directory to its reviewed incoming state. Original and recovery-time file bytes remain at " + state.Session.RecoveryDirectory + ". No checkin was performed." };
@@ -603,9 +611,137 @@ namespace TortoiseSCM
                 Directory.Delete(local, false);
             }
         }
+        private async Task ValidateReaddedDirectoryAsync(DirectoryDecisionState state, PlasticWorkspace workspace, bool complete, CancellationToken token)
+        {
+            var conflict = state.Session.Conflict;
+            if (!state.Readding || conflict.Kind != "incoming-directory-delete") throw new InvalidDataException("The directory is not in its saved restoration phase.");
+            ValidateDirectoryDecisionConfiguration(state, workspace, true);
+            var expectedRules = state.FullWorkspace ? new string[0] : state.LoadRules.Except(state.ScopedLoadRules).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            if (!DirectoryDecisionLoadRules(workspace.RootPath).SequenceEqual(expectedRules) || (state.FullWorkspace && !File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.fullupdate")))) throw new ArgumentException("Restoring the deleted directory changed its reviewed loading state.");
+            var tree = await ReadStructureTreeAsync(workspace, token).ConfigureAwait(false);
+            ValidateDirectoryDecisionIncoming(workspace, conflict, tree);
+            if (state.FullWorkspace && DirectoryDecisionOutsideIdentities(workspace, conflict, tree.Items, false) != state.FullOutsideIdentityKey) throw new ArgumentException("Unrelated incoming structure changed during directory restoration.");
+            var loaded = await DirectoryDecisionLocalTreeAsync(workspace, token).ConfigureAwait(false);
+            await DirectoryDecisionValidateOutsideAsync(workspace, conflict, loaded, tree, token).ConfigureAwait(false);
+            DirectoryDecisionScopeSnapshot(state); // Includes unknown descendants, links and changed item types.
+            var pending = await GetStatusAsync(workspace.RootPath, token).ConfigureAwait(false);
+            var selected = pending.Where(change => DirectoryDecisionWithin(StructureRepositoryPath(workspace.RootPath, change.Path), conflict.RepositoryPath) ||
+                (!String.IsNullOrEmpty(change.OldPath) && DirectoryDecisionWithin(StructureRepositoryPath(workspace.RootPath, change.OldPath), conflict.RepositoryPath))).ToList();
+            foreach (var change in selected)
+            {
+                string path = StructureRepositoryPath(workspace.RootPath, change.Path);
+                var item = conflict.Items.SingleOrDefault(value => value.RepositoryPath == path);
+                if (item == null || item.IsDirectory != change.IsDirectory || !String.IsNullOrEmpty(change.OldPath) ||
+                    (change.StatusCode != "AD" && change.StatusCode != "PR" && change.StatusCode != "IG") ||
+                    (change.StatusCode == "AD" && !state.AddIntents.Contains(path))) throw new ArgumentException("An unreviewed structural change appeared in the restored directory.");
+            }
+            bool identitiesChanged = false;
+            foreach (var entry in loaded.Where(value => DirectoryDecisionWithin(StructureRepositoryPath(workspace.RootPath, (string)value.Element("CurrentPath")), conflict.RepositoryPath)))
+            {
+                string path = StructureRepositoryPath(workspace.RootPath, (string)entry.Element("CurrentPath"));
+                var item = conflict.Items.SingleOrDefault(value => value.RepositoryPath == path);
+                if (item == null || !String.IsNullOrEmpty((string)entry.Element("SymlinkTarget")) || DirectoryDecisionNumber(entry, "ItemId") > 0) throw new ArgumentException("A restored path became linked or belongs to a published controlled identity.");
+                var infoResult = await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "fileinfo", MergeLocalPath(workspace.RootPath, path), "--fields=Status,Type,IsUnderXlink,RepSpec", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(infoResult);
+                var info = SafeXml.Load(infoResult.Output).Descendants("FileInfo").Single();
+                bool added = (string)info.Element("Status") == "added";
+                if ((string)info.Element("IsUnderXlink") != "false" || (added ? !state.AddIntents.Contains(path) || !selected.Any(change => change.StatusCode == "AD" && SamePath(change.Path, MergeLocalPath(workspace.RootPath, path))) : (string)info.Element("Status") != "private")) throw new ArgumentException("A restored path no longer has its reviewed added/private identity.");
+                if (added)
+                {
+                    long addedId = DirectoryDecisionNumber(entry, "ItemId"), recordedId;
+                    if (addedId >= 0 || DirectoryDecisionType(entry) != item.IsDirectory || (string)info.Element("RepSpec") != workspace.Repository || (string)entry.Element("Repository") != "rep:" + workspace.Repository ||
+                        (!item.IsDirectory && !StructureRegularFile(entry, workspace.Repository))) throw new ArgumentException("An added directory descendant changed type or repository.");
+                    if (state.AddedIdentities.TryGetValue(path, out recordedId)) { if (recordedId != addedId) throw new ArgumentException("A restored addition was replaced by another pending identity."); }
+                    else { state.AddedIdentities.Add(path, addedId); identitiesChanged = true; }
+                }
+            }
+            if (identitiesChanged) SaveDirectoryDecisionState(state);
+            foreach (var change in selected.Where(change => change.StatusCode == "AD"))
+            {
+                string path = StructureRepositoryPath(workspace.RootPath, change.Path);
+                var entry = loaded.SingleOrDefault(value => SamePath((string)value.Element("CurrentPath"), change.Path));
+                long recordedId;
+                if (entry == null || !state.AddedIdentities.TryGetValue(path, out recordedId) || DirectoryDecisionNumber(entry, "ItemId") != recordedId) throw new ArgumentException("A restored pending addition no longer has its recorded native identity.");
+            }
+            if (complete)
+            {
+                DirectoryDecisionRequirePhysicalTree(workspace.RootPath, conflict.RepositoryPath, conflict.Items.Select(item => item.RepositoryPath), conflict.Items.Where(item => item.IsDirectory).Select(item => item.RepositoryPath));
+                foreach (var item in conflict.Items)
+                {
+                    if (!selected.Any(change => change.StatusCode == "AD" && SamePath(change.Path, MergeLocalPath(workspace.RootPath, item.RepositoryPath)))) throw new IOException("Every restored file and directory must remain a new pending addition.");
+                    if (!item.IsDirectory && StructureFileHash(MergeLocalPath(workspace.RootPath, item.RepositoryPath)) != state.LocalHashes[item.RepositoryPath]) throw new IOException("A restored file differs from its reviewed original local bytes.");
+                }
+            }
+        }
+        private async Task RestoreDeletedDirectoryAsync(DirectoryDecisionState state, PlasticWorkspace workspace, CancellationToken token)
+        {
+            string root = workspace.RootPath;
+            state.Readding = true; SaveDirectoryDecisionState(state);
+            var scope = DirectoryDecisionScopeSnapshot(state); string outside = DirectoryDecisionOutsideSnapshot(state);
+            if (scope.Any(pair => pair.Value != "missing")) throw new IOException("The deleted directory must be absent before its original contents are restored.");
+            foreach (var item in state.Session.Conflict.Items.OrderBy(item => item.IsDirectory ? 0 : 1).ThenBy(item => item.RepositoryPath.Length).ThenBy(item => item.RepositoryPath, StringComparer.Ordinal))
+            {
+                token.ThrowIfCancellationRequested();
+                DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                string local = MergeLocalPath(root, item.RepositoryPath);
+                if (item.IsDirectory) { Directory.CreateDirectory(local); scope[item.RepositoryPath] = "directory"; }
+                else { File.Copy(DirectoryDecisionBackup(state, "local", item.RepositoryPath), local, false); File.SetAttributes(local, FileAttributes.Normal); scope[item.RepositoryPath] = state.LocalHashes[item.RepositoryPath]; }
+                DirectoryDecisionRequireSnapshot(state, scope);
+            }
+            foreach (var item in state.Session.Conflict.Items.OrderBy(item => item.IsDirectory ? 0 : 1).ThenBy(item => item.RepositoryPath.Length).ThenBy(item => item.RepositoryPath, StringComparer.Ordinal))
+            {
+                await ValidateReaddedDirectoryAsync(state, workspace, false, token).ConfigureAwait(false);
+                DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                state.AddIntents.Add(item.RepositoryPath); SaveDirectoryDecisionState(state);
+                RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "add", MergeLocalPath(root, item.RepositoryPath) }), token).ConfigureAwait(false));
+                DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+            }
+            await ValidateReaddedDirectoryAsync(state, workspace, true, token).ConfigureAwait(false);
+            DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+        }
+        private async Task RecoverReaddedDirectoryAsync(DirectoryDecisionState state, PlasticWorkspace workspace, CancellationToken token)
+        {
+            await ValidateReaddedDirectoryAsync(state, workspace, false, token).ConfigureAwait(false);
+            var scope = DirectoryDecisionScopeSnapshot(state); string outside = DirectoryDecisionOutsideSnapshot(state);
+            string observed = Path.Combine(state.Session.RecoveryDirectory, "recovery-" + Guid.NewGuid().ToString("N")); CreatePrivateMergeDirectory(observed);
+            foreach (var entry in scope.Where(pair => pair.Value != "missing" && pair.Value != "directory"))
+            {
+                string backup = Path.Combine(observed, MergeKey(entry.Key) + ".bin"); File.Copy(MergeLocalPath(workspace.RootPath, entry.Key), backup, false);
+                if (MergeHash(backup) != entry.Value) throw new IOException("A restored file changed while its recovery backup was copied.");
+                File.SetAttributes(backup, FileAttributes.ReadOnly);
+            }
+            foreach (var item in state.Session.Conflict.Items.OrderBy(item => item.IsDirectory ? 1 : 0).ThenByDescending(item => item.RepositoryPath.Length))
+            {
+                await ValidateReaddedDirectoryAsync(state, workspace, false, token).ConfigureAwait(false);
+                DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                string local = MergeLocalPath(workspace.RootPath, item.RepositoryPath);
+                var pending = await GetStatusAsync(workspace.RootPath, token).ConfigureAwait(false);
+                if (pending.Any(change => change.StatusCode == "AD" && SamePath(change.Path, local)))
+                {
+                    DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                    RequireSuccess(await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "partial", "undo", local, "--added" }), token).ConfigureAwait(false));
+                    DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                }
+            }
+            await ValidateReaddedDirectoryAsync(state, workspace, false, token).ConfigureAwait(false);
+            if ((await GetStatusAsync(workspace.RootPath, token).ConfigureAwait(false)).Any(change => change.StatusCode == "AD" && DirectoryDecisionWithin(StructureRepositoryPath(workspace.RootPath, change.Path), state.Session.Conflict.RepositoryPath))) throw new IOException("Native undo left a pending addition in the restored directory; its bytes were not removed.");
+            foreach (var entry in scope.Where(pair => pair.Value != "missing" && pair.Value != "directory").ToList())
+            {
+                DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                string local = MergeLocalPath(workspace.RootPath, entry.Key); StructureRequireSingleLink(local); File.Delete(local); scope[entry.Key] = "missing";
+            }
+            foreach (string path in scope.Where(pair => pair.Value == "directory").Select(pair => pair.Key).OrderByDescending(path => path.Length).ToList())
+            {
+                DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+                string local = MergeLocalPath(workspace.RootPath, path);
+                if (Directory.EnumerateFileSystemEntries(local).Any()) throw new IOException("A restored directory gained unreviewed contents during recovery.");
+                Directory.Delete(local, false); scope[path] = "missing";
+            }
+            DirectoryDecisionRequireSnapshot(state, scope); DirectoryDecisionRequireOutside(state, outside);
+        }
         private async Task VerifyDirectoryDecisionFinalAsync(DirectoryDecisionState state, PlasticWorkspace workspace, bool keepLocal, CancellationToken token)
         {
             var conflict = state.Session.Conflict; string root = workspace.RootPath;
+            if (keepLocal && conflict.Kind == "incoming-directory-delete") { await ValidateReaddedDirectoryAsync(state, workspace, true, token).ConfigureAwait(false); return; }
             ValidateDirectoryDecisionConfiguration(state, workspace, true);
             string original = MergeLocalPath(root, conflict.RepositoryPath);
             if (File.Exists(original) || Directory.Exists(original)) throw new IOException("The original directory path remains occupied after the incoming decision.");
@@ -640,6 +776,8 @@ namespace TortoiseSCM
             var session = state.Session; var conflict = session.Conflict;
             var xml = new XElement("PartialDirectory", new XAttribute("id", session.SessionId), new XAttribute("root", session.WorkspaceRoot), new XAttribute("repository", state.Repository),
                 new XAttribute("configuration", state.Configuration), new XAttribute("fullWorkspace", state.FullWorkspace), new XAttribute("fullUpdateHash", state.FullUpdateHash), new XAttribute("fullOutsideIdentityKey", state.FullOutsideIdentityKey), new XAttribute("loadNamespace", state.LoadNamespace), new XAttribute("outsideRecorded", state.OutsideSnapshotRecorded), new XAttribute("outsideSnapshot", state.OutsideSnapshot), new XAttribute("pending", state.Pending), new XAttribute("ready", session.Ready), new XAttribute("applying", session.Applying), new XAttribute("resolution", session.Resolution),
+                new XAttribute("readding", state.Readding), new XElement("AddIntents", state.AddIntents.Select(path => new XElement("Path", path))),
+                new XElement("AddedIdentities", state.AddedIdentities.Select(pair => new XElement("Item", new XAttribute("path", pair.Key), new XAttribute("id", pair.Value)))),
                 new XElement("LoadRules", state.LoadRules.Select(line => new XElement("Rule", line))), new XElement("ScopedLoadRules", state.ScopedLoadRules.Select(line => new XElement("Rule", line))),
                 new XElement("Conflict", new XAttribute("path", conflict.RepositoryPath), new XAttribute("incoming", conflict.IncomingPath), new XAttribute("kind", conflict.Kind), new XAttribute("item", conflict.ItemId), new XAttribute("head", conflict.IncomingChangeset),
                     conflict.ResolutionOptions.Select(value => new XElement("Option", value)), conflict.Items.Select(item => new XElement("Item", new XAttribute("path", item.RepositoryPath), new XAttribute("incoming", item.IncomingPath),
@@ -663,7 +801,7 @@ namespace TortoiseSCM
             ValidateRepositoryFilePath(conflict.RepositoryPath);
             if (conflict.Kind == "incoming-directory-move") { ValidateRepositoryFilePath(conflict.IncomingPath); if (DirectoryDecisionWithin(conflict.IncomingPath, conflict.RepositoryPath) || DirectoryDecisionWithin(conflict.RepositoryPath, conflict.IncomingPath)) throw new InvalidDataException("Overlapping directory session paths."); }
             else if (!String.IsNullOrEmpty(conflict.IncomingPath)) throw new InvalidDataException("A deleted directory session has an unexpected destination.");
-            if (conflict.ResolutionOptions.Any(value => value != "take-incoming" && (value != "keep-local" || conflict.Kind != "incoming-directory-move"))) throw new InvalidDataException("Invalid saved directory resolution options.");
+            if (conflict.ResolutionOptions.Any(value => value != "take-incoming" && value != "keep-local")) throw new InvalidDataException("Invalid saved directory resolution options.");
             var state = new DirectoryDecisionState { Repository = (string)xml.Attribute("repository"), Configuration = (string)xml.Attribute("configuration"), FullWorkspace = (bool)xml.Attribute("fullWorkspace"), FullUpdateHash = (string)xml.Attribute("fullUpdateHash"), FullOutsideIdentityKey = (string)xml.Attribute("fullOutsideIdentityKey"), LoadNamespace = (string)xml.Attribute("loadNamespace") ?? "", OutsideSnapshotRecorded = (bool?)xml.Attribute("outsideRecorded") ?? false, OutsideSnapshot = (string)xml.Attribute("outsideSnapshot") ?? "", Pending = (string)xml.Attribute("pending"), LoadRules = xml.Element("LoadRules").Elements("Rule").Select(value => value.Value).ToArray(), ScopedLoadRules = xml.Element("ScopedLoadRules").Elements("Rule").Select(value => value.Value).ToArray(),
                 Session = new PlasticPartialDirectorySession { SessionId = id, WorkspaceRoot = root, RecoveryDirectory = directory, Conflict = conflict, Ready = (bool)xml.Attribute("ready"), Applying = (bool)xml.Attribute("applying"), Resolution = (string)xml.Attribute("resolution") } };
             foreach (var entry in element.Elements("Item"))
@@ -682,6 +820,18 @@ namespace TortoiseSCM
                         (conflict.Kind == "incoming-directory-move" && StructureFileHash(DirectoryDecisionBackup(state, "incoming", item.RepositoryPath)) != state.IncomingHashes[item.RepositoryPath])) throw new InvalidDataException("A directory contributor backup was changed or removed.");
                 }
             }
+            state.Readding = (bool?)xml.Attribute("readding") ?? false;
+            if (xml.Element("AddIntents") != null) foreach (var path in xml.Element("AddIntents").Elements("Path"))
+            {
+                if (!conflict.Items.Any(item => item.RepositoryPath == path.Value) || !state.AddIntents.Add(path.Value)) throw new InvalidDataException("Invalid restored-directory add intent.");
+            }
+            if (xml.Element("AddedIdentities") != null) foreach (var entry in xml.Element("AddedIdentities").Elements("Item"))
+            {
+                string path = (string)entry.Attribute("path"); long addedId = (long)entry.Attribute("id");
+                if (!state.AddIntents.Contains(path) || addedId >= 0 || state.AddedIdentities.ContainsKey(path)) throw new InvalidDataException("Invalid saved restored-directory identity.");
+                state.AddedIdentities.Add(path, addedId);
+            }
+            if ((state.Readding || state.AddIntents.Count != 0) && (conflict.Kind != "incoming-directory-delete" || state.Session.Resolution != "keep-local" || !state.Session.Applying || state.Session.Ready)) throw new InvalidDataException("Invalid restored-directory phase.");
             if (!conflict.Items.Any(item => item.RepositoryPath == conflict.RepositoryPath && item.IsDirectory && item.ItemId == conflict.ItemId) || !state.ScopedLoadRules.All(state.LoadRules.Contains)) throw new InvalidDataException("Incomplete directory session hierarchy or loading rules.");
             return state;
         }

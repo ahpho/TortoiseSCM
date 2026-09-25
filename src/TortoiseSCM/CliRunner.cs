@@ -45,6 +45,7 @@ namespace TortoiseSCM
             "Partial directories: partial-directory-preview|partial-directory-status --path <root>\r\n" +
             "  partial-directory-prepare --path <root> --item </directory> --yes\r\n" +
             "  partial-directory-resolve --path <root> --resolution take-incoming|keep-local --yes\r\n" +
+            "  Deleted directory keep-local: re-add the backed-up local tree as new items; checkin separately.\r\n" +
             "  partial-directory-cancel|partial-directory-recover --path <root> --yes\r\n" +
             "Merge results remain pending; checkin is always a separate command.\r\n" +
             "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
@@ -148,6 +149,7 @@ namespace TortoiseSCM
                     var conflicts = client.PreviewPartialDirectoriesAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
                     response.data = new { workspace = workspaceData, conflicts = conflicts.Select(PartialDirectoryData).ToArray() };
                     response.output = String.Join(Environment.NewLine, conflicts.Select(item => item.RepositoryPath + "\t" + item.Kind + "\t" + item.IncomingPath + "\t" + item.Items.Count + " affected items\t" + item.Reason + Environment.NewLine +
+                        String.Join(Environment.NewLine, item.ResolutionOptions.Select(option => "  " + option + ": " + PartialDirectoryResolutionDescription(item, option))) + Environment.NewLine +
                         String.Join(Environment.NewLine, item.Items.Select(child => "  " + (child.IsDirectory ? "D" : "F") + (child.HasLocalChanges ? " modified " : " ") + child.RepositoryPath + " -> " + (String.IsNullOrEmpty(child.IncomingPath) ? "(removed)" : child.IncomingPath))))); return;
                 }
                 if (options.Command == "partial-directory-status" || options.Command == "partial-directory-prepare")
@@ -442,9 +444,19 @@ namespace TortoiseSCM
             if (item == null) return null;
             return new { repositoryPath = item.RepositoryPath, incomingPath = item.IncomingPath, kind = item.Kind, reason = item.Reason,
                 itemId = item.ItemId, incomingChangeset = item.IncomingChangeset, resolutionOptions = item.ResolutionOptions,
+                resolutionDetails = item.ResolutionOptions.Select(option => new { resolution = option, description = PartialDirectoryResolutionDescription(item, option),
+                    readdsAsNewItems = item.Kind == "incoming-directory-delete" && option == "keep-local" }).ToArray(),
                 items = item.Items.Select(child => new { repositoryPath = child.RepositoryPath, incomingPath = child.IncomingPath,
                     isDirectory = child.IsDirectory, itemId = child.ItemId, baseChangeset = child.BaseChangeset,
                     incomingRevisionChangeset = child.IncomingRevisionChangeset, hasLocalChanges = child.HasLocalChanges }).ToArray() };
+        }
+        private static string PartialDirectoryResolutionDescription(PlasticPartialDirectoryConflict item, string option)
+        {
+            if (item.Kind == "incoming-directory-delete") return option == "keep-local" ?
+                "Re-add all backed-up local files and empty directories at their original paths as new items. Old item identities and history are not restored. Review and check in separately." :
+                "Accept the server deletion; remove the local tree and retain its recovery backups.";
+            return option == "keep-local" ? "Follow the server directory move and keep locally edited file contents; clean files use incoming contents. Check in separately." :
+                "Accept the server directory position and contents; retain local recovery backups.";
         }
         private static object PartialStructureData(PlasticPartialStructureConflict item)
         {

@@ -128,8 +128,9 @@ internal static class PartialDirectoryIntegrationTests
             }
             if (name == "delete-keep")
             {
-                Assert(!session.Conflict.ResolutionOptions.Contains("keep-local"), "Incoming directory deletion does not offer an unverified keep-local re-add");
-                await Reject(async () => { await client.ResolvePartialDirectoryAsync(partial, "keep-local", Token); }, "Unsupported directory deletion choice is rejected");
+                Assert(session.Conflict.ResolutionOptions.Contains("keep-local"), "Incoming directory deletion offers reviewed keep-local reconstruction");
+                // The dedicated keep-deleted suite verifies re-add identities and recovery.
+                // This scenario deliberately chooses take-incoming even when keep-local is offered.
             }
             string choice = !deletion && name.EndsWith("keep", StringComparison.Ordinal) ? "keep-local" : "take-incoming";
             Assert(session.Conflict.ResolutionOptions.Contains(choice), name + " offers the requested explicit choice");

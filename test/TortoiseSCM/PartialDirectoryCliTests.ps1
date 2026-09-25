@@ -5,7 +5,8 @@ param(
     [string]$Executable = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/Release/TortoiseSCM.exe'),
     [string]$CmPath = 'D:\Program Files\PlasticSCM5\client\cm.exe',
     [switch]$FullWorkspace,
-    [switch]$RepeatedMoveOnly
+    [switch]$RepeatedMoveOnly,
+    [switch]$KeepDeletedOnly
 )
 $ErrorActionPreference = 'Stop'
 $m = & (Join-Path $PSScriptRoot 'Read-DirectoryTestManifest.ps1') -ManifestPath $Manifest
@@ -66,17 +67,18 @@ try {
     if (!$FullWorkspace) { Native $m.partial @('partial','configure','-/unloaded') | Out-Null }
     [IO.File]::WriteAllText((Join-Path $m.partial 'outside.txt'),'unrelated local edit',$utf8)
     $selector=[IO.File]::ReadAllText((Join-Path $m.partial '.plastic/plastic.selector'))
-    $cases = if ($RepeatedMoveOnly) { @() } else { @('move-take','move-keep','delete-take','move-content') }
+    $cases = if ($RepeatedMoveOnly) { @() } elseif ($KeepDeletedOnly) { @('delete-keep') } else { @('move-take','move-keep','delete-take','delete-keep','move-content') }
     foreach ($case in $cases) {
         Native $m.producer @('update',$m.producer,'--dontmerge') | Out-Null
         $old='/'+$case; $new='/'+$case+'-incoming'
         Write-New (Join-Path $m.producer ($case+'/a.txt')) ('base '+$case)
         Write-New (Join-Path $m.producer ($case+'/sub/b.txt')) ('clean '+$case)
+        if ($case -eq 'delete-keep') { [IO.Directory]::CreateDirectory((Join-Path $m.producer ($case+'/empty'))) | Out-Null }
         Native $m.producer @('add',(Join-Path $m.producer $case),'-R') | Out-Null
         Native $m.producer @('checkin',(Join-Path $m.producer $case),'-c=Directory CLI case base') | Out-Null
         Native $m.partial @('partial','configure',('+'+$old)) | Out-Null
         [IO.File]::WriteAllText((Join-Path $m.partial ($case+'/a.txt')),('local '+$case),$utf8)
-        if ($case -eq 'delete-take') {
+        if ($case.StartsWith('delete-')) {
             Native $m.producer @('remove',(Join-Path $m.producer $case)) | Out-Null
         } else {
             Native $m.producer @('move',(Join-Path $m.producer $case),(Join-Path $m.producer ($case+'-incoming'))) | Out-Null
@@ -86,9 +88,13 @@ try {
         Native $m.producer @('checkin',$m.producer,'--all','-c=Directory CLI incoming change') | Out-Null
         $preview=Invoke-DirectoryCli 'partial-directory-preview'
         $conflict=@($preview.data.conflicts | Where-Object repositoryPath -eq $old)
-        $choice=if ($case -eq 'move-keep') { 'keep-local' } else { 'take-incoming' }
+        $choice=if ($case -in @('move-keep','delete-keep')) { 'keep-local' } else { 'take-incoming' }
         Assert ($conflict.Count -eq 1 -and $conflict[0].resolutionOptions -contains $choice) "Public directory preview supports $case"
         Assert (@($conflict[0].items | Where-Object { !$_.isDirectory }).Count -eq 2 -and @($conflict[0].items | Where-Object hasLocalChanges).Count -eq 1) 'Public preview enumerates all files and local edits'
+        if ($case -eq 'delete-keep') {
+            Assert (@($conflict[0].resolutionDetails | Where-Object { $_.resolution -eq 'keep-local' -and $_.readdsAsNewItems -and $_.description.Contains('new items') }).Count -eq 1) 'CLI explains that keeping a deleted directory creates new identities'
+            Assert (@($conflict[0].items | Where-Object repositoryPath -eq '/delete-keep/empty').Count -eq 1) 'Recursive scope includes the empty directory'
+        }
         $before=Snapshot
         Invoke-DirectoryCli 'partial-directory-prepare' @('--item',$old) 2 | Out-Null
         $prepared=Invoke-DirectoryCli 'partial-directory-prepare' @('--item',$old,'--yes')
@@ -104,8 +110,16 @@ try {
         }
         Invoke-DirectoryCli 'partial-directory-resolve' @('--resolution',$choice,'--yes') | Out-Null
         Assert ($null -eq (Invoke-DirectoryCli 'partial-directory-status').data.sessionId) "$case retires the verified directory session"
-        Assert (!(Test-Path -LiteralPath (Join-Path $m.partial $case))) "$case leaves no obsolete directory"
-        if ($case -ne 'delete-take') {
+        if ($case -eq 'delete-keep') {
+            Assert ([IO.File]::ReadAllText((Join-Path $m.partial ($case+'/a.txt'))) -ceq ('local '+$case) -and [IO.File]::ReadAllText((Join-Path $m.partial ($case+'/sub/b.txt'))) -ceq ('clean '+$case)) 'Keep-deleted re-adds both edited and clean local file bytes'
+            Assert (Test-Path -LiteralPath (Join-Path $m.partial ($case+'/empty')) -PathType Container) 'Keep-deleted restores empty directories'
+            $pending=(Invoke-DirectoryCli 'status').data
+            Assert (@($pending.entries | Where-Object { $_.status -eq 'AD' -and $_.path.Contains('delete-keep') }).Count -eq 5) 'Keep-deleted leaves every file and directory as additions pending review'
+            Native $m.consumer @('update',$m.consumer,'--dontmerge') | Out-Null
+            Assert (!(Test-Path -LiteralPath (Join-Path $m.consumer $case))) 'Keep-deleted does not implicitly check in the reconstructed tree'
+            Run $Executable $m.runDirectory @('--cli','--json','--command','checkin','--path',(Join-Path $m.partial $case),'--cm',$CmPath,'--settings-file',$settings,'--comment','Publish reviewed new directory identities','--yes') | Out-Null
+        } else { Assert (!(Test-Path -LiteralPath (Join-Path $m.partial $case))) "$case leaves no obsolete directory" }
+        if (!$case.StartsWith('delete-')) {
             $expected=if ($case -eq 'move-keep') { 'local '+$case } elseif ($case -eq 'move-content') { 'base '+$case } else { 'incoming '+$case }
             Assert ([IO.File]::ReadAllText((Join-Path $m.partial ($case+'-incoming/a.txt'))) -ceq $expected) "$case has selected content at new path"
             Assert ([IO.File]::ReadAllText((Join-Path $m.partial ($case+'-incoming/sub/b.txt'))) -ceq ('incoming clean '+$case)) "$case preserves incoming updates to locally clean files"
@@ -114,8 +128,13 @@ try {
             }
         }
         Native $m.consumer @('update',$m.consumer,'--dontmerge') | Out-Null
-        Assert (!(Test-Path -LiteralPath (Join-Path $m.consumer $case))) 'Independent consumer confirms original directory removed'
-        if ($case -ne 'delete-take') { Assert ([IO.File]::ReadAllText((Join-Path $m.consumer ($case+'-incoming/a.txt'))) -ceq $expected) 'Independent consumer receives reviewed directory content' }
+        if ($case -eq 'delete-keep') {
+            Assert ([IO.File]::ReadAllText((Join-Path $m.consumer ($case+'/a.txt'))) -ceq ('local '+$case) -and (Test-Path -LiteralPath (Join-Path $m.consumer ($case+'/empty')) -PathType Container)) 'Independent consumer receives submitted local tree and empty directory'
+            $tree=Native $m.consumer @('ls',(Join-Path $m.consumer $case),'-R','--xml','--encoding=utf-8')
+            $newIds=@(([xml]$tree).SelectNodes('//LsItem/ItemId') | ForEach-Object { [long]$_.InnerText })
+            Assert (@($conflict[0].items | Where-Object { $newIds -contains $_.itemId }).Count -eq 0) 'Reconstructed directory descendants have new committed identities'
+        } else { Assert (!(Test-Path -LiteralPath (Join-Path $m.consumer $case))) 'Independent consumer confirms original directory removed' }
+        if (!$case.StartsWith('delete-')) { Assert ([IO.File]::ReadAllText((Join-Path $m.consumer ($case+'-incoming/a.txt'))) -ceq $expected) 'Independent consumer receives reviewed directory content' }
         if ($case -eq 'move-content') {
             $item='/move-content-incoming/a.txt'; $relative='move-content-incoming/a.txt'
             [IO.File]::WriteAllText((Join-Path $m.partial $relative),'local edit after directory move',$utf8)
@@ -133,6 +152,7 @@ try {
         Assert ([IO.File]::ReadAllText((Join-Path $m.partial 'outside.txt')) -ceq 'unrelated local edit' -and (Test-Path -LiteralPath (Join-Path $m.partial 'unloaded/hidden.txt')) -eq [bool]$FullWorkspace -and [IO.File]::ReadAllText((Join-Path $m.partial '.plastic/plastic.selector')) -ceq $selector) 'Directory workflow preserves unrelated content, sibling loading and selector'
         Assert ((Test-Path -LiteralPath (Join-Path $m.partial '.plastic/plastic.fullupdate')) -eq [bool]$FullWorkspace) 'Directory workflow preserves full or explicit loading mode'
     }
+    if (!$KeepDeletedOnly) {
     Native $m.producer @('update',$m.producer,'--dontmerge') | Out-Null
     Write-New (Join-Path $m.producer 'repeat-original/a.txt') 'repeat base'
     Write-New (Join-Path $m.producer 'repeat-original/sub/b.txt') 'repeat clean'
@@ -161,6 +181,7 @@ try {
     Native $m.consumer @('update',$m.consumer,'--dontmerge') | Out-Null
     Assert ([IO.File]::ReadAllText((Join-Path $m.consumer 'repeat-second/a.txt')) -ceq 'local repeat-second' -and !(Test-Path -LiteralPath (Join-Path $m.consumer 'repeat-first'))) 'Independent consumer receives content submitted after two pure moves'
     Assert ([IO.File]::ReadAllText((Join-Path $m.partial 'outside.txt')) -ceq 'unrelated local edit' -and (Test-Path -LiteralPath (Join-Path $m.partial 'unloaded/hidden.txt')) -eq [bool]$FullWorkspace -and [IO.File]::ReadAllText((Join-Path $m.partial '.plastic/plastic.selector')) -ceq $selector) 'Repeated moves preserve unrelated bytes, loading and selector'
+    }
     Write-Host "PASS: $script:assertions real Partial directory CLI assertions"
 } catch { $failure=$_.ToString(); throw }
 finally { [IO.File]::WriteAllText((Join-Path $m.runDirectory 'partial-directory-cli-results.json'),([ordered]@{success=($null -eq $failure);assertions=$script:assertions;error=$failure;events=$events} | ConvertTo-Json -Depth 20),$utf8) }

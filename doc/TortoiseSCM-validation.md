@@ -202,3 +202,16 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 新窗口正常和最小尺寸均已生成并目视检查：`qa/Release/partial-directory.png`、`partial-directory-minimum.png`。沿用原生列表、上下窗格、标准按钮和明确选择；整树备份路径、完整影响范围及中断恢复入口可见。尚未增加真人等效的 Explorer 点击、多显示器 DPI 或机器级图标安装验证。
 - DE/LD 专项覆盖纯目录移动后的接受/保留删除/中断恢复、单文件独立更新和根目录删除，共八种正常场景，公开 EXE 与独立消费者结果均通过（`qa/deleted-identity-shipping.log`，fixture `qa/integration-20260925-182938-5bed2083/`）。该候选 EXE 的记录单独保存在 `qa/partial-directory-deleted-matrix-record.json`。旧测试末尾直接比较 XML 的失败仅由 PrintableLastModified 的“4分钟前→5分钟前”引起，原始失败证据保留；测试已改用稳定的短机器格式比较。
 - 最后范围修正后的主 EXE 14 项真实专项通过（同 fixture 的 `partial-deleted-identity-ambiguity-results.json`、`qa/deleted-identity-scope.log`）：歧义 DE 在 GUI/CLI 预检中作为单条不支持记录显示；准备及该项签入拒绝且无会话/无字节修改；无关 sentinel 使用唯一文件路径提交成功，消费者核对服务器内容且本地 DE 仍保留。原 TestSCM 保持无待定变更，selector 仍为 `/main`；全部服务器测试均位于独立测试分支。
+
+# 第九阶段：保留服务器已删除的本地目录树（2026-09-25）
+
+- `incoming-directory-delete` 新增 `keep-local`：先接受旧身份的删除，再从整树备份重建全部原路径文件和空目录，逐项加入为待提交新身份；不自动签入。GUI 在选择后逐项显示删除或新添加的结果，明确旧身份/历史不恢复。CLI 保留既有命令，并在 `resolutionDetails` 中说明语义及 `readdsAsNewItems`。
+- 原生探针验证了显式和 fullupdate 模式下逐项 add/undo 的实际行为：`qa/integration-20260925-195954-ba25eb3f/`、`qa/integration-20260925-200134-b45e99ec/`。`partial undo <path> --added` 保留私有字节与空目录；生产恢复先备份，再撤销本次添加，最后仅移除已审核路径，范围外加载规则和字节保持不变。恢复遇到未知后代、已发布正身份或替换的临时身份会拒绝。
+- 重建阶段及每个 add 意图、原生负 ItemId 持久保存；add 前后中断都能进入恢复。恢复目标仍为服务器删除状态，不能误解为继续保留或自动提交。每次原生命令前重核本地范围、加载配置和服务器旧路径仍为空；服务器重建同名目录时拒绝覆盖。
+- 同名目录重现的原生实验发现：仅依赖 `cm partial checkin` 会将本地添加并入服务器新目录。已有整目录冲突保护仍可被“只提交一个子文件”绕过（`qa/integration-20260925-200323-4a1ffc0f/public-directory-reappearance-checkin.json`）；已扩展检查，待添加父目录存在冲突时，其选中后代也必须拒绝，其他范围仍可提交。
+- 最终主 EXE 的本地 `-Test -Workspace` 通过（`qa/keep-deleted-release-validation.log`）：980 项 CLI、后端、Shell 和 GUI。安装包/隔离安装/卸载 25 项通过（`qa/keep-deleted-package-validation.log`）。正常及最小尺寸的 `qa/Release/partial-directory-keep-deleted*.png` 已生成并目视检查：结果路径、身份说明和全部操作均可见。
+- 目录碰撞保护使用最终主 EXE 与 Core 的真实回归 23 项通过（`qa/integration-20260925-200943-a5d4d840/directory-readd-collision-results.json`）：整目录、子文件、子目录、空目录四种提交选择均拒绝，字节/目录/待定状态/加载规则/服务器 HEAD 不变；无关文件精确提交成功，独立消费者未收到冲突目录中的本地项。
+- 原有连续纯目录移动回归 14 项通过（`qa/integration-20260925-200719-60b05566/partial-directory-repeated-full-results.json`），覆盖新会话字段读写后的 take/keep、提交与消费者。早期候选 EXE 的 keep-deleted 公共 CLI 在显式/全量模式各 15 项通过（`qa/integration-20260925-200455-604c1190/`、`qa/integration-20260925-200455-debb0151/`）；最终 EXE 全流程证据另见下方。
+- 新保留删除目录的后端矩阵显式/全量模式各 83 项通过（`qa/integration-20260925-200043-ae549e9e/partial-directory-keep-deleted-results.json`、`qa/integration-20260925-200049-f279dea7/partial-directory-keep-deleted-full-results.json`）：正常重建/空目录/新身份签入、添加前/部分添加/全部添加后中断、跨客户端恢复、未知私有后代拒绝及已知路径新编辑另存、服务器同名身份重现拒绝、目录外规则与内容保持。末次 AD 身份一致性检查使用最新 Core 的全部添加后故障定向回归，显式/全量各 19 项通过（`qa/integration-20260925-200952-676dc1af/`、`qa/integration-20260925-201012-4dc31efc/`），避免将较早矩阵误称为最终源码验证。
+- 旧会话兼容实测 21 项通过（`qa/keep-deleted-legacy-schema.txt`）：原存档缺少新增重建字段时按未重建状态加载，档案字节不变；临时读取标记已清理。
+- 最终主 EXE 的完整公开目录 CLI 在显式/全量模式各 78 项通过（`qa/integration-20260925-200955-7481ae51/partial-directory-cli-results.json`、`qa/integration-20260925-200955-9e215329/partial-directory-cli-results.json`），覆盖移动双选择、删除双选择、跨进程会话/取消、空目录与新身份、再次内容冲突、连续两次纯移动，以及真实签入和独立消费者；日志为 `qa/keep-deleted-final-cli-*.log`。最终程序 SHA-256 与构建/源码时间见 `qa/keep-deleted-release-record.json`。原 TestSCM 仍干净且保持 `/main`。

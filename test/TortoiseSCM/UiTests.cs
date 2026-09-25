@@ -403,6 +403,22 @@ namespace TortoiseSCM
                     Require(control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(bounds), "Partial directory " + name + " visible at minimum size");
                 }
                 Save(directory, Path.Combine(artifacts, "partial-directory-minimum.png"));
+                row.Kind = "incoming-directory-delete"; row.IncomingPath = "";
+                foreach (var child in row.Items) child.IncomingPath = "";
+                row.Reason = "服务器已删除目录；选择保留时重新添加本地树。";
+                typeof(PartialDirectoryForm).GetMethod("Render", flags).Invoke(directory, null);
+                Require(choices.SelectedIndex == -1 && !((Button)Field(directory, "apply")).Enabled, "Deleted directory never defaults to removing or re-adding the tree");
+                choices.SelectedIndex = 1;
+                var scopeList = (ListView)Field(directory, "descendants");
+                Require(choices.Text.Contains("新项待提交") && ((TextBox)Field(directory, "details")).Text.Contains("新的版本控制身份") &&
+                    scopeList.Items.Cast<ListViewItem>().All(item => item.SubItems[1].Text.Contains("新添加")), "Keep-deleted preview describes new identities and shows original paths as new additions");
+                directory.Size = new Size(1040, 760); Application.DoEvents();
+                Save(directory, Path.Combine(artifacts, "partial-directory-keep-deleted.png"));
+                directory.Size = directory.MinimumSize; Application.DoEvents();
+                Save(directory, Path.Combine(artifacts, "partial-directory-keep-deleted-minimum.png"));
+                choices.SelectedIndex = 0;
+                Require(scopeList.Items.Cast<ListViewItem>().All(item => item.SubItems[1].Text == "（删除）") && ((TextBox)Field(directory, "details")).Text.Contains("移除目录树"),
+                    "Switching to take-incoming updates every descendant outcome to deletion");
                 session.Ready = false; session.Applying = true;
                 typeof(PartialDirectoryForm).GetMethod("Render", flags).Invoke(directory, null);
                 Require(!((Button)Field(directory, "apply")).Enabled && !((Button)Field(directory, "cancel")).Enabled && ((Button)Field(directory, "recover")).Enabled && !choices.Enabled, "Interrupted directory session permits only explicit recovery");

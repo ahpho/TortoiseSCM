@@ -264,7 +264,13 @@ namespace TortoiseSCM
                         }
                     }
                     var incoming = await PreviewPartialConflictsAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
-                    if (incoming.Any(item => PartialSelected(request, workspace.RootPath, item.RepositoryPath)))
+                    // Signing in one child can also publish its pending added
+                    // parents. A colliding added directory must therefore guard
+                    // every selected descendant, not only a directory selection.
+                    var checkinPending = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
+                    if (incoming.Any(item => PartialSelected(request, workspace.RootPath, item.RepositoryPath) ||
+                        checkinPending.Any(change => change.StatusCode == "AD" && change.IsDirectory && SamePath(change.Path, MergeLocalPath(workspace.RootPath, item.RepositoryPath)) &&
+                            request.Paths.Any(value => IsWithin(Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(request.WorkingDirectory, value)), change.Path)))))
                         throw new ArgumentException("Selected files have incoming conflicts. Prepare and resolve them before checkin; no official merge tool was launched.");
                 }
                 // No native standard merge session can coexist with a Partial resolution.

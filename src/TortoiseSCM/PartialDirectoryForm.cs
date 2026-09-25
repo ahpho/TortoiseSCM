@@ -28,6 +28,7 @@ namespace TortoiseSCM
         private IList<PlasticPartialDirectoryConflict> conflicts = new List<PlasticPartialDirectoryConflict>();
         private PlasticPartialDirectorySession session;
         private bool busy;
+        private string scopeDetails = "";
 
         internal PartialDirectoryForm(PlasticClient client, string root)
         {
@@ -59,7 +60,7 @@ namespace TortoiseSCM
             choices.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 85)); choices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             choices.Controls.Add(new Label { Text = "处理方式：", AutoSize = true, Padding = new Padding(0, 3, 0, 0) }, 0, 0);
             resolution.DropDownStyle = ComboBoxStyle.DropDownList; resolution.Dock = DockStyle.Fill; resolution.AccessibleName = "目录冲突处理方式";
-            resolution.SelectedIndexChanged += delegate { UpdateButtons(); }; choices.Controls.Add(resolution, 1, 0); layout.Controls.Add(choices, 0, 4);
+            resolution.SelectedIndexChanged += delegate { ShowResolutionImpact(); UpdateButtons(); }; choices.Controls.Add(resolution, 1, 0); layout.Controls.Add(choices, 0, 4);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; layout.Controls.Add(status, 0, 5);
             var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
             prepare.Width = 120; recover.Width = 160; cancel.Width = 100; apply.Width = 110;
@@ -74,7 +75,7 @@ namespace TortoiseSCM
             apply.Click += async delegate {
                 if (!apply.Enabled) return;
                 string choice = ((Choice)resolution.SelectedItem).Value;
-                if (!Confirm("处理下列目录及清单中的全部后代？\r\n" + session.Conflict.RepositoryPath + "\r\n" + resolution.Text + "\r\n\r\n备份：" + session.RecoveryDirectory + "\r\n处理不会自动提交。")) return;
+                if (!Confirm("处理下列目录及清单中的全部后代？\r\n" + session.Conflict.RepositoryPath + "\r\n" + resolution.Text + "\r\n" + ResolutionDescription(session.Conflict, choice) + "\r\n\r\n备份：" + session.RecoveryDirectory + "\r\n处理不会自动提交。")) return;
                 await WorkAsync(async delegate { CheckResult(await client.ResolvePartialDirectoryAsync(root, choice, lifetime.Token)); await ReadStateAsync(); });
             };
             cancel.Click += async delegate {
@@ -82,7 +83,7 @@ namespace TortoiseSCM
                 await WorkAsync(async delegate { await client.CancelPartialDirectoryAsync(root, lifetime.Token); await ReadStateAsync(); });
             };
             recover.Click += async delegate {
-                if (!recover.Enabled || !Confirm("将未完成的目录处理恢复为会话中的传入版本？\r\n已知路径的新编辑会先另存备份；新出现的其他文件会阻止恢复。\r\n\r\n备份：" + session.RecoveryDirectory)) return;
+                if (!recover.Enabled || !Confirm("将未完成的目录处理恢复为会话中的传入版本？\r\n" + (session.Conflict.Kind == "incoming-directory-delete" ? "服务器已删除此目录，恢复会移除本次重新创建的目录树。\r\n" : "") + "已知路径的新编辑会先另存备份；新出现的其他文件会阻止恢复。\r\n\r\n备份：" + session.RecoveryDirectory)) return;
                 await WorkAsync(async delegate { CheckResult(await client.RecoverPartialDirectoryAsync(root, lifetime.Token)); await ReadStateAsync(); });
             };
             Shown += async delegate { await WorkAsync(ReadStateAsync); };
@@ -95,16 +96,37 @@ namespace TortoiseSCM
         private sealed class Choice { internal string Value, Text; public override string ToString() { return Text; } }
         private void ShowScope()
         {
-            descendants.Items.Clear(); resolution.Items.Clear(); resolution.SelectedIndex = -1;
+            scopeDetails = ""; descendants.Items.Clear(); resolution.Items.Clear(); resolution.SelectedIndex = -1;
             var conflict = Current();
             if (conflict == null) { details.Text = "请选择目录查看完整影响清单。"; return; }
             foreach (var item in conflict.Items)
                 descendants.Items.Add(new ListViewItem(new[] { item.RepositoryPath, String.IsNullOrEmpty(item.IncomingPath) ? "（删除）" : item.IncomingPath, item.IsDirectory ? "目录" : "文件", item.HasLocalChanges ? "有修改" : "" }));
             foreach (string option in conflict.ResolutionOptions)
-                resolution.Items.Add(new Choice { Value = option, Text = option == "take-incoming" ? "采用服务器目录与内容（本地内容保留在备份）" :
+                resolution.Items.Add(new Choice { Value = option, Text = option == "take-incoming" ? (conflict.Kind == "incoming-directory-delete" ? "采用服务器删除（本地内容保留在备份）" : "采用服务器目录与内容（本地内容保留在备份）") :
                     conflict.Kind == "incoming-directory-move" ? "跟随服务器目录位置，保留本地已修改文件的内容" : "在原路径重新添加本地目录树，作为新项待提交" });
-            details.Text = "传入 cs:" + conflict.IncomingChangeset + "；范围内 " + conflict.Items.Count + " 项，含 " + conflict.Items.Count(item => item.HasLocalChanges) + " 项本地修改。\r\n" + conflict.Reason +
+            scopeDetails = "传入 cs:" + conflict.IncomingChangeset + "；范围内 " + conflict.Items.Count + " 项，含 " + conflict.Items.Count(item => item.HasLocalChanges) + " 项本地修改。\r\n" + conflict.Reason +
                 (session == null ? "\r\n准备不会修改工作区。" : "\r\n恢复备份：" + session.RecoveryDirectory);
+            ShowResolutionImpact();
+        }
+        private static string ResolutionDescription(PlasticPartialDirectoryConflict conflict, string choice)
+        {
+            if (conflict.Kind == "incoming-directory-delete")
+                return choice == "keep-local" ? "按备份在原路径重新添加全部文件和空目录，使用新的版本控制身份；旧历史仍属已删除项。请在待提交界面检查后另行提交。" :
+                    "采用服务器删除，移除目录树；本地原始内容保留在备份中。";
+            return choice == "keep-local" ? "跟随服务器位置；本地已修改文件使用备份内容，未修改文件采用传入版本。" : "采用服务器目录位置和传入内容。";
+        }
+        private void ShowResolutionImpact()
+        {
+            var conflict = Current(); if (conflict == null) return;
+            var selected = resolution.SelectedItem as Choice;
+            bool keepDeleted = selected != null && selected.Value == "keep-local" && conflict.Kind == "incoming-directory-delete";
+            descendants.Columns[1].Text = selected == null ? "服务器传入路径" : "处理后路径";
+            for (int index = 0; index < descendants.Items.Count && index < conflict.Items.Count; index++)
+            {
+                var item = conflict.Items[index];
+                descendants.Items[index].SubItems[1].Text = keepDeleted ? item.RepositoryPath + "（新添加）" : String.IsNullOrEmpty(item.IncomingPath) ? "（删除）" : item.IncomingPath;
+            }
+            details.Text = scopeDetails + (selected == null ? "" : "\r\n" + ResolutionDescription(conflict, selected.Value));
         }
         private void UpdateButtons()
         {

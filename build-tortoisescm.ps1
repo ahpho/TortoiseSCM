@@ -102,7 +102,7 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-structure-integration.txt'), $structureManifest)
         & $structureOutput $structureManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Partial structure tests failed. Inspect $structureManifest." }
-        foreach ($moveSuite in @('PartialCrossDirectoryTests', 'PartialIncomingMoveTests', 'PartialMoveCollisionTests', 'PartialDirectoryIntegrationTests', 'PartialDirectoryRepeatedMoveTests', 'PartialDeletedIdentityTests')) {
+        foreach ($moveSuite in @('PartialCrossDirectoryTests', 'PartialIncomingMoveTests', 'PartialMoveCollisionTests', 'PartialDirectoryIntegrationTests', 'PartialDirectoryRepeatedMoveTests', 'PartialDeletedIdentityTests', 'PartialDirectoryKeepDeletedTests', 'PartialDirectoryReaddCollisionTests')) {
             $moveOutput = Join-Path $out ($moveSuite + '.exe')
             $moveSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
             $moveSources += Join-Path $PSScriptRoot ('test\TortoiseSCM\' + $moveSuite + '.cs')
@@ -111,16 +111,16 @@ if ($Test -or $Integration) {
             $moveManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
             if (-not $moveManifest -or -not (Test-Path -LiteralPath $moveManifest)) { throw "$moveSuite setup failed." }
             [IO.File]::WriteAllText((Join-Path $PSScriptRoot ('bin\TortoiseSCM\qa\latest-' + $moveSuite + '.txt')), $moveManifest)
-            if ($moveSuite -eq 'PartialDeletedIdentityTests') {
+            if ($moveSuite -eq 'PartialDeletedIdentityTests' -or $moveSuite -eq 'PartialDirectoryReaddCollisionTests') {
                 & $moveOutput $moveManifest 'D:\Program Files\PlasticSCM5\client\cm.exe' (Join-Path $out 'TortoiseSCM.exe')
             } else {
                 & $moveOutput $moveManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
             }
             if ($LASTEXITCODE -ne 0) { throw "$moveSuite failed. Inspect $moveManifest." }
-            if ($moveSuite -eq 'PartialDirectoryIntegrationTests') {
+            if ($moveSuite -eq 'PartialDirectoryIntegrationTests' -or $moveSuite -eq 'PartialDirectoryKeepDeletedTests') {
                 $fullManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
                 if (-not $fullManifest -or -not (Test-Path -LiteralPath $fullManifest)) { throw 'Full-mode directory setup failed.' }
-                [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-partial-directory-full.txt'), $fullManifest)
+                [IO.File]::WriteAllText((Join-Path $PSScriptRoot ('bin\TortoiseSCM\qa\latest-' + $moveSuite + '-full.txt')), $fullManifest)
                 & $moveOutput $fullManifest 'D:\Program Files\PlasticSCM5\client\cm.exe' '--full'
                 if ($LASTEXITCODE -ne 0) { throw "Full-mode directory tests failed. Inspect $fullManifest." }
             }

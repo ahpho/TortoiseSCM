@@ -293,7 +293,7 @@ Partial 内容处理中断时会保留原始和审核结果备份，并阻止提
 从“操作 → Partial 目录冲突…”进入。上栏列出服务器移动或删除的已加载目录，下栏显示该目录及全部已加载后代的原路径、传入路径和本地修改标记。单次处理一棵目录，必须先准备整树备份，再明确选择处理方式；不会默认选择或自动提交。
 
 - 服务器移动：可采用服务器目录和内容，或跟随新位置并保留本地已修改文件的内容。原来未修改的文件仍采用服务器版本，目录与后代的 ItemId 保持。
-- 服务器删除：目前支持采用删除；本地原始内容保留在恢复备份中。
+- 服务器删除：可采用删除，或在原路径保留整棵本地树。选择保留时会从备份重新添加全部文件和空目录，形成新身份的待提交项；旧身份及其历史不会恢复，必须在待提交界面检查后另行提交。原始内容保留在恢复备份中。
 - 本轮要求目录子树完整加载，支持工作区全量加载模式和显式目录加载规则，且服务器移动保持相同后代结构。含未加载后代、私有/忽略项、待定增删移动、链接、嵌套工作区、不同身份替换或仅大小写移动时拒绝。同次存在其他已加载目录结构变化也暂不支持；预检会显示具体原因，不自动扩大加载范围。
 
 ```powershell
@@ -302,12 +302,15 @@ Partial 内容处理中断时会保留原始和审核结果备份，并阻止提
 & $exe --cli --command partial-directory-status --path 'D:\workspace' --json | ConvertFrom-Json
 & $exe --cli --command partial-directory-resolve --path 'D:\workspace' --resolution keep-local --yes --json | ConvertFrom-Json
 # 另一选择为 take-incoming；prepare 返回的 resolutionOptions 决定该目录可用的选择。
+# 对服务器删除的目录，keep-local 表示在原路径重新添加本地树，不自动提交。
+# JSON 的 resolutionDetails 说明每个选项的效果，readdsAsNewItems 标明是否创建新身份。
 # 未应用的准备可取消；已中断的处理必须显式恢复：
 & $exe --cli --command partial-directory-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
 & $exe --cli --command partial-directory-recover --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
 
 目录会话持久记录在工作区元数据中，换配置文件或重启不会绕过保护。准备和应用分离，旧选择不能覆盖后续编辑；中断后阻止其他修改操作，状态命令返回恢复目录。显式恢复会先另存已知路径的新编辑；新出现的其他文件或变化的服务器结构会阻止恢复并保留现状，需要先处理这些变化。整树卸载/加载使用原生 [PARTIAL CONFIGURE](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-configure)，不会隐式更新父目录。
+保留已删除目录的重建过程若中断，“恢复为传入版本”会先备份已知路径的新内容，再撤销本次添加并移除重建的树，回到服务器删除状态；不会继续签入或恢复旧身份。服务器已在原路径创建新项、出现未知后代或其他结构变更时，会保留会话并拒绝覆盖。
 
 ### 锁管理
 
