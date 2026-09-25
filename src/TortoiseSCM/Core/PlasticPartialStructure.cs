@@ -81,8 +81,17 @@ namespace TortoiseSCM
                 {
                     var infoResult = await ExecuteAsync(RevisionCommand(root, new[] { "fileinfo", change.Path, "--fields=RevisionChangeset,Type,IsUnderXlink", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(infoResult);
                     var info = SafeXml.Load(infoResult.Output).Descendants("FileInfo").Single();
-                    if ((string)info.Element("IsUnderXlink") != "false" || ((string)info.Element("Type") != "txt" && (string)info.Element("Type") != "bin")) continue;
-                    long loaded; if (!Int64.TryParse((string)info.Element("RevisionChangeset"), out loaded) || loaded < 0) continue;
+                    long loaded;
+                    if ((string)info.Element("IsUnderXlink") != "false" || ((string)info.Element("Type") != "txt" && (string)info.Element("Type") != "bin") ||
+                        !Int64.TryParse((string)info.Element("RevisionChangeset"), out loaded) || loaded < 0)
+                    {
+                        if (change.StatusCode == "MV")
+                        {
+                            conflict.Kind = "local-move"; conflict.Reason = "The moved file's loaded revision or repository identity cannot be verified.";
+                            result.Add(conflict);
+                        }
+                        continue;
+                    }
                     conflict.BaseChangeset = loaded;
                     conflict.ItemId = await PartialItemIdAsync(workspace, original, loaded, token).ConfigureAwait(false);
                     incoming = tree.Items.SingleOrDefault(item => (long?)item.Element("ItemId") == conflict.ItemId);
@@ -91,7 +100,13 @@ namespace TortoiseSCM
                     else if (change.StatusCode == "DE" || change.StatusCode == "LD")
                     { if ((long)incoming.Element("Changeset") == loaded) continue; conflict.Kind = "local-delete"; }
                     else if (change.StatusCode == "MV")
-                    { if ((long)incoming.Element("Changeset") == loaded) continue; conflict.Kind = "local-move"; }
+                    {
+                        // A new server item can occupy the local destination even
+                        // when the moved source itself has no incoming edits.
+                        bool occupied = tree.Items.Any(item => String.Equals((string)item.Element("CurrentPath"), path, StringComparison.OrdinalIgnoreCase) && (long?)item.Element("ItemId") != conflict.ItemId);
+                        if ((long)incoming.Element("Changeset") == loaded && !occupied) continue;
+                        conflict.Kind = "local-move";
+                    }
                     else continue;
                 }
                 if (incoming != null)
@@ -99,14 +114,24 @@ namespace TortoiseSCM
                     conflict.IncomingPath = (string)incoming.Element("CurrentPath"); conflict.IncomingItemId = (long)incoming.Element("ItemId"); conflict.IncomingRevisionChangeset = (long)incoming.Element("Changeset");
                     if (!StructureRegularFile(incoming, workspace.Repository)) { conflict.Reason = "Directories, links and cross-repository targets require a separate decision."; result.Add(conflict); continue; }
                 }
-                if (conflict.Kind == "incoming-move") conflict.Reason = "This client requires the destination parent directory for an incoming move. File-only structural resolution does not widen the update scope.";
+                if (conflict.Kind == "incoming-move" && change.StatusCode != "CH" && change.StatusCode != "CO") conflict.Reason = "An incoming move combined with a local move or deletion requires a separate structural decision.";
                 else if (conflict.Kind == "incoming-delete" && (change.StatusCode == "MV" || change.StatusCode == "DE" || change.StatusCode == "LD")) conflict.Reason = "Combined local structure and incoming deletion are not supported by the file-only resolver.";
                 else if (tree.Items.Any(item => (string)item.Element("CurrentPath") == original && (long?)item.Element("ItemId") != conflict.IncomingItemId)) conflict.Reason = "The original path is now occupied by a replacement item.";
-                else if (conflict.Kind == "local-move" && (Path.GetDirectoryName(original) != Path.GetDirectoryName(path) || tree.Items.Any(item => String.Equals((string)item.Element("CurrentPath"), path, StringComparison.OrdinalIgnoreCase)))) conflict.Reason = "Only an unoccupied same-directory local rename can be rebased safely.";
+                else if (conflict.Kind == "local-move" && tree.Items.Any(item => String.Equals((string)item.Element("CurrentPath"), path, StringComparison.OrdinalIgnoreCase))) conflict.Reason = "The local move destination is occupied at the incoming revision.";
                 else
                 {
+                    if (conflict.Kind == "local-move")
+                    {
+                        try { await ValidateStructureParentsAsync(workspace, new[] { original, path }, tree, token).ConfigureAwait(false); }
+                        catch (ArgumentException error) { conflict.Reason = error.Message; result.Add(conflict); continue; }
+                    }
+                    if (conflict.Kind == "incoming-move")
+                    {
+                        try { await ValidateIncomingMoveScopeAsync(workspace, conflict, token, tree).ConfigureAwait(false); }
+                        catch (ArgumentException error) { conflict.Reason = error.Message; result.Add(conflict); continue; }
+                    }
                     conflict.ResolutionOptions.Add("take-incoming"); conflict.ResolutionOptions.Add("keep-local");
-                    if (conflict.Kind != "local-delete") conflict.ResolutionOptions.Add("rename");
+                    if (conflict.Kind != "local-delete" && conflict.Kind != "incoming-move") conflict.ResolutionOptions.Add("rename");
                 }
                 result.Add(conflict);
             }
@@ -123,7 +148,7 @@ namespace TortoiseSCM
                 var conflict = (await PreviewPartialStructureAsync(root, token).ConfigureAwait(false)).SingleOrDefault(item => item.RepositoryPath == repositoryPath);
                 if (conflict == null || conflict.ResolutionOptions.Count == 0) throw new ArgumentException(conflict == null ? "The selected structural conflict no longer exists." : conflict.Reason);
                 await ValidateStructureScopeAsync(workspace, conflict, token).ConfigureAwait(false);
-                var state = new StructureState { Repository = workspace.Repository, Configuration = PartialConfiguration(root), Session = new PlasticPartialStructureSession { SessionId = Guid.NewGuid().ToString("N"), WorkspaceRoot = root, Conflict = conflict, Ready = true, Resolution = "", RenamePath = "" } };
+                var state = new StructureState { Repository = workspace.Repository, Configuration = conflict.Kind == "incoming-move" ? IncomingMoveConfiguration(root) : PartialConfiguration(root), Session = new PlasticPartialStructureSession { SessionId = Guid.NewGuid().ToString("N"), WorkspaceRoot = root, Conflict = conflict, Ready = true, Resolution = "", RenamePath = "" } };
                 state.Session.RecoveryDirectory = MergeSessionDirectory(state.Session.SessionId); CreatePrivateMergeDirectory(state.Session.RecoveryDirectory);
                 string local = MergeLocalPath(root, repositoryPath);
                 state.LocalHash = StructureFileHash(local);
@@ -160,7 +185,10 @@ namespace TortoiseSCM
                 if (!conflict.ResolutionOptions.Contains(resolution)) throw new ArgumentException("Choose one of the offered structural resolutions.");
                 if (resolution != "rename" && !String.IsNullOrEmpty(rename)) throw new ArgumentException("A destination is accepted only for rename.");
                 if (resolution == "rename" && !String.IsNullOrEmpty(rename) && rename.IndexOfAny(new[] { '/', '\\' }) < 0)
-                    rename = conflict.OriginalPath.Substring(0, conflict.OriginalPath.LastIndexOf('/') + 1) + rename;
+                {
+                    string relativeTo = conflict.Kind == "local-move" ? conflict.RepositoryPath : conflict.OriginalPath;
+                    rename = relativeTo.Substring(0, relativeTo.LastIndexOf('/') + 1) + rename;
+                }
                 if (resolution == "rename") await ValidateStructureRenameAsync(workspace, conflict, rename, token).ConfigureAwait(false);
                 var current = (await PreviewPartialStructureAsync(root, token).ConfigureAwait(false)).SingleOrDefault(item => item.RepositoryPath == conflict.RepositoryPath);
                 if (current == null || StructureConflictKey(current) != StructureConflictKey(conflict) || StructureFileHash(MergeLocalPath(root, conflict.RepositoryPath)) != state.LocalHash ||
@@ -207,8 +235,14 @@ namespace TortoiseSCM
         private async Task StructureTakeIncomingAsync(StructureState state, PlasticWorkspace workspace, bool recovery, CancellationToken token, Dictionary<string, string> recoveryHashes = null)
         {
             string root = workspace.RootPath; var conflict = state.Session.Conflict;
+            await ValidatePartialLoadedDirectoriesAtAsync(workspace, conflict.IncomingChangeset, token).ConfigureAwait(false);
+            if (conflict.Kind == "incoming-move")
+            { await StructureTakeIncomingMoveAsync(state, workspace, recovery, token, recoveryHashes).ConfigureAwait(false); return; }
             var scope = new HashSet<string>(StructurePaths(state), StringComparer.OrdinalIgnoreCase);
+            if (conflict.Kind == "local-move") await ValidateStructureParentsAsync(workspace, scope, await ReadStructureTreeAsync(workspace, token).ConfigureAwait(false), token).ConfigureAwait(false);
             foreach (string path in scope) if (Directory.Exists(MergeLocalPath(root, path))) throw new ArgumentException("A conflict file path became a directory; file-only recovery will not recurse into it.");
+            var expected = scope.ToDictionary(path => path, path => recovery ? recoveryHashes[path] :
+                String.Equals(path, conflict.RepositoryPath, StringComparison.OrdinalIgnoreCase) ? state.LocalHash : "missing", StringComparer.OrdinalIgnoreCase);
             var pending = await GetStatusAsync(root, token).ConfigureAwait(false);
             foreach (var change in pending.Where(item => scope.Contains(StructureRepositoryPath(root, item.Path))).GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase).Select(group => group.OrderByDescending(item => item.StatusCode == "MV").First()).ToList())
             {
@@ -226,7 +260,17 @@ namespace TortoiseSCM
                     else identity = await StructureLocalItemIdAsync(root, change.Path, token).ConfigureAwait(false);
                     if (identity != conflict.ItemId && identity != conflict.IncomingItemId) throw new ArgumentException("A structural path now belongs to a different controlled item; recovery did not overwrite it.");
                 }
+                ValidateStructureSnapshot(root, expected);
                 RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "undo", change.Path }), token).ConfigureAwait(false));
+                if (change.StatusCode != "AD")
+                {
+                    string restored = String.IsNullOrEmpty(change.OldPath) ? change.Path : change.OldPath;
+                    string restoredHash = StructureFileHash(restored);
+                    if (restoredHash != state.BaseHash && restoredHash != state.IncomingHash) throw new IOException("The restored file changed before the pinned update; its current bytes were preserved.");
+                    expected[StructureRepositoryPath(root, restored)] = restoredHash;
+                    if (!String.IsNullOrEmpty(change.OldPath)) expected[StructureRepositoryPath(root, change.Path)] = "missing";
+                }
+                ValidateStructureSnapshot(root, expected);
             }
             // Undoing an addition leaves a private file. Clear only these explicitly
             // scoped private paths, after their bytes have been durably backed up.
@@ -237,7 +281,8 @@ namespace TortoiseSCM
                 if ((string)info.Element("Status") == "private")
                 {
                     if ((!recovery && StructureFileHash(local) != state.LocalHash) || (recovery && (!recoveryHashes.ContainsKey(path) || StructureFileHash(local) != recoveryHashes[path]))) throw new IOException("A private conflict path changed after backup.");
-                    StructureRequireSingleLink(local); File.Delete(local);
+                    ValidateStructureSnapshot(root, expected);
+                    StructureRequireSingleLink(local); File.Delete(local); expected[path] = "missing";
                 }
             }
             string original = MergeLocalPath(root, conflict.OriginalPath);
@@ -245,7 +290,10 @@ namespace TortoiseSCM
             // Updating a tracked file applies a pinned delete, or advances it to the
             // exact incoming revision. Never select a parent directory here.
             if (File.Exists(original) || conflict.IncomingItemId >= 0)
+            {
+                ValidateStructureSnapshot(root, expected);
                 RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "update", original, "--changeset=" + conflict.IncomingChangeset.ToString(CultureInfo.InvariantCulture), "--dontmerge", "--report" }), token).ConfigureAwait(false));
+            }
             if (conflict.Kind == "add-add" && !File.Exists(original))
             {
                 // A locally-added item need not be in the server load tree. Load
@@ -264,7 +312,7 @@ namespace TortoiseSCM
                     await StructureLocalItemIdAsync(root, original, token).ConfigureAwait(false) != conflict.IncomingItemId)
                     throw new IOException("The selected counterpart changed identity or revision while it was being loaded. No further update was performed.");
                 StructureRequireSingleLink(original);
-                RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "update", original, "--changeset=" + conflict.IncomingChangeset.ToString(CultureInfo.InvariantCulture), "--dontmerge", "--report" }), token).ConfigureAwait(false));
+                if (StructureFileHash(original) != state.IncomingHash) throw new IOException("The newly loaded counterpart was edited; its current bytes were preserved.");
                 ValidateStructureConfiguration(state, workspace);
             }
             if (conflict.IncomingItemId < 0)
@@ -285,9 +333,16 @@ namespace TortoiseSCM
             string original = MergeLocalPath(root, conflict.OriginalPath);
             string targetPath = state.Session.Resolution == "rename" ? state.Session.RenamePath : conflict.RepositoryPath;
             string target = MergeLocalPath(root, targetPath);
-            if (conflict.Kind == "local-delete") RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "remove", original }), token).ConfigureAwait(false));
+            if (conflict.Kind == "incoming-move") StructureWriteBackup(state, MergeLocalPath(root, conflict.IncomingPath), state.IncomingHash);
+            else if (conflict.Kind == "local-delete")
+            {
+                StructureRequireSingleLink(original);
+                if (StructureFileHash(original) != state.IncomingHash) throw new IOException("The incoming file was edited before reapplying the deletion; its current bytes were preserved.");
+                RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "remove", original }), token).ConfigureAwait(false));
+            }
             else if (conflict.Kind == "local-move")
             {
+                await ValidateStructureParentsAsync(workspace, new[] { conflict.OriginalPath, targetPath }, await ReadStructureTreeAsync(workspace, token).ConfigureAwait(false), token).ConfigureAwait(false);
                 if (File.Exists(target) || Directory.Exists(target)) throw new IOException("The rename destination became occupied before the native move.");
                 RequireSuccess(await ExecuteAsync(RevisionCommand(root, new[] { "partial", "move", original, target }), token).ConfigureAwait(false));
                 // A pure rename keeps incoming content. Explicit keep-local also
@@ -302,6 +357,15 @@ namespace TortoiseSCM
             }
             else StructureWriteBackup(state, original, state.IncomingHash);
         }
+        private static void ValidateStructureSnapshot(string root, IDictionary<string, string> expected)
+        {
+            foreach (var entry in expected)
+            {
+                string local = MergeLocalPath(root, entry.Key);
+                if (Directory.Exists(local) || StructureFileHash(local) != entry.Value)
+                    throw new IOException("A conflict path changed after backup; its newer bytes were preserved: " + entry.Key);
+            }
+        }
         private void StructureWriteBackup(StructureState state, string target, string expected)
         {
             StructureRequireSingleLink(target); if (MergeHash(target) != expected) throw new IOException("The target changed before applying the local decision.");
@@ -313,7 +377,7 @@ namespace TortoiseSCM
         {
             if (state.Session.Resolution == "take-incoming") return;
             var conflict = state.Session.Conflict; var pending = await GetStatusAsync(workspace.RootPath, token).ConfigureAwait(false);
-            string path = state.Session.Resolution == "rename" ? state.Session.RenamePath : conflict.RepositoryPath;
+            string path = state.Session.Resolution == "rename" ? state.Session.RenamePath : conflict.Kind == "incoming-move" ? conflict.IncomingPath : conflict.RepositoryPath;
             string local = MergeLocalPath(workspace.RootPath, path);
             string code = conflict.Kind == "local-delete" ? "DE" : conflict.Kind == "local-move" ? "MV" : conflict.Kind == "incoming-delete" || state.Session.Resolution == "rename" ? "AD" : "CH";
             if (!pending.Any(item => SamePath(item.Path, local) && (item.StatusCode == code || (code == "CH" && item.StatusCode == "CO")))) throw new IOException("The native pending structure does not match the reviewed decision.");
@@ -325,6 +389,8 @@ namespace TortoiseSCM
         }
         private async Task ValidateStructureScopeAsync(PlasticWorkspace workspace, PlasticPartialStructureConflict conflict, CancellationToken token)
         {
+            await ValidatePartialLoadedDirectoriesAtAsync(workspace, conflict.IncomingChangeset, token).ConfigureAwait(false);
+            if (conflict.Kind == "incoming-move") await ValidateIncomingMoveScopeAsync(workspace, conflict, token).ConfigureAwait(false);
             foreach (string path in new[] { conflict.RepositoryPath, conflict.OriginalPath }.Distinct())
             {
                 string local = MergeLocalPath(workspace.RootPath, path);
@@ -334,17 +400,48 @@ namespace TortoiseSCM
             }
             var pending = await GetStatusAsync(workspace.RootPath, token).ConfigureAwait(false);
             if (pending.Any(item => item.IsDirectory && new[] { conflict.RepositoryPath, conflict.OriginalPath }.Any(path => IsWithin(MergeLocalPath(workspace.RootPath, path), item.Path)))) throw new ArgumentException("Complete the parent directory change before resolving this file.");
+            if (conflict.Kind == "local-move") await ValidateStructureParentsAsync(workspace, new[] { conflict.RepositoryPath, conflict.OriginalPath }, await ReadStructureTreeAsync(workspace, token).ConfigureAwait(false), token).ConfigureAwait(false);
             if (conflict.RepositoryPath != conflict.OriginalPath && File.Exists(MergeLocalPath(workspace.RootPath, conflict.OriginalPath))) throw new ArgumentException("The original rename path is occupied by an unrelated file.");
         }
         private async Task ValidateStructureRenameAsync(PlasticWorkspace workspace, PlasticPartialStructureConflict conflict, string rename, CancellationToken token)
         {
             ValidateRepositoryFilePath(rename);
-            if (Path.GetDirectoryName(rename) != Path.GetDirectoryName(conflict.OriginalPath) || String.Equals(rename, conflict.RepositoryPath, StringComparison.OrdinalIgnoreCase) || String.Equals(rename, conflict.OriginalPath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Choose an unoccupied new filename in the same directory.");
+            if ((conflict.Kind != "local-move" && Path.GetDirectoryName(rename) != Path.GetDirectoryName(conflict.OriginalPath)) || String.Equals(rename, conflict.RepositoryPath, StringComparison.OrdinalIgnoreCase) || String.Equals(rename, conflict.OriginalPath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Choose an unoccupied new filename; only a local move can choose another loaded, controlled directory.");
             string local = MergeLocalPath(workspace.RootPath, rename);
             ValidateHistoricalOutput(local, false);
             if (File.Exists(local) || Directory.Exists(local)) throw new ArgumentException("The rename destination already exists.");
             var tree = await ReadStructureTreeAsync(workspace, token).ConfigureAwait(false);
             if (tree.Items.Any(item => String.Equals((string)item.Element("CurrentPath"), rename, StringComparison.OrdinalIgnoreCase))) throw new ArgumentException("The rename destination is already controlled at the incoming revision.");
+            if (conflict.Kind == "local-move") await ValidateStructureParentsAsync(workspace, new[] { rename }, tree, token).ConfigureAwait(false);
+        }
+        private async Task ValidateStructureParentsAsync(PlasticWorkspace workspace, IEnumerable<string> paths, StructureTree tree, CancellationToken token)
+        {
+            var parents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in paths)
+            {
+                string parent = path.Substring(0, path.LastIndexOf('/'));
+                while (!String.IsNullOrEmpty(parent)) { parents.Add(parent); parent = parent.Substring(0, parent.LastIndexOf('/')); }
+            }
+            var pending = await GetStatusAsync(workspace.RootPath, token).ConfigureAwait(false);
+            foreach (string parent in parents)
+            {
+                string local = MergeLocalPath(workspace.RootPath, parent); RejectReparsePath(local);
+                if (!Directory.Exists(local)) throw new ArgumentException("The source and destination parent directories must already be loaded.");
+                var nested = DiscoverWorkspace(local);
+                if (nested == null || !SamePath(nested.RootPath, workspace.RootPath)) throw new ArgumentException("A move parent belongs to a nested workspace.");
+                if (pending.Any(item => SamePath(item.Path, local) || (!String.IsNullOrEmpty(item.OldPath) && SamePath(item.OldPath, local)))) throw new ArgumentException("Complete pending parent directory changes before resolving this file move.");
+                var result = await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "fileinfo", local, "--fields=Type,Status,IsUnderXlink", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result);
+                var info = SafeXml.Load(result.Output).Descendants("FileInfo").Single();
+                // Moving a child implicitly checks out its parents without a
+                // directory status row. Explicit pending parent changes were
+                // rejected above; this native bookkeeping remains controlled.
+                if ((string)info.Element("Type") != "dir" || !new[] { "controlled", "checked-out" }.Contains((string)info.Element("Status")) || (string)info.Element("IsUnderXlink") != "false") throw new ArgumentException("Move parents must be controlled directories outside Xlinks.");
+                var incoming = tree.Items.SingleOrDefault(item => String.Equals((string)item.Element("CurrentPath"), parent, StringComparison.OrdinalIgnoreCase));
+                if (incoming == null || !new[] { "dir", "directory", "目录" }.Contains((string)incoming.Element("Type"), StringComparer.OrdinalIgnoreCase) || !String.IsNullOrEmpty((string)incoming.Element("SymlinkTarget")) || (string)incoming.Element("Repository") != "rep:" + workspace.Repository) throw new ArgumentException("A move parent was removed, replaced or linked at the incoming revision.");
+                var listed = await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "ls", local, "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(listed);
+                var loaded = SafeXml.Load(listed.Output).Descendants("LsItem").SingleOrDefault(item => SamePath((string)item.Element("CurrentPath"), local));
+                if (loaded == null || (long?)loaded.Element("ItemId") != (long?)incoming.Element("ItemId")) throw new ArgumentException("A move parent changed identity at the incoming revision.");
+            }
         }
         private async Task<StructureTree> ReadStructureTreeAsync(PlasticWorkspace workspace, CancellationToken token)
         {
@@ -370,9 +467,10 @@ namespace TortoiseSCM
         { return String.Join("|", c.RepositoryPath, c.OriginalPath, c.IncomingPath, c.Kind, c.BaseChangeset, c.IncomingChangeset, c.ItemId, c.IncomingItemId, c.IncomingRevisionChangeset); }
         private static string StructureBackup(StructureState state, string kind) { return Path.Combine(state.Session.RecoveryDirectory, kind + ".bin"); }
         private static IEnumerable<string> StructurePaths(StructureState state)
-        { return new[] { state.Session.Conflict.RepositoryPath, state.Session.Conflict.OriginalPath, state.Session.RenamePath }.Where(path => !String.IsNullOrEmpty(path)).Distinct(StringComparer.OrdinalIgnoreCase); }
+        { return new[] { state.Session.Conflict.RepositoryPath, state.Session.Conflict.OriginalPath, state.Session.RenamePath,
+            state.Session.Conflict.Kind == "incoming-move" ? state.Session.Conflict.IncomingPath : null }.Where(path => !String.IsNullOrEmpty(path)).Distinct(StringComparer.OrdinalIgnoreCase); }
         private static void ValidateStructureConfiguration(StructureState state, PlasticWorkspace workspace)
-        { if (state.Repository != workspace.Repository || state.Configuration != PartialConfiguration(workspace.RootPath)) throw new ArgumentException("The workspace identity, selector or Partial load configuration changed. Restore that configuration before recovery."); }
+        { if (state.Repository != workspace.Repository || state.Configuration != (state.Session.Conflict.Kind == "incoming-move" ? IncomingMoveConfiguration(workspace.RootPath) : PartialConfiguration(workspace.RootPath))) throw new ArgumentException("The workspace identity, selector or Partial load configuration changed. Restore that configuration before recovery."); }
         private async Task<XElement> StructureFileInfoAsync(string root, string path, CancellationToken token)
         { var result = await ExecuteAsync(RevisionCommand(root, new[] { "fileinfo", path, "--fields=RevisionChangeset,Status", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result); return SafeXml.Load(result.Output).Descendants("FileInfo").Single(); }
         private async Task<long> StructureLocalItemIdAsync(string root, string path, CancellationToken token)

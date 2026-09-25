@@ -102,6 +102,18 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-structure-integration.txt'), $structureManifest)
         & $structureOutput $structureManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Partial structure tests failed. Inspect $structureManifest." }
+        foreach ($moveSuite in @('PartialCrossDirectoryTests', 'PartialIncomingMoveTests', 'PartialMoveCollisionTests')) {
+            $moveOutput = Join-Path $out ($moveSuite + '.exe')
+            $moveSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+            $moveSources += Join-Path $PSScriptRoot ('test\TortoiseSCM\' + $moveSuite + '.cs')
+            & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$moveOutput" $moveSources
+            if ($LASTEXITCODE -ne 0) { throw "$moveSuite compilation failed." }
+            $moveManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+            if (-not $moveManifest -or -not (Test-Path -LiteralPath $moveManifest)) { throw "$moveSuite setup failed." }
+            [IO.File]::WriteAllText((Join-Path $PSScriptRoot ('bin\TortoiseSCM\qa\latest-' + $moveSuite + '.txt')), $moveManifest)
+            & $moveOutput $moveManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+            if ($LASTEXITCODE -ne 0) { throw "$moveSuite failed. Inspect $moveManifest." }
+        }
         $structureCliManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $structureCliManifest -or -not (Test-Path -LiteralPath $structureCliManifest)) { throw 'Partial structure CLI setup did not produce a manifest.' }
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialStructureCliTests.ps1') -Manifest $structureCliManifest -Executable (Join-Path $out 'TortoiseSCM.exe')

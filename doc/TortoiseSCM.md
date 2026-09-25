@@ -263,9 +263,12 @@ Partial 内容处理中断时会保留原始和审核结果备份，并阻止提
 | 双方新增同名文件 | 采用传入、本地内容覆盖传入，或本地另存新名称保留双方 |
 | 服务器删除，本地修改 | 采用删除，或将本地内容作为新增重新加入；可另存新名称 |
 | 本地删除，服务器修改 | 接受传入，或在新的基础上继续删除 |
-| 本地同目录重命名，服务器修改 | 接受传入，或保留本地重命名/另选新名称；纯重命名保留服务器内容，本地同时编辑时显式采用本地内容 |
+| 本地重命名或跨目录移动，服务器修改 | 接受传入，或保留本地位置/另选位置；纯移动保留服务器内容，本地同时编辑时显式采用本地内容 |
+| 服务器移动文件，本地修改内容 | 跟随服务器的新路径，选择采用服务器内容或在新位置保留本地内容 |
 
 准备会固定文件身份、服务器变更集和本地内容，并保存备份。应用前重新核验，过期准备会拒绝执行。未完成会话会阻止普通写操作，避免与更新、撤销、回滚交错。未应用准备可取消；失败后使用“恢复为传入版本”，将受影响文件恢复到固定传入状态，原始备份及恢复时的文件内容均保留。此恢复不会重新提交本地内容，可从备份取回后另行处理。
+
+本地跨目录移动要求源目录、目标目录及其祖先已加载、受版本控制，且身份与服务器一致；不会自动创建目录或更新父目录。选择新位置时，单独文件名相对于本地移动后的目录，也可填写 `/目录/文件名`。服务器移动则仅卸载原文件、加载服务器新路径，保持文件身份、选择器和加载规则的含义；原路径不再保留，规则记录的行顺序可能由原生客户端重排。
 
 ```powershell
 & $exe --cli --command partial-structure-preview --path 'D:\workspace' --json | ConvertFrom-Json
@@ -273,13 +276,16 @@ Partial 内容处理中断时会保留原始和审核结果备份，并阻止提
 & $exe --cli --command partial-structure-status --path 'D:\workspace' --json | ConvertFrom-Json
 # 选择必须来自 preview/session 的 resolutionOptions
 & $exe --cli --command partial-structure-resolve --path 'D:\workspace' --resolution rename --rename 'local-copy.txt' --yes --json | ConvertFrom-Json
+# 仅本地移动冲突可选择其他已加载受控目录
+& $exe --cli --command partial-structure-resolve --path 'D:\workspace' --resolution rename --rename '/Assets/Reviewed/local.txt' --yes --json | ConvertFrom-Json
 # 其他选择为 keep-local / take-incoming；成功后回到常规待定更改检查与提交
 & $exe --cli --command partial-structure-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
 # 仅用于应用中断；采用会话固定的传入状态，保留备份
 & $exe --cli --command partial-structure-recover --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
 
-当前结构处理限普通文件和同目录本地重命名。服务器移动文件需要原生命令更新父目录，暂不扩大范围执行；目录级 Partial 结构冲突、跨目录本地移动、路径被不同身份文件替换、Xlink 与符号链接仍会拒绝或显示不支持原因。
+当前结构处理限普通文件。目录级 Partial 结构冲突、服务器移动同时叠加本地移动/删除、仅大小写变化的服务器改名、路径被不同身份文件替换、Xlink 与符号链接仍会拒绝或显示不支持原因。
+即使选中单文件，原生 Partial 更新也可能处理已删除目录。因此准备和应用冲突前会检查已加载目录在目标版本中的身份；遇到目录删除、移动或替换，会指出具体目录并要求先单独处理，不自动扩大更新范围。内容冲突处理也使用此检查。原生目录更新的递归行为见 [PARTIAL UPDATE](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-update)。
 锁列表限定当前仓库；只有当前用户、当前工作区持有的锁才允许释放，执行前再次读取核验。
 锁获取遵循服务器规则：普通签出并不保证获得锁。本程序不修改服务器锁规则，服务器权限仍决定能否释放。
 

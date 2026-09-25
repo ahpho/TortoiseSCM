@@ -55,6 +55,10 @@ namespace TortoiseSCM
             {
                 string path = "/" + pending.Path.Substring(workspace.RootPath.TrimEnd('\\').Length).TrimStart('\\').Replace('\\', '/');
                 if (structures.Any(item => String.Equals(item.RepositoryPath, path, StringComparison.OrdinalIgnoreCase))) continue;
+                // Plastic emits separate MV and CH rows for an edited moved file.
+                // Its uncommitted destination has no historical revision yet;
+                // the structural preview already checks the original identity.
+                if (changes.Any(item => item.StatusCode == "MV" && SamePath(item.Path, pending.Path))) continue;
                 if (pending.StatusCode == "AD" && headPaths.Contains(path))
                 {
                     conflicts.Add(new PlasticPartialConflict { RepositoryPath = path, BaseChangeset = -1, IncomingChangeset = -1,
@@ -113,6 +117,7 @@ namespace TortoiseSCM
                 var conflict = await ReadPartialConflictAsync(workspace, repositoryPath, cancellationToken).ConfigureAwait(false);
                 if (!conflict.CanResolve) throw new ArgumentException(conflict.Reason);
                 if (conflict.BaseChangeset == conflict.IncomingChangeset) throw new ArgumentException("The file has no incoming revision conflict.");
+                await ValidatePartialLoadedDirectoriesAtAsync(workspace, conflict.IncomingChangeset, cancellationToken).ConfigureAwait(false);
                 await RequirePartialContentChangeAsync(workspace, local, cancellationToken).ConfigureAwait(false);
                 if (state == null) state = new PartialState { Repository = workspace.Repository, Configuration = PartialConfiguration(workspace.RootPath),
                     Session = new PlasticPartialConflictSession { SessionId = Guid.NewGuid().ToString("N"), WorkspaceRoot = workspace.RootPath, Ready = true } };
@@ -163,11 +168,14 @@ namespace TortoiseSCM
                 string approved = Path.Combine(Path.GetDirectoryName(files.BasePath), "approved.bin");
                 RejectReparsePath(approved); File.Copy(result, approved, true); string approvedHash = MergeHash(approved);
                 await ValidatePartialBeforeApplyAsync(state, conflict, workspace, cancellationToken).ConfigureAwait(false);
+                await ValidatePartialLoadedDirectoriesAtAsync(workspace, conflict.IncomingChangeset, cancellationToken).ConfigureAwait(false);
                 state.Session.Applying = true; state.Session.Ready = false; state.ApplyingPath = repositoryPath; SavePartialState(state);
                 // Persist originals and an approved snapshot before the first native mutation.
                 // No broad update, workspace conversion, client config edit or implicit checkin.
                 try
                 {
+                    if (MergeHash(local) != state.LocalHashes[repositoryPath] || MergeHash(approved) != approvedHash)
+                        throw new IOException("The local or reviewed file changed during preflight. Its current bytes were preserved; no undo was performed.");
                     RequireSuccess(await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "partial", "undo", local }), cancellationToken).ConfigureAwait(false));
                     if (MergeHash(local) != MergeHash(files.BasePath)) throw new InvalidOperationException("Partial undo did not restore the pinned base bytes.");
                     RequireSuccess(await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "partial", "update", local,

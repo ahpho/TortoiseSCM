@@ -316,12 +316,32 @@ namespace TortoiseSCM
                 Require(accept.Enabled && choice.Rename == null && !rename.Enabled, "Taking incoming cannot accidentally retain the rename argument");
                 choice.Close();
             }
-            using (var choice = new PartialStructureChoiceForm("本地重命名与传入修改", new[] { "keep-local", "take-incoming", "rename" }, "local-move"))
+            using (var choice = new PartialStructureChoiceForm("本地：/美术/人物/local.txt\r\n原始：/设计/original.txt\r\n服务器修改了原文件。请核对文件的新位置和内容来源。", new[] { "keep-local", "take-incoming", "rename" }, "local-move"))
             {
                 Prepare(choice); ((ComboBox)Field(choice, "choices")).SelectedIndex = 2;
                 Require(!choice.ChoiceText.Contains("保留双方") && ((Label)Field(choice, "explanation")).Text.Contains("原路径不再保留"), "Local move rename explains relocation without promising two copies");
+                Require(((Label)Field(choice, "explanation")).Text.Contains("/目录/文件名") && ((Label)Field(choice, "explanation")).Text.Contains("本地移动后的目录"), "Cross-directory rename explains repository paths and relative filename base");
+                ((TextBox)Field(choice, "rename")).Text = "/美术/已审核/人物.txt";
+                Require(choice.Rename == "/美术/已审核/人物.txt" && ((Button)choice.AcceptButton).Enabled, "Cross-directory choice passes the reviewed repository path unchanged");
+                Save(choice, Path.Combine(artifacts, "partial-cross-directory-choice.png"));
+                choice.Size = choice.MinimumSize; Application.DoEvents();
+                var explanation = (Label)Field(choice, "explanation");
+                Require(explanation.ClientSize.Height >= TextRenderer.MeasureText(explanation.Text, explanation.Font, new Size(explanation.ClientSize.Width, Int32.MaxValue), TextFormatFlags.WordBreak).Height,
+                    "Cross-directory explanation fits at minimum dialog size");
+                Save(choice, Path.Combine(artifacts, "partial-cross-directory-choice-minimum.png"));
                 ((ComboBox)Field(choice, "choices")).SelectedIndex = 0;
                 Require(((Label)Field(choice, "explanation")).Text.Contains("采用备份中的本地内容"), "Local move decision explains content edits replacing incoming bytes");
+                choice.Close();
+            }
+            using (var choice = new PartialStructureChoiceForm("本地：/设计/人物.txt\r\n服务器新位置：/美术/人物.txt\r\n服务器移动了文件，本地内容也有修改。", new[] { "take-incoming", "keep-local" }, "incoming-move"))
+            {
+                Prepare(choice); var choices = (ComboBox)Field(choice, "choices");
+                Require(choices.SelectedIndex == -1 && choices.Items.Count == 2 && !((Button)choice.AcceptButton).Enabled, "Incoming move requires an explicit supported content choice");
+                choices.SelectedIndex = 1;
+                Require(choice.Rename == null && !((TextBox)Field(choice, "rename")).Enabled && ((Label)Field(choice, "explanation")).Text.Contains("在新位置采用备份中的本地内容"), "Incoming move keep-local explains server destination and local content");
+                Save(choice, Path.Combine(artifacts, "partial-incoming-move-choice.png"));
+                choice.Size = choice.MinimumSize; Application.DoEvents();
+                Save(choice, Path.Combine(artifacts, "partial-incoming-move-choice-minimum.png"));
                 choice.Close();
             }
             using (var directory = new DirectoryConflictForm("两个分支分别新增同名文件，请核对双方路径后选择。", "/中文 空格/collision.txt", "/中文 空格/collision.txt", new[] { "src", "dst", "rename", "unknown", "src" }))

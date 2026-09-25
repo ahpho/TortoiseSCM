@@ -56,8 +56,8 @@ internal static class PartialStructureIntegrationTests
         string selector = File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.selector")), load = File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.fullycheckeddirectories"));
         var config = new PlasticClientConfig { CmPath = cm, SettingsPath = Path.Combine(run, "structure-settings.xml") }; var client = new PlasticClient(config);
         var preview = await client.PreviewPartialStructureAsync(partial, Token);
-        Assert(preview.Count == 13 && preview.Count(item => item.ResolutionOptions.Count > 0) == 12, "Preview identifies all supported file structures and an explicitly unsupported incoming move");
-        Assert(preview.Single(item => item.Kind == "incoming-move").ResolutionOptions.Count == 0, "Incoming move is refused without selecting a parent directory");
+        Assert(preview.Count == 13 && preview.Count(item => item.ResolutionOptions.Count > 0) == 13, "Preview identifies all supported file structures including an incoming file move");
+        Assert(preview.Single(item => item.Kind == "incoming-move").ResolutionOptions.SequenceEqual(new[] { "take-incoming", "keep-local" }), "Incoming file move offers explicit content decisions without directory updates");
         await Reject(async () => { await client.RunAsync(Request(PlasticCommand.Checkin, Path.Combine(partial, "delete-take.txt")), Token); }, "Incoming deletion cannot bypass structural decisions through checkin");
         var preparation = await client.PreparePartialStructureAsync(partial, "/add-take.txt", Token);
         Assert(preparation.Ready && File.ReadAllText(Path.Combine(preparation.RecoveryDirectory, "local.bin")) == "local add-take", "Preparation persists original local bytes before any mutation");

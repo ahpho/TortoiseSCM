@@ -132,9 +132,17 @@ try {
     Assert ([IO.File]::ReadAllText($local) -ceq "incoming survives local deletion`n") 'Take-incoming restores exact server bytes after local deletion'
     Finish-Session
 
-    # A pure local move keeps its reviewed destination and incorporates server content.
+    # A pure cross-directory local move keeps its destination and incorporates server content.
     $name=$prefix+'-move-source.txt'; Publish-Base $name "move base`n"
-    $movedName=$prefix+'-move-destination.txt'; $item='/'+$movedName
+    $destinationDirectory=$prefix+'-destination'
+    $producerDirectory=Join-Path $m.producer $destinationDirectory
+    New-Item -ItemType Directory -Path $producerDirectory | Out-Null
+    Write-New (Join-Path $producerDirectory 'untouched.txt') "destination sibling`n"
+    Native $m.producer @('add',$producerDirectory,'-R') | Out-Null
+    Native $m.producer @('checkin',$producerDirectory,'-c=Loaded destination directory for cross-directory CLI move') | Out-Null
+    Native $m.partial @('partial','configure',('+/'+$destinationDirectory)) | Out-Null
+    $loadRules=[IO.File]::ReadAllText((Join-Path $m.partial '.plastic\plastic.fullycheckeddirectories'))
+    $movedName=$destinationDirectory+'/move-destination.txt'; $item='/'+$movedName
     $old=Join-Path $m.partial $name; $local=Join-Path $m.partial $movedName; $producer=Join-Path $m.producer $name
     Native $m.partial @('partial','move',$old,$local) | Out-Null
     [IO.File]::WriteAllText($producer,"incoming content follows reviewed local move`n",$utf8)
@@ -145,6 +153,46 @@ try {
     Invoke-TestCli 'checkin' $local @('--yes','--comment','publish reviewed local move with incoming content') | Out-Null
     Finish-Session; Native $m.consumer @('update',$m.consumer,'--dontmerge') | Out-Null
     Assert (-not (Test-Path -LiteralPath (Join-Path $m.consumer $name)) -and [IO.File]::ReadAllText((Join-Path $m.consumer $movedName)) -ceq "incoming content follows reviewed local move`n") 'Consumer receives reviewed move and exact incoming content'
+    Assert ([IO.File]::ReadAllText((Join-Path $m.partial ($destinationDirectory+'/untouched.txt'))) -ceq "destination sibling`n" -and [IO.File]::ReadAllText((Join-Path $m.partial '.plastic\plastic.fullycheckeddirectories')) -ceq $loadRules) 'Cross-directory resolution preserves sibling bytes and load configuration'
+
+    # Another cross-directory move explicitly chooses a repository path for its final name.
+    $name=$prefix+'-rename-source.txt'; Publish-Base $name "rename base`n"
+    $movedName=$destinationDirectory+'/rename-destination.txt'; $item='/'+$movedName
+    $old=Join-Path $m.partial $name; $local=Join-Path $m.partial $movedName
+    Native $m.partial @('partial','move',$old,$local) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $m.producer $name),"incoming renamed content`n",$utf8)
+    Native $m.producer @('checkin',(Join-Path $m.producer $name),'-c=Incoming content for explicit cross-directory rename') | Out-Null
+    Preview-One $item 'rename' | Out-Null; Prepare-One $item | Out-Null
+    $before=Snapshot
+    Invoke-TestCli 'partial-structure-resolve' $m.partial @('--resolution','rename','--rename','/missing-directory/file.txt','--yes') 2 | Out-Null
+    Assert ((Snapshot) -ceq $before -and (Invoke-TestCli 'partial-structure-status' $m.partial).data.ready) 'Unloaded or missing rename parent is rejected before changing files'
+    $finalName=$destinationDirectory+'/reviewed-name.txt'; $finalPath=Join-Path $m.partial $finalName
+    Invoke-TestCli 'partial-structure-resolve' $m.partial @('--resolution','rename','--rename',('/'+$finalName),'--yes') | Out-Null
+    Assert (-not (Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $local) -and [IO.File]::ReadAllText($finalPath) -ceq "incoming renamed content`n") 'Repository-path rename keeps the reviewed cross-directory destination and incoming bytes'
+    Finish-Session
+    Invoke-TestCli 'checkin' $finalPath @('--yes','--comment','publish reviewed cross-directory name') | Out-Null
+    Native $m.consumer @('update',$m.consumer,'--dontmerge') | Out-Null
+    Assert (-not (Test-Path -LiteralPath (Join-Path $m.consumer $name)) -and [IO.File]::ReadAllText((Join-Path $m.consumer $finalName)) -ceq "incoming renamed content`n") 'Consumer receives explicit cross-directory rename through the public CLI'
+    # Incoming same-directory and cross-directory moves use exact old/new file paths.
+    foreach ($decision in @('keep-local','take-incoming')) {
+        $name=$prefix+'-incoming-'+$decision+'.txt'; Publish-Base $name "incoming move base`n"
+        $newName=if ($decision -eq 'keep-local') { $prefix+'-incoming-moved.txt' } else { $destinationDirectory+'/incoming-moved.txt' }
+        $old=Join-Path $m.partial $name; $newLocal=Join-Path $m.partial $newName
+        [IO.File]::WriteAllText($old,"reviewed local incoming move`n",$utf8)
+        Native $m.producer @('move',(Join-Path $m.producer $name),(Join-Path $m.producer $newName)) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $m.producer $newName),"server moved content`n",$utf8)
+        Native $m.producer @('checkin',(Join-Path $m.producer $newName),'-c=Server file move for public CLI') | Out-Null
+        Preview-One ('/'+$name) $decision | Out-Null
+        $prepared=Prepare-One ('/'+$name)
+        Invoke-TestCli 'partial-structure-resolve' $m.partial @('--resolution',$decision,'--yes') | Out-Null
+        $expected=if ($decision -eq 'keep-local') { "reviewed local incoming move`n" } else { "server moved content`n" }
+        Assert (-not (Test-Path -LiteralPath $old) -and [IO.File]::ReadAllText($newLocal) -ceq $expected) "Incoming move $decision follows the server path with reviewed bytes"
+        Assert ([IO.File]::ReadAllText((Join-Path $prepared.data.recoveryDirectory 'local.bin')) -ceq "reviewed local incoming move`n") 'Incoming move retains original local backup after success'
+        Finish-Session
+        if ($decision -eq 'keep-local') { Invoke-TestCli 'checkin' $newLocal @('--yes','--comment','publish local content at incoming move destination') | Out-Null }
+        Native $m.consumer @('update',$m.consumer,'--dontmerge') | Out-Null
+        Assert (-not (Test-Path -LiteralPath (Join-Path $m.consumer $name)) -and [IO.File]::ReadAllText((Join-Path $m.consumer $newName)) -ceq $expected) "Consumer receives incoming move $decision outcome"
+    }
     Assert ([IO.File]::ReadAllText($unrelated) -ceq "unrelated private bytes`n" -and [IO.File]::ReadAllText((Join-Path $m.partial '.plastic\plastic.selector')) -ceq $selector -and (Invoke-TestCli 'status' $m.partial).data.workspace.isPartial) 'Structure roundtrip preserves unrelated bytes selector and Partial mode'
     $success=$true; Write-Output "PASS: $script:assertions real Partial structure CLI assertions"
 } finally {
