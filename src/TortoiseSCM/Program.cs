@@ -83,7 +83,12 @@ namespace TortoiseSCM
                     default: throw new ArgumentException("未知参数：" + option);
                 }
             }
-            string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "gluon", "settings" };
+            // Keep these names in sync with the verbs exposed by the native
+            // Explorer extension.  File operations are deliberately routed
+            // through MainForm so they retain the same confirmation and
+            // workspace safety checks as the in-app menus.
+            string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "gluon", "settings",
+                "move", "remove", "ignore", "locks", "unlock", "merge", "export", "rollback", "recover" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             return result;
         }

@@ -3,6 +3,11 @@
 101 ICON "..\\Resources\\Icons\\Win10\\NormalIcon.ico"
 102 ICON "..\\Resources\\Icons\\Win10\\ModifiedIcon.ico"
 103 ICON "..\\Resources\\Icons\\Win10\\ConflictIcon.ico"
+104 ICON "..\\Resources\\Icons\\Win10\\AddedIcon.ico"
+105 ICON "..\\Resources\\Icons\\Win10\\DeletedIcon.ico"
+106 ICON "..\\Resources\\Icons\\Win10\\IgnoredIcon.ico"
+107 ICON "..\\Resources\\Icons\\Win10\\LockedIcon.ico"
+108 ICON "..\\Resources\\Icons\\Win10\\UnversionedIcon.ico"
 1 VERSIONINFO
  FILEVERSION 0,1,0,0
  PRODUCTVERSION 0,1,0,0

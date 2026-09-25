@@ -6,7 +6,8 @@ TortoiseSCM — Plastic SCM / Unity Version Control for Windows
 通过已安装的 `cm.exe` 操作工作区。原有 `TortoiseGit.sln` 是保留的上游工程，仍然是 Git 客户端。
 
 当前提供：工作区识别、目录范围待定更改与勾选签入、右键历史/丢弃修改、添加、签出、更新、撤销、
-差异、分页提交历史与文件明细、历史比较/导出、文件/目录恢复、整仓待提交回滚、快照切换、删除/移动/忽略，以及 Gluon 入口。
+差异、分页提交历史与文件明细、历史比较/导出、文件/目录恢复、整仓待提交回滚、快照切换、删除/移动/忽略，
+以及 Gluon 入口。Explorer 右键还提供移动、删除、忽略、锁管理、合并和历史恢复/导出等入口，均复用桌面窗口的安全确认。
 `TortoiseSCM.exe --cli` 提供与 GUI 共用后端的无界面模式，支持 JSON 输出及自动化测试。
 支持外部 diff/merge 配置、Standard 工作区文件冲突处理、锁管理，以及独立后台缓存驱动的 Explorer 状态图标。
 提供带校验清单的 Windows x64 安装 ZIP 和 Windows CI；此版本尚未迁移 TortoiseGit 的全部对话框。

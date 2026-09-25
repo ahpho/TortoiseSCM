@@ -12,7 +12,9 @@ constexpr uint32_t MaxBytes = 32u * 1024u * 1024u;
 constexpr uint32_t MaxEntries = 200000;
 constexpr uint32_t MaxPathChars = 32767;
 constexpr uint64_t Second = 10000000;
-enum State : uint32_t { None = 0, Normal = 1, Modified = 2, Conflict = 3 };
+// Values are shared with PlasticOverlayState in the managed cache producer
+// and are also the icon resource indices in PlasticShell.rc.
+enum State : uint32_t { None = 0, Normal = 1, Modified = 2, Conflict = 3, Added = 4, Deleted = 5, Ignored = 6, Locked = 7, Unversioned = 8 };
 
 struct OrdinalLess
 {
@@ -77,7 +79,7 @@ inline bool Parse(const std::vector<unsigned char>& bytes, uint64_t now, Entries
     {
         if (bytes.size() - offset < 8) return false;
         const uint32_t state = read32(), chars = read32();
-        if (state < Normal || state > Conflict || chars == 0 || chars > MaxPathChars || chars > (bytes.size() - offset) / sizeof(wchar_t)) return false;
+        if (state < Normal || state > Unversioned || chars == 0 || chars > MaxPathChars || chars > (bytes.size() - offset) / sizeof(wchar_t)) return false;
         std::wstring path(chars, L'\0');
         std::memcpy(path.data(), bytes.data() + offset, chars * sizeof(wchar_t)); offset += chars * sizeof(wchar_t);
         if (!ValidPath(path) || !parsed.emplace(std::move(path), static_cast<State>(state)).second) return false;

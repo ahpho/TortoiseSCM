@@ -20,7 +20,12 @@ constexpr CLSID ShellClsid = {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb
 constexpr CLSID OverlayClsids[] = {
     {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd3}},
     {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd4}},
-    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd5}}
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd5}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd6}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd7}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd8}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd9}},
+    {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xda}}
 };
 HINSTANCE moduleInstance;
 std::atomic<long> moduleReferences{0};
@@ -30,7 +35,18 @@ constexpr Command commands[] = {
     {L"update", L"Update...", L"更新..."}, {L"add", L"Add...", L"添加..."},
     {L"checkout", L"Check out...", L"签出..."}, {L"undo", L"Undo changes...", L"撤销更改..."},
     {L"diff", L"Diff...", L"比较差异..."}, {L"history", L"History...", L"历史记录..."},
-    {L"gluon", L"Open Gluon", L"打开 Gluon"}, {L"settings", L"Settings...", L"设置..."}
+    {L"gluon", L"Open Gluon", L"打开 Gluon"}, {L"settings", L"Settings...", L"设置..."},
+    // Keep the original ten ordinals stable; append new verbs for existing
+    // GUI capabilities so old Explorer registrations and scripts remain valid.
+    {L"move", L"Move / rename...", L"\u79fb\u52a8 / \u91cd\u547d\u540d..."},
+    {L"remove", L"Remove controlled item...", L"\u5220\u9664\u53d7\u63a7\u9879..."},
+    {L"ignore", L"Add to ignore list", L"\u52a0\u5165\u5ffd\u7565\u5217\u8868"},
+    {L"locks", L"Locks...", L"\u9501\u7ba1\u7406..."},
+    {L"unlock", L"Unlock...", L"\u91ca\u653e\u9501..."},
+    {L"merge", L"Merge changesets...", L"\u5408\u5e76\u53d8\u66f4\u96c6..."},
+    {L"export", L"Export historical version...", L"\u5bfc\u51fa\u5386\u53f2\u7248\u672c..."},
+    {L"rollback", L"Rollback to historical version...", L"\u56de\u6eda\u5230\u5386\u53f2\u7248\u672c..."},
+    {L"recover", L"Recover historical version...", L"\u6062\u590d\u5386\u53f2\u7248\u672c..."}
 };
 
 const wchar_t* Label(const Command& command)
@@ -229,7 +245,12 @@ public:
             if (!submenu) return E_OUTOFMEMORY;
             for (size_t index = 0; index < ARRAYSIZE(commands); ++index)
             {
-                if ((index == 6 && (paths.size() != 1 || (GetFileAttributesW(paths.front().c_str()) & FILE_ATTRIBUTE_DIRECTORY))) || (index == 7 && paths.size() != 1)) continue;
+                // Path-specific dialogs are intentionally limited to one item.
+                // This keeps move/remove/ignore and history actions safe for
+                // Explorer multi-selection while retaining the full GUI flow.
+                const bool singlePathOnly = index == 6 || index == 7 || index >= 10;
+                if ((index == 6 && (paths.size() != 1 || (GetFileAttributesW(paths.front().c_str()) & FILE_ATTRIBUTE_DIRECTORY))) ||
+                    (singlePathOnly && paths.size() != 1)) continue;
                 if (visibleCommands.size() > last - first) break;
                 if (!AppendMenuW(submenu, MF_STRING, first + visibleCommands.size(), Label(commands[index]))) { DestroyMenu(submenu); return E_FAIL; }
                 visibleCommands.push_back(index);
@@ -317,7 +338,20 @@ public:
     HRESULT STDMETHODCALLTYPE GetPriority(int* priority) override
     {
         if (!priority) return E_POINTER;
-        *priority = state == PlasticOverlay::Conflict ? 0 : state == PlasticOverlay::Modified ? 1 : 2;
+        // Explorer asks overlays independently; lower numbers win when more
+        // than one state applies to the same path. Conflicts must always be
+        // visible, while normal inventory remains the least specific state.
+        switch (state)
+        {
+            case PlasticOverlay::Conflict: *priority = 0; break;
+            case PlasticOverlay::Added:
+            case PlasticOverlay::Deleted:
+            case PlasticOverlay::Modified: *priority = 1; break;
+            case PlasticOverlay::Locked: *priority = 2; break;
+            case PlasticOverlay::Ignored:
+            case PlasticOverlay::Unversioned: *priority = 3; break;
+            default: *priority = 4; break;
+        }
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetOverlayInfo(LPWSTR file, int capacity, int* index, DWORD* flags) override
@@ -327,7 +361,7 @@ public:
         *index = 0; *flags = 0;
         const DWORD length = GetModuleFileNameW(moduleInstance, file, static_cast<DWORD>(capacity));
         if (!length || length >= static_cast<DWORD>(capacity)) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
-        // Resource order: context-menu icon 1, then overlays 101, 102 and 103.
+        // Resource order: context-menu icon 1, then overlay resources 101-108.
         *index = static_cast<int>(state);
         *flags = ISIOI_ICONFILE | ISIOI_ICONINDEX;
         return S_OK;

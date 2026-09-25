@@ -62,7 +62,7 @@ internal static class OverlayTests
         Reject(() => OverlaySnapshot.Decode(malformed, now), "Excessive count rejected");
         malformed = (byte[])bytes.Clone(); Array.Copy(BitConverter.GetBytes((uint)32768), 0, malformed, 28, 4);
         Reject(() => OverlaySnapshot.Decode(malformed, now), "Excessive path length rejected");
-        malformed = (byte[])bytes.Clone(); Array.Copy(BitConverter.GetBytes((uint)4), 0, malformed, 24, 4);
+        malformed = (byte[])bytes.Clone(); Array.Copy(BitConverter.GetBytes((uint)9), 0, malformed, 24, 4);
         Reject(() => OverlaySnapshot.Decode(malformed, now), "Unknown state rejected");
         Reject(() => OverlaySnapshot.Decode(bytes, now.AddSeconds(121)), "120 second native expiry enforced");
         Reject(() => OverlaySnapshot.Decode(bytes, now.AddSeconds(-6)), "Future timestamp rejected");
@@ -93,14 +93,14 @@ internal static class OverlayTests
         Assert(states[moved] == PlasticOverlayState.Modified && states[old] == PlasticOverlayState.Modified &&
             states[Path.GetDirectoryName(old)] == PlasticOverlayState.Modified && states[Path.GetDirectoryName(moved)] == PlasticOverlayState.Modified,
             "Move marks both source and destination ancestors");
-        Assert(!states.ContainsKey(privatePath) && !states.Keys.Any(path => path == ignored || path.StartsWith(ignored + "\\", StringComparison.OrdinalIgnoreCase)),
-            "Private and ignored replacements erase stale controlled inventory");
+        Assert(states[privatePath] == PlasticOverlayState.Unversioned && states[ignored] == PlasticOverlayState.Ignored,
+            "Private and ignored replacements retain distinct overlay states");
         var outside = PlasticClient.BuildOverlayStates(root, new[] { unrelated }, new[] { new PlasticStatusItem { Path = unrelated, StatusCode = "CH" } }, new[] { unrelated });
         Assert(outside.Count == 0, "Paths outside root never enter snapshot");
         var deleted = PlasticClient.BuildOverlayStates(root, new string[0], new[] { new PlasticStatusItem { Path = file, StatusCode = "DE" } }, new string[0]);
-        Assert(deleted[root] == PlasticOverlayState.Modified && deleted[folder] == PlasticOverlayState.Modified, "Deleted child marks existing ancestors even when file absent");
+        Assert(deleted[root] == PlasticOverlayState.Deleted && deleted[folder] == PlasticOverlayState.Deleted, "Deleted child marks existing ancestors even when file absent");
         var priority = PlasticClient.BuildOverlayStates(root, new[] { root, folder, file }, new[] { new PlasticStatusItem { Path = file, StatusCode = "CO" } }, new[] { root });
-        Assert(priority[root] == PlasticOverlayState.Conflict && priority[file] == PlasticOverlayState.Modified, "Unknown merge marks root conflict without inventing child conflict");
+        Assert(priority[root] == PlasticOverlayState.Conflict && priority[file] == PlasticOverlayState.Locked, "Unknown merge marks root conflict without inventing child conflict");
     }
 
     private static void Storage(string temporary)

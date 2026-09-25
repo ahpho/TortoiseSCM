@@ -20,7 +20,12 @@ function Test-OwnedServer([Microsoft.Win32.RegistryKey]$ClassesKey, [string]$Id)
 $overlays = @(
     @{ Name = 'TortoiseSCM Normal'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D3}' },
     @{ Name = 'TortoiseSCM Modified'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D4}' },
-    @{ Name = 'TortoiseSCM Conflict'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D5}' }
+    @{ Name = 'TortoiseSCM Conflict'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D5}' },
+    @{ Name = 'TortoiseSCM Added'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D6}' },
+    @{ Name = 'TortoiseSCM Deleted'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D7}' },
+    @{ Name = 'TortoiseSCM Ignored'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D8}' },
+    @{ Name = 'TortoiseSCM Locked'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D9}' },
+    @{ Name = 'TortoiseSCM Unversioned'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0DA}' }
 )
 function Remove-OverlayClasses([Microsoft.Win32.RegistryKey]$ClassesKey) {
     foreach ($overlay in $overlays) {

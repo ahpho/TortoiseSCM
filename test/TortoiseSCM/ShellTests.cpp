@@ -70,7 +70,10 @@ void OverlayTests(const std::filesystem::path& directory)
     require(!PlasticOverlay::Parse(bad, now, parsed, generated), "excessive path length rejected");
     bad.assign(PlasticOverlay::MaxBytes + 1, 0);
     require(!PlasticOverlay::Parse(bad, now, parsed, generated), "oversized snapshot rejected before parsing");
-    require(!PlasticOverlay::Parse(Snapshot({{path, 4}}, now), now, parsed, generated), "unknown overlay state rejected");
+    require(PlasticOverlay::Parse(Snapshot({{path + L"-added", 4}, {path + L"-deleted", 5}, {path + L"-ignored", 6},
+        {path + L"-locked", 7}, {path + L"-unversioned", 8}}, now), now, parsed, generated) && parsed.size() == 5,
+        "extended overlay states accepted");
+    require(!PlasticOverlay::Parse(Snapshot({{path, 9}}, now), now, parsed, generated), "unknown overlay state rejected");
     require(!PlasticOverlay::Parse(Snapshot({{path, 1}, {L"d:\\FIXTURE\\中文 FILE.TXT", 3}}, now), now, parsed, generated), "duplicate case-insensitive path rejected");
     require(!PlasticOverlay::Parse(Snapshot({{path, 1}}, now - 121 * PlasticOverlay::Second), now, parsed, generated), "expired snapshot rejected");
     require(!PlasticOverlay::Parse(Snapshot({{path, 1}}, now + 6 * PlasticOverlay::Second), now, parsed, generated), "future timestamp rejected");
@@ -104,7 +107,8 @@ void OverlayTests(const std::filesystem::path& directory)
         require(SUCCEEDED(DllGetClassObject(OverlayClsids[i], IID_IClassFactory, reinterpret_cast<void**>(&factory))), "overlay factory available");
         require(SUCCEEDED(factory->CreateInstance(nullptr, IID_IShellIconOverlayIdentifier, reinterpret_cast<void**>(&overlay))), "factory creates overlay interface");
         require(overlay->IsMemberOf(nullptr, 0) == E_INVALIDARG && overlay->GetPriority(nullptr) == E_POINTER, "overlay validates COM pointers");
-        int priority = -1; require(SUCCEEDED(overlay->GetPriority(&priority)) && priority == 2 - static_cast<int>(i), "own overlay conflict priority first");
+        const int expectedPriority[] = {4, 1, 0, 1, 1, 3, 2, 3};
+        int priority = -1; require(SUCCEEDED(overlay->GetPriority(&priority)) && priority == expectedPriority[i], "overlay priority ordering");
         wchar_t file[32768]{}; int index = -1; DWORD flags = 0;
         require(SUCCEEDED(overlay->GetOverlayInfo(file, ARRAYSIZE(file), &index, &flags)) && index == static_cast<int>(i + 1) && flags == (ISIOI_ICONFILE | ISIOI_ICONINDEX), "overlay reports stable resource index");
         require(overlay->GetOverlayInfo(file, 1, &index, &flags) == HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER), "short icon buffer rejected");
@@ -156,8 +160,8 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     Selection file({(first / L"child/file.txt").native()});
     require(SUCCEEDED(initialize->Initialize(nullptr, &file, nullptr)), "registered file initialization");
     HMENU menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 10, "registered file menu has ten commands");
-    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 10, "registered submenu structure");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 19, "registered file menu exposes all single-item commands");
+    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 19, "registered submenu structure");
     require(GetMenuItemID(GetSubMenu(menu, 0), 0) == 400 && GetMenuItemID(GetSubMenu(menu, 0), 9) == 409, "registered menu command IDs");
     wchar_t verb[80]{};
     require(SUCCEEDED(context->GetCommandString(6, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
@@ -170,7 +174,7 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     Selection directory({first.native()});
     require(SUCCEEDED(initialize->Initialize(nullptr, &directory, nullptr)), "registered directory initialization");
     menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 9, "registered directory menu excludes diff");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 18, "registered directory menu excludes diff");
     require(SUCCEEDED(context->GetCommandString(6, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.history") == 0, "registered directory command mapping");
     DestroyMenu(menu);
@@ -181,7 +185,7 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     CoTaskMemFree(pidl);
     require(SUCCEEDED(background), "registered directory background initialization");
     menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 9, "registered background menu");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 18, "registered background menu");
     DestroyMenu(menu);
 
     Selection multiple({(first / L"child/file.txt").native(), (first / L"child/second.txt").native()});
@@ -205,12 +209,12 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 4 && wcscmp(argv[1], L"--overlay-probe") == 0)
     {
         const int expected = _wtoi(argv[3]);
-        if (expected < 0 || expected > 3) return 2;
+        if (expected < 0 || expected > 8) return 2;
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         RegisteredOverlayProbe(argv[2], expected); CoUninitialize(); return 0;
     }
     const bool registered = argc == 2 && wcscmp(argv[1], L"--registered") == 0;
-    if (argc > 1 && !registered) { std::cerr << "Usage: ShellTests.exe [--registered | --overlay-probe <path> <state 0..3>]\n"; return 2; }
+    if (argc > 1 && !registered) { std::cerr << "Usage: ShellTests.exe [--registered | --overlay-probe <path> <state 0..8>]\n"; return 2; }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     auto base = std::filesystem::temp_directory_path() / (L"TortoiseSCMShellTest-" + std::to_wstring(GetCurrentProcessId()));
     std::filesystem::create_directories(base / L"first/.plastic");
@@ -253,9 +257,11 @@ int wmain(int argc, wchar_t** argv) {
     Selection one({(first / L"child/file.txt").native()});
     require(SUCCEEDED(shell->Initialize(nullptr, &one, nullptr)), "single file init");
     auto menu = CreatePopupMenu();
-    require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 10, "single file ten commands");
+    require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 19, "single file exposes all commands");
     wchar_t verb[80]{};
     require(SUCCEEDED(shell->GetCommandString(6, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.diff") == 0, "diff canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(10, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.move") == 0, "move canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(18, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.recover") == 0, "recover canonical verb");
     DestroyMenu(menu);
     Selection multi({(first / L"child/file.txt").native(), (first / L"child/second.txt").native()});
     shell->Initialize(nullptr, &multi, nullptr); menu = CreatePopupMenu();
@@ -264,7 +270,7 @@ int wmain(int argc, wchar_t** argv) {
     require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL))==0, "cross workspace excluded"); DestroyMenu(menu);
     PIDLIST_ABSOLUTE pidl{}; SHParseDisplayName(first.c_str(),nullptr,&pidl,0,nullptr);
     shell->Initialize(pidl,nullptr,nullptr); CoTaskMemFree(pidl); menu=CreatePopupMenu();
-    require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL))==9, "directory background menu"); DestroyMenu(menu);
+    require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL))==18, "directory background menu"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_DEFAULTONLY))==0, "default-only query ignored"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,102,CMF_NORMAL))==3, "command id limit respected"); DestroyMenu(menu);
     require(DllCanUnloadNow()==S_FALSE,"COM objects keep DLL loaded"); shell->Release();

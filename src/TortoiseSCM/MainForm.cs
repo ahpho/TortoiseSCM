@@ -308,6 +308,30 @@ namespace TortoiseSCM
                 else if (launch.Command == "diff") await ExecuteAsync(PlasticCommand.Diff);
                 else if (launch.Command == "gluon") await ExecuteAsync(PlasticCommand.Gluon);
                 else if (launch.Command == "checkin") comment.Focus();
+                else if (launch.Command == "move" || launch.Command == "remove" || launch.Command == "ignore")
+                    await ExecuteFileOperationAsync(launch.Command, new List<string>(launch.Paths));
+                else if (launch.Command == "locks" || launch.Command == "unlock")
+                {
+                    // Unlocking is intentionally performed from the same lock
+                    // dialog as the in-app menu; the dialog rechecks ownership
+                    // immediately before issuing cm lock unlock.
+                    using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+                    await RefreshAsync();
+                }
+                else if (launch.Command == "merge")
+                {
+                    using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+                    await RefreshAsync();
+                }
+                else if (launch.Command == "export" || launch.Command == "rollback" || launch.Command == "recover")
+                {
+                    // Historical export and restore share the bounded history
+                    // surface.  The user picks the changeset and file there,
+                    // preserving the same safety checks as the normal menu.
+                    if (launch.Paths.Count != 1) throw new InvalidOperationException("历史操作需要一个文件或目录范围。");
+                    using (var history = new HistoryForm(client, launch.Paths[0], workspace.RootPath)) history.ShowDialog(this);
+                    await RefreshAsync();
+                }
                 else if (launch.Command != "status")
                     status.Text = "请核对选择范围后点击“" + CommandName(ParseCommand(launch.Command)) + "”执行。";
             }

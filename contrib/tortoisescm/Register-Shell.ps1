@@ -17,7 +17,12 @@ $clsid = '{B1DA45F9-4CD4-4857-A591-96B06953A0D2}'
 $overlays = @(
     @{ Name = 'TortoiseSCM Normal'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D3}' },
     @{ Name = 'TortoiseSCM Modified'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D4}' },
-    @{ Name = 'TortoiseSCM Conflict'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D5}' }
+    @{ Name = 'TortoiseSCM Conflict'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D5}' },
+    @{ Name = 'TortoiseSCM Added'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D6}' },
+    @{ Name = 'TortoiseSCM Deleted'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D7}' },
+    @{ Name = 'TortoiseSCM Ignored'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D8}' },
+    @{ Name = 'TortoiseSCM Locked'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0D9}' },
+    @{ Name = 'TortoiseSCM Unversioned'; Id = '{B1DA45F9-4CD4-4857-A591-96B06953A0DA}' }
 )
 function Register-OverlayClasses([Microsoft.Win32.RegistryKey]$ClassesKey) {
     foreach ($overlay in $overlays) {
@@ -59,7 +64,7 @@ if ($EnableMachineOverlays) {
     $run = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
     try { $run.SetValue('TortoiseSCMCache', ('"' + $exe + '" --cache-worker')) } finally { $run.Dispose() }
     Start-Process -FilePath $exe -ArgumentList '--cache-worker' -WindowStyle Hidden
-    Write-Output 'Registered three machine overlay identifiers. Other handlers were not removed or reordered; Windows overlay slot limits may prevent display.'
+    Write-Output ('Registered ' + $overlays.Count + ' machine overlay identifiers. Other handlers were not removed or reordered; Windows overlay slot limits may prevent display.')
 } else {
     Write-Output 'Overlay COM classes registered for this user. To enable Explorer overlay discovery, rerun elevated with -EnableMachineOverlays.'
 }

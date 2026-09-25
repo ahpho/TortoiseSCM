@@ -59,7 +59,7 @@ namespace TortoiseSCM
 
         private static void ValidateEntry(string path, PlasticOverlayState state)
         {
-            if (state < PlasticOverlayState.Normal || state > PlasticOverlayState.Conflict || String.IsNullOrEmpty(path) || path.Length > 32767 ||
+            if (state < PlasticOverlayState.Normal || state > PlasticOverlayState.Unversioned || String.IsNullOrEmpty(path) || path.Length > 32767 ||
                 path.Length < 3 || !((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) || path[1] != ':' || path[2] != '\\' ||
                 path.Any(ch => ch < 32) || path.IndexOfAny(new[] { '/', '"', '<', '>', '|', '*', '?' }) >= 0 || path.IndexOf(':', 2) >= 0)
                 throw new InvalidDataException("Invalid overlay state or local path.");

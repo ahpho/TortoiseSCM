@@ -10,7 +10,19 @@ using System.Xml.Linq;
 
 namespace TortoiseSCM
 {
-    public enum PlasticOverlayState { Normal = 1, Modified = 2, Conflict = 3 }
+    // Numeric values are part of the native overlay cache wire format and
+    // correspond to the icon resource index in TortoiseSCMShell.dll.
+    public enum PlasticOverlayState
+    {
+        Normal = 1,
+        Modified = 2,
+        Conflict = 3,
+        Added = 4,
+        Deleted = 5,
+        Ignored = 6,
+        Locked = 7,
+        Unversioned = 8
+    }
 
     public sealed partial class PlasticClient
     {
@@ -70,14 +82,22 @@ namespace TortoiseSCM
             foreach (var item in pending)
             {
                 string code = (item.StatusCode ?? "").ToUpperInvariant();
-                if (code == "PR" || code == "IG" || code.Contains("PRIVATE") || code.Contains("IGNORED"))
+                PlasticOverlayState state;
+                switch (code)
                 {
-                    // A private replacement for an unloaded/removed item is not a normal controlled file.
-                    foreach (string path in result.Keys.Where(path => IsWithin(path, item.Path)).ToArray()) result.Remove(path);
-                    continue;
+                    case "AD": state = PlasticOverlayState.Added; break;
+                    case "DE": case "LD": state = PlasticOverlayState.Deleted; break;
+                    case "IG": case "IGNORED": state = PlasticOverlayState.Ignored; break;
+                    case "PR": case "PRIVATE": state = PlasticOverlayState.Unversioned; break;
+                    // Plastic's checkout state is the closest local signal for
+                    // a lock. Content changes are reported separately as CH;
+                    // keep the distinction visible in Explorer.
+                    case "CO": state = PlasticOverlayState.Locked; break;
+                    case "CH": case "MV": case "LM": state = PlasticOverlayState.Modified; break;
+                    default: state = PlasticOverlayState.Modified; break;
                 }
-                AddOverlayWithParents(result, root, item.Path, PlasticOverlayState.Modified);
-                if (!String.IsNullOrEmpty(item.OldPath)) AddOverlayWithParents(result, root, item.OldPath, PlasticOverlayState.Modified);
+                AddOverlayWithParents(result, root, item.Path, state);
+                if (!String.IsNullOrEmpty(item.OldPath)) AddOverlayWithParents(result, root, item.OldPath, state);
             }
             foreach (string path in conflicts) AddOverlayWithParents(result, root, path, PlasticOverlayState.Conflict);
             return result;
@@ -90,7 +110,7 @@ namespace TortoiseSCM
             while (IsWithin(path, root))
             {
                 PlasticOverlayState previous;
-                if (!states.TryGetValue(path, out previous) || previous < state) states[path] = state;
+                if (!states.TryGetValue(path, out previous) || OverlayRank(state) > OverlayRank(previous)) states[path] = state;
                 if (SamePath(path, root)) break;
                 path = Path.GetDirectoryName(path);
                 if (path == null) break;
@@ -99,5 +119,20 @@ namespace TortoiseSCM
 
         private static string OverlayCanonicalPath(string path)
         { path = Path.GetFullPath(path); return path.Length > 3 ? path.TrimEnd('\\') : path; }
+
+        private static int OverlayRank(PlasticOverlayState state)
+        {
+            switch (state)
+            {
+                case PlasticOverlayState.Conflict: return 100;
+                case PlasticOverlayState.Added:
+                case PlasticOverlayState.Deleted:
+                case PlasticOverlayState.Modified: return 80;
+                case PlasticOverlayState.Locked: return 60;
+                case PlasticOverlayState.Ignored:
+                case PlasticOverlayState.Unversioned: return 20;
+                default: return 0;
+            }
+        }
     }
 }
