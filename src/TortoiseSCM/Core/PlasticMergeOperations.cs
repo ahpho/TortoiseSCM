@@ -31,6 +31,17 @@ namespace TortoiseSCM
         public string Description { get; set; }
         public string SourcePath { get; set; }
         public string DestinationPath { get; set; }
+        public string SourceOperation { get; set; }
+        public string DestinationOperation { get; set; }
+        public string SourceOriginalPath { get; set; }
+        public string DestinationOriginalPath { get; set; }
+        public bool IsDirectory { get; set; }
+        public long ItemId { get; set; }
+        public bool Resolved { get; set; }
+        public string Resolution { get; set; }
+        public string Rename { get; set; }
+        public IList<string> ResolutionOptions { get { return Kind == "EVIL" ? new[] { "src", "dst", "rename" } :
+            new[] { "DIV_MV", "CHG_RM", "RM_CHG" }.Contains(Kind) ? new[] { "src", "dst" } : new string[0]; } }
     }
 
     public sealed class PlasticMergeOperation
@@ -65,6 +76,7 @@ namespace TortoiseSCM
         public string SessionId { get; set; }
         public PlasticMergePlan Plan { get; set; }
         public bool IsRollback { get; set; }
+        public bool AwaitingDirectoryResolution { get; set; }
     }
 
     public sealed class PlasticMergeConflictFiles
@@ -94,6 +106,10 @@ namespace TortoiseSCM
             var workspace = await MergeWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
+                ValidateDirectoryMergeOwner(workspace.RootPath);
+                var previousPlan = LoadMergeState(workspace.RootPath, false);
+                if (previousPlan != null && previousPlan.Session.AwaitingDirectoryResolution)
+                    throw new ArgumentException("A directory merge plan is already open. Continue or cancel it before starting another merge.");
                 var pending = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
                 if (pending.Count != 0) throw new ArgumentException("Begin merge requires a clean workspace. Commit or undo existing changes first; no merge was started.");
                 if (File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress")))
@@ -102,7 +118,7 @@ namespace TortoiseSCM
                 var plan = await PreviewMergeAsync(workspace.RootPath, sourceChangeset, cancellationToken).ConfigureAwait(false);
                 if (plan.AlreadyConnected) throw new ArgumentException("The source is already integrated; there is no merge to start.");
                 if (plan.DirectoryConflicts.Count != 0)
-                    throw new ArgumentException("This merge contains directory conflicts. Resolve those with the official Plastic client before using the file-conflict workflow. No workspace changes were made.");
+                    return await BeginDirectoryMergePlanAsync(workspace, plan, cancellationToken).ConfigureAwait(false);
                 foreach (var operation in plan.Operations)
                 {
                     string path = MergeLocalPath(workspace.RootPath, operation.Path);
@@ -144,6 +160,7 @@ namespace TortoiseSCM
             var workspace = await MergeWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
+                ValidateDirectoryMergeOwner(workspace.RootPath);
                 var state = LoadMergeState(workspace.RootPath, false);
                 if (state == null) return null;
                 if (await RetireCompletedMergeAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false)) return null;
@@ -151,6 +168,11 @@ namespace TortoiseSCM
                 // resolutions to a workspace the user switched or committed in the meantime.
                 await ValidateMergeSessionAsync(state, workspace, cancellationToken).ConfigureAwait(false);
                 if (state.Session.IsRollback) return state.Session;
+                if (state.Session.AwaitingDirectoryResolution)
+                {
+                    await RefreshDirectoryPlanAsync(state, workspace, cancellationToken).ConfigureAwait(false);
+                    return state.Session;
+                }
                 var current = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);
                 foreach (var conflict in state.Session.Plan.FileConflicts)
                     conflict.Resolved = !current.FileConflicts.Any(item => item.RepositoryPath == conflict.RepositoryPath);
@@ -264,6 +286,11 @@ namespace TortoiseSCM
                     throw new ArgumentException("The native rollback state changed. Inspect or undo it before checking in.");
                 return;
             }
+            if (state.Session.AwaitingDirectoryResolution)
+            {
+                await ValidateDirectoryPlanningWorkspaceAsync(state, workspace, cancellationToken).ConfigureAwait(false);
+                return;
+            }
             var current = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);
             if (current.DestinationChangeset != state.Session.Plan.DestinationChangeset)
                 throw new ArgumentException("The workspace revision changed since the merge began. Start a fresh merge preview.");
@@ -336,8 +363,8 @@ namespace TortoiseSCM
                     plan.FileConflicts.Add(new PlasticMergeConflict { RepositoryPath = fields[1], BaseChangeset = MergeNumber(fields[2]),
                         SourceChangeset = MergeNumber(fields[3]), DestinationChangeset = MergeNumber(fields[4]), ItemId = MergeNumber(fields[5]) });
                 }
-                else if (fields[0] == "DIR_CONFLICT" && fields.Length >= 12)
-                    plan.DirectoryConflicts.Add(new PlasticDirectoryConflict { Index = plan.DirectoryConflicts.Count + 1, Kind = fields[1], Description = fields[3], SourcePath = fields[9], DestinationPath = fields[11] });
+                else if (fields[0] == "DIR_CONFLICT" && fields.Length >= 12 && fields.Length <= 14)
+                    plan.DirectoryConflicts.Add(ParseDirectoryConflict(fields, plan.DirectoryConflicts.Count + 1));
                 else if (fields[0] == "APPLY" && (fields.Length == 3 || fields.Length == 4))
                 {
                     ValidateRepositoryFilePath(fields[2]); if (fields.Length == 4) ValidateRepositoryFilePath(fields[3]);
@@ -359,6 +386,7 @@ namespace TortoiseSCM
             internal bool Ready;
             internal bool Applying;
             internal string RollbackProgress;
+            internal string DirectoryFingerprint;
             internal readonly Dictionary<string, string> Hashes = new Dictionary<string, string>(StringComparer.Ordinal);
         }
 
@@ -406,6 +434,15 @@ namespace TortoiseSCM
                 BaseChangeset = MergeNumber((string)element.Element("Base")) };
             if (!SamePath(plan.WorkspaceRoot, root)) throw new InvalidDataException("Merge session belongs to another workspace.");
             var state = new MergeSessionState { Session = new PlasticMergeSession { SessionId = id, Plan = plan, IsRollback = (bool?)element.Element("IsRollback") ?? false }, Selector = (string)element.Element("Selector"), Ready = (bool)element.Element("Ready"), Applying = (bool?)element.Element("Applying") ?? false, RollbackProgress = (string)element.Element("RollbackProgress") ?? "" };
+            state.Session.AwaitingDirectoryResolution = (bool?)element.Element("AwaitingDirectoryResolution") ?? false;
+            state.DirectoryFingerprint = (string)element.Element("DirectoryFingerprint") ?? "";
+            foreach (var conflict in element.Elements("DirectoryConflict"))
+                plan.DirectoryConflicts.Add(new PlasticDirectoryConflict { Index = (int)conflict.Attribute("index"), Kind = (string)conflict.Attribute("kind"),
+                    ItemId = MergeNumber((string)conflict.Attribute("item")), Description = (string)conflict.Element("Description"),
+                    SourcePath = (string)conflict.Element("SourcePath"), DestinationPath = (string)conflict.Element("DestinationPath"),
+                    SourceOperation = (string)conflict.Element("SourceOperation"), DestinationOperation = (string)conflict.Element("DestinationOperation"),
+                    SourceOriginalPath = (string)conflict.Element("SourceOriginalPath") ?? "", DestinationOriginalPath = (string)conflict.Element("DestinationOriginalPath") ?? "",
+                    Resolved = (bool)conflict.Attribute("resolved"), IsDirectory = (bool?)conflict.Attribute("isDirectory") ?? false, Resolution = (string)conflict.Element("Resolution"), Rename = (string)conflict.Element("Rename") });
             foreach (var conflict in element.Elements("Conflict"))
             {
                 string path = (string)conflict.Attribute("path"); ValidateRepositoryFilePath(path);
@@ -425,6 +462,13 @@ namespace TortoiseSCM
                 new XElement("Source", plan.SourceChangeset), new XElement("Destination", plan.DestinationChangeset), new XElement("Base", plan.BaseChangeset),
                 new XElement("Selector", state.Selector), new XElement("Ready", state.Ready), new XElement("Applying", state.Applying));
             element.Add(new XElement("IsRollback", state.Session.IsRollback), new XElement("RollbackProgress", state.RollbackProgress ?? ""));
+            element.Add(new XElement("AwaitingDirectoryResolution", state.Session.AwaitingDirectoryResolution), new XElement("DirectoryFingerprint", state.DirectoryFingerprint ?? ""));
+            foreach (var conflict in plan.DirectoryConflicts)
+                element.Add(new XElement("DirectoryConflict", new XAttribute("index", conflict.Index), new XAttribute("kind", conflict.Kind), new XAttribute("item", conflict.ItemId), new XAttribute("resolved", conflict.Resolved), new XAttribute("isDirectory", conflict.IsDirectory),
+                    new XElement("Description", conflict.Description), new XElement("SourcePath", conflict.SourcePath), new XElement("DestinationPath", conflict.DestinationPath),
+                    new XElement("SourceOperation", conflict.SourceOperation), new XElement("DestinationOperation", conflict.DestinationOperation),
+                    new XElement("SourceOriginalPath", conflict.SourceOriginalPath ?? ""), new XElement("DestinationOriginalPath", conflict.DestinationOriginalPath ?? ""),
+                    new XElement("Resolution", conflict.Resolution ?? ""), new XElement("Rename", conflict.Rename ?? "")));
             foreach (var conflict in plan.FileConflicts)
             {
                 string hash; state.Hashes.TryGetValue(conflict.RepositoryPath, out hash);
@@ -472,10 +516,14 @@ namespace TortoiseSCM
 
         private async Task<bool> RetireCompletedMergeAsync(string root, CancellationToken cancellationToken)
         {
+            ValidateDirectoryMergeOwner(root);
+            var planned = LoadMergeState(root, false);
+            if (planned != null && planned.Session.AwaitingDirectoryResolution) return false;
             if (File.Exists(Path.Combine(root, ".plastic", "plastic.mergeprogress"))) return false;
             if ((await GetStatusAsync(root, cancellationToken).ConfigureAwait(false)).Count != 0) return false;
             string index = MergeIndex(root); RejectReparsePath(index);
             if (File.Exists(index)) File.Delete(index);
+            RemoveDirectoryMergeMarker(root);
             // Keep reviewed inputs, result and original backup for recovery; only detach.
             return true;
         }
@@ -484,6 +532,7 @@ namespace TortoiseSCM
         {
             if (request.Command != PlasticCommand.Checkin && request.Command != PlasticCommand.Undo)
                 return await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            ValidateDirectoryMergeOwner(command.WorkingDirectory);
             if (!File.Exists(MergeIndex(command.WorkingDirectory)))
             {
                 if (request.Command == PlasticCommand.Checkin && File.Exists(Path.Combine(command.WorkingDirectory, ".plastic", "plastic.mergeprogress")))
@@ -492,11 +541,14 @@ namespace TortoiseSCM
             }
             using (var gate = OpenMergeGate(command.WorkingDirectory))
             {
+                if (request.Command == PlasticCommand.Undo && LoadMergeState(command.WorkingDirectory, true).Session.AwaitingDirectoryResolution)
+                    throw new ArgumentException("This directory merge is still an unapplied plan. Cancel the plan from the merge dialog instead of undoing workspace files.");
                 if (request.Command == PlasticCommand.Checkin && !await RetireCompletedMergeAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false))
                 {
                     var workspace = await MergeWorkspaceAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false);
                     var state = LoadMergeState(workspace.RootPath, true);
                     await ValidateMergeSessionAsync(state, workspace, cancellationToken).ConfigureAwait(false);
+                    if (state.Session.AwaitingDirectoryResolution) throw new ArgumentException("Apply or cancel the directory merge plan before checking in. No checkin was performed.");
                     if (!state.Session.IsRollback)
                     {
                         var plan = await PreviewMergeAsync(workspace.RootPath, state.Session.Plan.SourceChangeset, cancellationToken).ConfigureAwait(false);

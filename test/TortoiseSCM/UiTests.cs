@@ -49,6 +49,7 @@ namespace TortoiseSCM
                 }
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
+                CheckConflictDialogs(artifacts);
                 if (args.Length > 1)
                 {
                     using (var merge = new MergeForm(new PlasticClient(PlasticClientConfig.Load()), args[1]))
@@ -65,7 +66,17 @@ namespace TortoiseSCM
                         Require(((Button)Field(merge, "start")).Enabled && !((Button)Field(merge, "apply")).Enabled, "Merge preview permits start but cannot resolve before native merge session");
                         plan.DirectoryConflicts.Add(new PlasticDirectoryConflict { Kind = "EVILTWIN", SourcePath = "/collision.txt", Description = "需要结构冲突处理" });
                         typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
-                        Require(!((Button)Field(merge, "start")).Enabled, "Directory conflicts block unsupported merge start");
+                        Require(((Button)Field(merge, "start")).Enabled, "Directory conflicts allow entering explicit structural planning");
+                        typeof(MergeForm).GetField("session", flags).SetValue(merge, new PlasticMergeSession { SessionId = "UI-directory-fixture", Plan = plan, AwaitingDirectoryResolution = true });
+                        typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
+                        var directoryRows = (ListView)Field(merge, "items");
+                        directoryRows.Items.Cast<ListViewItem>().Single(row => row.Tag is PlasticDirectoryConflict).Selected = true;
+                        Application.DoEvents();
+                        Require(((Button)Field(merge, "directory")).Enabled && !((Button)Field(merge, "continueMerge")).Enabled && !((Button)Field(merge, "prepare")).Enabled && !((Button)Field(merge, "apply")).Enabled,
+                            "Structural planning permits explicit directory choice and blocks content apply and incomplete continuation");
+                        plan.DirectoryConflicts[0].Resolved = true;
+                        typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
+                        Require(((Button)Field(merge, "continueMerge")).Enabled, "Reviewed directory plan requires separate explicit continuation");
                         plan.DirectoryConflicts.Clear();
                         typeof(MergeForm).GetField("session", flags).SetValue(merge, new PlasticMergeSession { SessionId = "UI-fixture", Plan = plan });
                         typeof(MergeForm).GetMethod("RenderPlan", flags).Invoke(merge, null);
@@ -283,6 +294,104 @@ namespace TortoiseSCM
                 return 0;
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+        }
+        private static void CheckConflictDialogs(string artifacts)
+        {
+            using (var directory = new DirectoryConflictForm("两个分支分别新增同名文件，请核对双方路径后选择。", "/中文 空格/collision.txt", "/中文 空格/collision.txt", new[] { "src", "dst", "rename", "unknown", "src" }))
+            {
+                Prepare(directory);
+                var choices = (ComboBox)Field(directory, "choices");
+                var rename = (TextBox)Field(directory, "rename");
+                var accept = (Button)directory.AcceptButton;
+                Require(choices.Items.Count == 3 && choices.SelectedIndex == -1 && !accept.Enabled, "Directory resolution filters unsupported choices and requires explicit selection");
+                choices.SelectedIndex = 2; Application.DoEvents();
+                Require(rename.Enabled && directory.Resolution == "rename", "Rename choice enables explicit destination name");
+                accept.PerformClick(); Application.DoEvents();
+                Require(!directory.IsDisposed && directory.DialogResult != DialogResult.OK, "Blank rename cannot confirm structural resolution");
+                rename.Text = "  collision-local.txt  ";
+                Require(directory.Rename == "collision-local.txt", "Reviewed rename trims surrounding whitespace");
+                Save(directory, Path.Combine(artifacts, "directory-conflict.png"));
+                directory.Size = directory.MinimumSize; Application.DoEvents();
+                Require(directory.RectangleToScreen(directory.ClientRectangle).Contains(accept.RectangleToScreen(accept.ClientRectangle)), "Directory confirmation remains visible at minimum size");
+                Save(directory, Path.Combine(artifacts, "directory-conflict-minimum.png"));
+                choices.SelectedIndex = 1; Application.DoEvents();
+                Require(!rename.Enabled && directory.Rename == null && directory.Resolution == "dst", "Destination choice cannot retain a stale rename argument");
+                directory.Close();
+            }
+            using (var directory = new DirectoryConflictForm("unsupported", "/a", "/b", new[] { "future-option" }))
+            {
+                Prepare(directory);
+                Require(!((Button)directory.AcceptButton).Enabled, "Unknown structural resolution cannot be accepted");
+                directory.Close();
+            }
+            string invalidRoot = Path.Combine(Path.GetTempPath(), "tscm-ui-missing-" + Guid.NewGuid().ToString("N"));
+            using (var partial = new PartialConflictForm(new PlasticClient(PlasticClientConfig.Load()), invalidRoot))
+            {
+                Prepare(partial);
+                WaitUntil(() => !(bool)Field(partial, "busy"), "Partial unavailable workspace read completes safely");
+                Require(!((Button)Field(partial, "apply")).Enabled && !((Button)Field(partial, "prepare")).Enabled, "Failed Partial lookup does not permit mutation");
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var rows = new System.Collections.Generic.List<PlasticPartialConflict> {
+                    new PlasticPartialConflict { RepositoryPath = "/中文 空格/conflict.txt", BaseChangeset = 16, IncomingChangeset = 18, CanResolve = true },
+                    new PlasticPartialConflict { RepositoryPath = "/结构变化.txt", BaseChangeset = 16, IncomingChangeset = 18, CanResolve = false, Reason = "传入项结构已变化，请先核对。" }
+                };
+                typeof(PartialConflictForm).GetField("conflicts", flags).SetValue(partial, rows);
+                typeof(PartialConflictForm).GetField("session", flags).SetValue(partial, null);
+                typeof(PartialConflictForm).GetMethod("RenderConflicts", flags).Invoke(partial, null);
+                var items = (ListView)Field(partial, "items");
+                items.Items[0].Selected = true; Application.DoEvents();
+                Require(((Button)Field(partial, "prepare")).Enabled && !((Button)Field(partial, "apply")).Enabled && !((Button)Field(partial, "cancelPreparation")).Enabled,
+                    "Partial new conflict requires preparation before result application");
+                ((TextBox)Field(partial, "details")).Text = "先在三方工具中编辑独立结果文件，再明确确认应用。\r\n结果保留为待定更改，需要单独签入。\r\n原始内容与审核结果保存在会话恢复目录中。";
+                Save(partial, Path.Combine(artifacts, "partial-conflicts.png"));
+                partial.Size = partial.MinimumSize; Application.DoEvents();
+                foreach (string name in new[] { "refresh", "prepare", "apply", "cancelPreparation", "close" })
+                {
+                    var button = (Button)Field(partial, name);
+                    var bounds = button.RectangleToScreen(button.ClientRectangle);
+                    Require(partial.RectangleToScreen(partial.ClientRectangle).Contains(bounds) && button.Parent.RectangleToScreen(button.Parent.ClientRectangle).Contains(bounds),
+                        "Partial " + name + " remains visible at minimum size");
+                }
+                Save(partial, Path.Combine(artifacts, "partial-conflicts-minimum.png"));
+                items.Items[0].Selected = false; items.Items[1].Selected = true; Application.DoEvents();
+                Require(!((Button)Field(partial, "prepare")).Enabled && !((Button)Field(partial, "apply")).Enabled, "Unsupported Partial structure cannot enter content resolution");
+                items.Items[1].Selected = false; items.Items[0].Selected = true;
+                var session = new PlasticPartialConflictSession { SessionId = "UI-partial-fixture", Ready = true, Conflicts = rows.Take(1).ToList(), RecoveryDirectory = @"C:\UI-fixture\recovery" };
+                typeof(PartialConflictForm).GetField("session", flags).SetValue(partial, session);
+                typeof(PartialConflictForm).GetMethod("UpdateButtons", flags).Invoke(partial, null);
+                Require(((Button)Field(partial, "cancelPreparation")).Enabled && ((Button)Field(partial, "apply")).Enabled, "Unapplied Partial preparation permits reviewed apply and explicit cancellation");
+                session.Applying = true;
+                typeof(PartialConflictForm).GetMethod("RenderConflicts", flags).Invoke(partial, null);
+                Require(!((Button)Field(partial, "prepare")).Enabled && !((Button)Field(partial, "apply")).Enabled && !((Button)Field(partial, "cancelPreparation")).Enabled && ((TextBox)Field(partial, "details")).Text.Contains(session.RecoveryDirectory),
+                    "Interrupted Partial apply disables writes and displays durable recovery directory");
+                session.Applying = false; rows[0].Resolved = true;
+                typeof(PartialConflictForm).GetMethod("RenderConflicts", flags).Invoke(partial, null);
+                Require(!((Button)Field(partial, "prepare")).Enabled && !((Button)Field(partial, "apply")).Enabled && !((Button)Field(partial, "cancelPreparation")).Enabled,
+                    "Applied Partial result cannot be reapplied or discarded as an unused preparation");
+                var newer = new PlasticPartialConflict { RepositoryPath = rows[0].RepositoryPath, BaseChangeset = 18, IncomingChangeset = 19, CanResolve = true };
+                var combined = (System.Collections.Generic.IList<PlasticPartialConflict>)typeof(PartialConflictForm).GetMethod("CombineConflicts", BindingFlags.Static | BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { new System.Collections.Generic.List<PlasticPartialConflict> { newer }, session });
+                typeof(PartialConflictForm).GetField("conflicts", flags).SetValue(partial, combined);
+                typeof(PartialConflictForm).GetMethod("RenderConflicts", flags).Invoke(partial, null);
+                items.Items[0].Selected = true; Application.DoEvents();
+                Require(combined.Count == 1 && Object.ReferenceEquals(combined[0], newer) && ((Button)Field(partial, "prepare")).Enabled && !((Button)Field(partial, "apply")).Enabled && items.Items[0].SubItems[3].Text == "待准备三方文件",
+                    "New incoming revision supersedes saved resolved row and requires fresh preparation before apply");
+                newer.CanResolve = false; newer.Reason = "Incoming replacement";
+                typeof(PartialConflictForm).GetMethod("RenderConflicts", flags).Invoke(partial, null);
+                Require(!((Button)Field(partial, "prepare")).Enabled && !((Button)Field(partial, "apply")).Enabled,
+                    "Fresh unsupported incoming identity cannot inherit saved resolvability");
+                rows[0].Resolved = false;
+                var failure = new Func<System.Threading.Tasks.Task>(delegate { throw new IOException("UI simulated operation failure"); });
+                var recovery = (System.Threading.Tasks.Task)typeof(PartialConflictForm).GetMethod("WorkAsync", flags).Invoke(partial, new object[] { failure });
+                WaitUntil(() => recovery.IsCompleted, "Partial failed operation finishes recovery lookup");
+                Require(!recovery.IsFaulted && !((Button)Field(partial, "apply")).Enabled && !((Button)Field(partial, "cancelPreparation")).Enabled && ((TextBox)Field(partial, "details")).Text.Contains(session.RecoveryDirectory),
+                    "Failed recovery lookup preserves known backup directory and fails closed");
+                typeof(PartialConflictForm).GetField("busy", flags).SetValue(partial, true);
+                typeof(PartialConflictForm).GetMethod("UpdateButtons", flags).Invoke(partial, null);
+                Require(!((Button)Field(partial, "refresh")).Enabled && !((Button)Field(partial, "close")).Enabled, "Partial operation blocks concurrent refresh and premature close");
+                typeof(PartialConflictForm).GetField("busy", flags).SetValue(partial, false);
+                partial.Close();
+            }
         }
         private static void Require(bool value, string label)
         { if (!value) throw new Exception(label); Console.WriteLine("PASS: " + label); }

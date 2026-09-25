@@ -159,6 +159,11 @@ namespace TortoiseSCM
                 { MessageBox.Show(this, "当前没有合并或整仓回滚会话。", "TortoiseSCM"); return; }
                 await ExecuteAsync(PlasticCommand.Undo, new List<string> { workspace.RootPath });
             });
+            operations.Items.Add("Partial 传入冲突…", null, async delegate {
+                if (busy || !loaded) return;
+                using (var dialog = new PartialConflictForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+                await RefreshAsync();
+            });
             operations.Items.Add("锁管理…", null, delegate {
                 if (busy || !loaded) return;
                 using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -385,7 +390,8 @@ namespace TortoiseSCM
                 {
                     var session = await client.GetMergeSessionAsync(workspace.RootPath, CancellationToken.None);
                     if (session == null) throw new InvalidOperationException("当前合并没有本程序的会话，请在启动该合并的 Plastic 客户端完成提交。");
-                    if (session.Plan.FileConflicts.Any(item => !item.Resolved) || session.Plan.DirectoryConflicts.Count != 0)
+                    if (session.AwaitingDirectoryResolution) throw new InvalidOperationException("请先在合并窗口中处理目录结构冲突并应用结构方案。");
+                    if (session.Plan.FileConflicts.Any(item => !item.Resolved) || session.Plan.DirectoryConflicts.Any(item => !item.Resolved))
                         throw new InvalidOperationException("请先在“操作 → 合并变更集 / 解决冲突”中解决所有冲突。");
                 }
                 catch (Exception ex) { ShowError(ex); SetBusy(false, "合并尚不能提交"); return; }

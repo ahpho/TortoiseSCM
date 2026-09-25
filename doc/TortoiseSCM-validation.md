@@ -142,3 +142,16 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 合并/整仓回滚由主界面提交时使用明确的整仓范围确认；未保存会话的原生合并、未完成回滚和被外部改动的原生回滚状态阻止签入。整仓撤销可清理失败状态。
 - 安装包 25 项验证通过（`qa/package-final-results.log`）：清单校验、解包 CLI 启动、独立版本安装、卸载保留用户文件/空目录/锁定 DLL、注册回退、跨进程互斥。测试期间实际 Explorer 注册保持不变。
 - GitHub Windows CI 已加入源代码；本地验证通过。当前 GitHub API 无认证查询遭遇速率限制，未把远端工作流执行结果作为已通过证据。未验证签名 MSI、ARM64、32 位 Explorer、真实多显示器 DPI 切换或机器级图标安装。
+
+# 第五阶段：目录结构冲突与 Partial 传入内容冲突（2026-09-25）
+
+- 完整服务器回归 `qa/conflicts-final-validation.log` 通过：常规真实 CLI 70 项、分支合并 25 项、Partial 冲突 35 项；最新独立工作区由 `latest-integration.txt`、`latest-merge-integration.txt`、`latest-partial-integration.txt` 指向。安装包检查 `qa/conflicts-package-validation.log` 25 项通过。
+- 收尾安全修正后的最终 Release 构建与本地回归见 `qa/conflicts-release-validation.log`：CLI 850、目录合并 47，以及全部原有后端、Shell、GUI 检查通过。最终 EXE 再次通过 9 项真实 Partial CLI 检查，结果保存在 `qa/integration-20260925-135646-a3223bfe/partial-cli-results.json`。
+- 新增原生目录规划/逐项选择/应用/取消流程，四类已支持冲突为 EVIL、DIV_MV、CHG_RM、RM_CHG。选择不会改工作文件；稳定公开索引与原生重编号对应，未知类型拒绝执行。
+- 目录专用 47 项检查覆盖显式选择、恢复会话、改名边界、忽略项保护、失败保持提交保护、完整撤销恢复，以及不同 settings 不能绕过工作区计划标记。
+- `qa/integration-20260925-133640-c3ad7009`：两项同名新增和一项内容冲突，来源 cs77 合并签入 cs82，独立消费者内容和原生合并关系通过；该目录的 `directory-cli-results.json` 另验证 cs87 的双方移动、修改/删除和删除/修改三种 CLI 选择流程。
+- `qa/integration-20260925-135119-0764c97f`：真正的同名目录及嵌套后代冲突，来源 cs103、目标 cs104，重命名保留两棵目录并签入 cs105；消费者的双方后代字节及原生合并关系通过。
+- Partial 集成覆盖精确基础/本地/传入三方文件、旧结果拒绝、显式重新准备、继续编辑与提交、原生 ParentRevId、选择器和加载规则不变。故意让原生 undo 成功后的 update 失败，验证保留备份、阻止提交、重启显示恢复目录及单文件撤销恢复。
+- `qa/integration-20260925-135023-f5c99b3a/partial-cli-results.json`：实际主 EXE 9 项真实 CLI 断言通过，包括 JSON 三方文件、跨进程恢复、显式应用后保持待定、显式签入及消费者字节；缺少 --yes 和未解决签入有失败检查。
+- 新窗口正常/最小尺寸均完成渲染和视觉检查：`qa/Release/directory-conflict*.png`、`partial-conflicts*.png`。GUI 强制先准备再应用；新传入不会被旧已解决状态遮盖，应用动作不会静默重新准备并套用旧审核结果。
+- 当前仍不支持 Partial 传入结构冲突、Xlink，以及未列出的原生目录冲突类型；无冲突路径中的现有目录自动移动/删除仍有保护性限制。正常流程不启动官方 GUI，仍依赖已安装的 cm.exe。

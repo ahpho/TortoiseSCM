@@ -67,6 +67,25 @@ internal static class CliTests
             Run(2, "--command", "merge-prepare", "--path", temporary, "--changeset", "1", "--item", "/file.txt");
             Run(2, "--command", "merge-conflict-tool", "--path", temporary, "--changeset", "1", "--item", "/file.txt");
             Run(2, "--command", "merge-status", "--path", temporary, "--changeset", "1");
+            foreach (string action in new[] { "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve" })
+            {
+                Run(2, "--command", action, "--path", temporary, "--item", "/file.txt");
+                Run(2, "--command", action, "--path", temporary, "--yes");
+                Run(2, "--command", action, "--path", temporary, "--item", "/file.txt", "--changeset", "1", "--yes");
+            }
+            Run(2, "--command", "partial-conflict-cancel", "--path", temporary);
+            Run(2, "--command", "partial-conflict-status", "--path", temporary, "--item", "/file.txt");
+            Run(2, "--command", "partial-conflicts", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"));
+            Run(2, "--command", "partial-conflict-resolve", "--path", temporary, "--item", "/file.txt", "--yes");
+            Run(2, "--command", "merge-directory-resolve", "--path", temporary, "--changeset", "1", "--conflict", "1", "--resolution", "src");
+            Run(2, "--command", "merge-directory-resolve", "--path", temporary, "--changeset", "1", "--resolution", "src", "--yes");
+            Run(2, "--command", "merge-directory-resolve", "--path", temporary, "--changeset", "1", "--conflict", "0", "--resolution", "src", "--yes");
+            Run(2, "--command", "merge-directory-resolve", "--path", temporary, "--changeset", "1", "--conflict", "1", "--resolution", "invalid", "--yes");
+            Run(2, "--command", "merge-directory-resolve", "--path", temporary, "--changeset", "1", "--conflict", "1", "--resolution", "rename", "--yes");
+            Run(2, "--command", "merge-directory-resolve", "--path", temporary, "--changeset", "1", "--conflict", "1", "--resolution", "dst", "--rename", "other.txt", "--yes");
+            Run(2, "--command", "merge-continue", "--path", temporary, "--changeset", "1");
+            Run(2, "--command", "merge-directory-cancel", "--path", temporary);
+            Run(2, "--command", "status", "--path", temporary, "--conflict", "1", "--resolution", "src");
             Run(2, "--command", "status", "--path", temporary, "--result", Path.Combine(temporary, "result.txt"));
             Run(2, "--command", "unlock", "--path", temporary, "--lock-id", Guid.NewGuid().ToString());
             Run(2, "--command", "unlock", "--path", temporary, "--yes");

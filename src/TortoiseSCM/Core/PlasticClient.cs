@@ -143,7 +143,7 @@ namespace TortoiseSCM
                 foreach (PlasticProcessCommand command in commands)
                 {
                     PlasticCommandResult current;
-                    try { current = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false); }
+                    try { current = await ExecuteWithPartialConflictGuardAsync(command, request, cancellationToken).ConfigureAwait(false); }
                     catch (Exception error)
                     {
                         // A later launch or cancellation must not hide already-completed
@@ -179,7 +179,7 @@ namespace TortoiseSCM
                 var actualWorkspace = await GetWorkspaceAsync(planned.WorkingDirectory, cancellationToken).ConfigureAwait(false);
                 ApplyWorkspaceMode(planned, actualWorkspace.IsPartial);
             }
-            PlasticCommandResult result = await ExecuteWithMergeGuardAsync(planned, request, cancellationToken).ConfigureAwait(false);
+            PlasticCommandResult result = await ExecuteWithPartialConflictGuardAsync(planned, request, cancellationToken).ConfigureAwait(false);
             if (request.Command == PlasticCommand.History && result.Succeeded)
             {
                 var history = new StringBuilder();

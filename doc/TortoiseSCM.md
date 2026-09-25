@@ -230,7 +230,29 @@ merge 留空时明确报错。设置窗口的“打开合并工具”允许选�
 合并结果需保存在独立文件；应用前核验冲突文件是否被其他程序修改。未解决或中断状态不能直接由本程序签入。
 合并和整仓回滚必须整体提交：点击“提交”后会明确确认整个工作区的受控更改范围；CLI 使用根目录 `checkin`。
 放弃这类操作时，可用“操作 → 撤销整个合并 / 回滚”，或根目录 `undo --yes`。失败的整仓回滚同样保留会话，不能绕过检查直接发布。
-本版本拒绝目录结构冲突，Partial 工作区的传入冲突也需使用官方客户端；不自动猜测重命名、删除或同路径新增的取舍。
+Standard 目录结构冲突先建立规划会话，在“结构冲突…”中逐项选择来源或目标；同名新增冲突还可重命名目标以保留双方。记录选择不会修改工作区文件，全部选择后点击“应用结构方案”，然后处理剩余内容冲突并整体提交。未应用的方案可单独取消，取消不会撤销用户文件。
+当前逐项处理同名新增（EVIL）、双方移动到不同位置（DIV_MV）、修改/删除（CHG_RM、RM_CHG）四类；其他原生冲突类型会明确拒绝。无冲突的合并路径中，现有目录的自动移动/删除仍有保护性限制。
+
+```powershell
+& $exe --cli --command merge-directory-resolve --path 'D:\workspace' --changeset 123 --conflict 1 --resolution rename --rename 'local-copy.txt' --yes --json | ConvertFrom-Json
+# --conflict 使用当前会话返回的稳定 index；其他选择为 src / dst
+& $exe --cli --command merge-continue --path 'D:\workspace' --changeset 123 --yes --json | ConvertFrom-Json
+& $exe --cli --command merge-directory-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
+```
+
+Partial 工作区通过“操作 → Partial 传入冲突…”处理已加载文件的本地内容修改与服务器新版本冲突。预检后准备基础、本地、传入三方文件，调用用户配置的合并工具；审核结果后单独确认应用。后端只更新该文件的基础修订，再写入审核结果，保持 Partial 模式、分支和加载规则，不自动提交。
+
+```powershell
+& $exe --cli --command partial-conflicts --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command partial-conflict-prepare --path 'D:\workspace' --item '/file.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command partial-conflict-tool --path 'D:\workspace' --item '/file.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command partial-conflict-resolve --path 'D:\workspace' --item '/file.txt' --result 'D:\tmp\reviewed.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command partial-conflict-status --path 'D:\workspace' --json | ConvertFrom-Json
+# 仅取消尚未应用的准备；不改动工作区内容
+& $exe --cli --command partial-conflict-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
+```
+
+Partial 处理中断时会保留原始和审核结果备份，并阻止提交；`partial-conflict-status` 返回恢复目录。保留需要的备份后，可显式撤销受影响文件、刷新并重新处理。准备期间本地内容、服务器版本或文件身份变化会拒绝旧结果。成功应用后可继续编辑，再按常规勾选提交。Partial 的传入删除、移动、替换路径、Xlink 和本地结构冲突暂不由此内容流程处理；界面会说明不支持的原因。
 锁列表限定当前仓库；只有当前用户、当前工作区持有的锁才允许释放，执行前再次读取核验。
 锁获取遵循服务器规则：普通签出并不保证获得锁。本程序不修改服务器锁规则，服务器权限仍决定能否释放。
 
@@ -307,10 +329,10 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 整仓更新、历史、历史版本 | 根目录打开，历史内分别回滚待提交和切换快照 | 根路径 `update`、`history`、`rollback`、`switch` | 整仓待提交回滚仅 Standard；Partial 快照仅处理已加载项 |
 | 目录范围提交、勾选及右键 | 按范围显示，勾选签入，右键历史 / 差异 / 丢弃 | `status --path` 获取范围，重复 `--path` 提交所选项，`history` / `undo` | 目录递归操作包含后代；私有文件需先添加 |
 | 上下窗格历史明细 | 上方分页提交、下方完整提交文件清单 | `history-page` / `history` + `changeset --changeset` | 路径过滤分页可能为空，需继续查询直到 hasMore=false |
-| 自定义 diff / merge | 设置窗口、差异按钮、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*` | 分支合并仅 Standard；目录结构冲突仍需官方客户端 |
+| 自定义 diff / merge | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：分支浏览与目录冲突编辑窗口、拖放移动、仓库创建、
+尚未提供：分支浏览、Partial 结构冲突处理、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

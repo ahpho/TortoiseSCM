@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'LockTests', 'MergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -81,6 +81,17 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-merge-integration.txt'), $mergeManifest)
         & $mergeIntegrationOutput (Join-Path $out 'TortoiseSCM.exe') $mergeManifest
         if ($LASTEXITCODE -ne 0) { throw "Server-backed merge tests failed. Inspect $mergeManifest and merge-integration-results.json beside it." }
+        $partialOutput = Join-Path $out 'PartialConflictIntegrationTests.exe'
+        $partialSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+        $partialSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialConflictIntegrationTests.cs'
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$partialOutput" $partialSources
+        if ($LASTEXITCODE -ne 0) { throw 'Partial conflict integration test compilation failed.' }
+        $partialManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $partialManifest -or -not (Test-Path -LiteralPath $partialManifest)) { throw 'Partial conflict setup did not produce a manifest.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-partial-integration.txt'), $partialManifest)
+        & $partialOutput $partialManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+        if ($LASTEXITCODE -ne 0) { throw "Partial conflict tests failed. Inspect $partialManifest and partial-conflict-results.json beside it." }
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialConflictCliTests.ps1') -Manifest $partialManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
     }
 }
 Write-Host "Built: $out\TortoiseSCM.exe"
