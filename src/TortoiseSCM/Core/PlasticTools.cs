@@ -124,6 +124,13 @@ namespace TortoiseSCM
 
         public async Task<PlasticCommandResult> RunMergeToolAsync(string basePath, string localPath, string remotePath, string mergedPath, CancellationToken cancellationToken)
         {
+            if (String.IsNullOrWhiteSpace(mergedPath) || !Path.IsPathRooted(mergedPath)) throw new ArgumentException("The merge output must be an absolute file path.");
+            using (var gate = OpenPartialDirectoryOutputGate(Path.GetFullPath(mergedPath)))
+                return await RunMergeToolLockedAsync(basePath, localPath, remotePath, mergedPath, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> RunMergeToolLockedAsync(string basePath, string localPath, string remotePath, string mergedPath, CancellationToken cancellationToken)
+        {
             if (String.IsNullOrWhiteSpace(config.MergeToolPath)) throw new InvalidOperationException("Configure an external merge tool in TortoiseSCM settings first.");
             PlasticToolArguments.ValidateConfiguration(config.MergeToolPath, config.MergeToolArguments, true);
             string[] inputs = new[] { ToolInput(basePath), ToolInput(localPath), ToolInput(remotePath) };

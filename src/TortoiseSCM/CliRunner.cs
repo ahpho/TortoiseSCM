@@ -42,6 +42,10 @@ namespace TortoiseSCM
             "  partial-structure-resolve --path <root> --resolution keep-local|take-incoming|rename [--rename name] --yes\r\n" +
             "  partial-structure-cancel --path <root> --yes (unapplied only)\r\n" +
             "  partial-structure-recover --path <root> --yes (restore pinned incoming; retain backups)\r\n" +
+            "Partial directories: partial-directory-preview|partial-directory-status --path <root>\r\n" +
+            "  partial-directory-prepare --path <root> --item </directory> --yes\r\n" +
+            "  partial-directory-resolve --path <root> --resolution take-incoming|keep-local --yes\r\n" +
+            "  partial-directory-cancel|partial-directory-recover --path <root> --yes\r\n" +
             "Merge results remain pending; checkin is always a separate command.\r\n" +
             "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
             "Settings: --diff-tool <exe> --diff-args <template> --merge-tool <exe> --merge-args <template>\r\n" +
@@ -136,6 +140,32 @@ namespace TortoiseSCM
                 SetResult(response, client.UnlockOwnAsync(options.Paths[0], options.LockId.Value, CancellationToken.None).GetAwaiter().GetResult());
                 response.data = new { workspace = workspaceData, lockId = options.LockId.Value.ToString() };
                 return;
+            }
+            if (options.Command.StartsWith("partial-directory-", StringComparison.Ordinal))
+            {
+                if (options.Command == "partial-directory-preview")
+                {
+                    var conflicts = client.PreviewPartialDirectoriesAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                    response.data = new { workspace = workspaceData, conflicts = conflicts.Select(PartialDirectoryData).ToArray() };
+                    response.output = String.Join(Environment.NewLine, conflicts.Select(item => item.RepositoryPath + "\t" + item.Kind + "\t" + item.IncomingPath + "\t" + item.Items.Count + " affected items\t" + item.Reason + Environment.NewLine +
+                        String.Join(Environment.NewLine, item.Items.Select(child => "  " + (child.IsDirectory ? "D" : "F") + (child.HasLocalChanges ? " modified " : " ") + child.RepositoryPath + " -> " + (String.IsNullOrEmpty(child.IncomingPath) ? "(removed)" : child.IncomingPath))))); return;
+                }
+                if (options.Command == "partial-directory-status" || options.Command == "partial-directory-prepare")
+                {
+                    var session = options.Command == "partial-directory-status" ? client.GetPartialDirectorySessionAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult() :
+                        client.PreparePartialDirectoryAsync(options.Paths[0], options.Item, CancellationToken.None).GetAwaiter().GetResult();
+                    response.data = new { workspace = workspaceData, sessionId = session == null ? null : session.SessionId,
+                        recoveryDirectory = session == null ? null : session.RecoveryDirectory, ready = session == null || session.Ready, applying = session != null && session.Applying,
+                        conflict = session == null ? null : PartialDirectoryData(session.Conflict), resolution = session == null ? null : session.Resolution };
+                    response.output = session == null ? "No active Partial directory session." : "Partial directory session: " + session.SessionId + "\r\nRecovery backups: " + session.RecoveryDirectory; return;
+                }
+                if (options.Command == "partial-directory-cancel")
+                {
+                    client.CancelPartialDirectoryAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                    response.output = "Unapplied directory preparation cancelled; working tree unchanged, backups retained."; return;
+                }
+                SetResult(response, options.Command == "partial-directory-recover" ? client.RecoverPartialDirectoryAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult() :
+                    client.ResolvePartialDirectoryAsync(options.Paths[0], options.Resolution, CancellationToken.None).GetAwaiter().GetResult()); return;
             }
             if (options.Command.StartsWith("partial-structure-", StringComparison.Ordinal))
             {
@@ -407,6 +437,15 @@ namespace TortoiseSCM
                 itemId = item.ItemId, canResolve = item.CanResolve, reason = item.Reason, resolved = item.Resolved };
         }
 
+        private static object PartialDirectoryData(PlasticPartialDirectoryConflict item)
+        {
+            if (item == null) return null;
+            return new { repositoryPath = item.RepositoryPath, incomingPath = item.IncomingPath, kind = item.Kind, reason = item.Reason,
+                itemId = item.ItemId, incomingChangeset = item.IncomingChangeset, resolutionOptions = item.ResolutionOptions,
+                items = item.Items.Select(child => new { repositoryPath = child.RepositoryPath, incomingPath = child.IncomingPath,
+                    isDirectory = child.IsDirectory, itemId = child.ItemId, baseChangeset = child.BaseChangeset,
+                    incomingRevisionChangeset = child.IncomingRevisionChangeset, hasLocalChanges = child.HasLocalChanges }).ToArray() };
+        }
         private static object PartialStructureData(PlasticPartialStructureConflict item)
         {
             if (item == null) return null;
@@ -574,7 +613,8 @@ namespace TortoiseSCM
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page",
                 "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
-                "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover" }.Contains(options.Command))
+                "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
+                "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
@@ -583,6 +623,10 @@ namespace TortoiseSCM
             bool partialWorkflow = options.Command.StartsWith("partial-conflict", StringComparison.Ordinal);
             bool structureWorkflow = options.Command.StartsWith("partial-structure-", StringComparison.Ordinal);
             bool structureResolution = options.Command == "partial-structure-resolve";
+            bool partialDirectoryWorkflow = options.Command.StartsWith("partial-directory-", StringComparison.Ordinal);
+            bool partialDirectoryResolution = options.Command == "partial-directory-resolve";
+            if (partialDirectoryWorkflow && options.Paths.Count != 1) throw new ArgumentException("Partial directory operations require exactly one workspace root.");
+            if (partialDirectoryWorkflow && options.Command != "partial-directory-preview" && options.Command != "partial-directory-status" && !yes) throw new ArgumentException("Partial directory writes require --yes.");
             if (structureWorkflow && options.Paths.Count != 1) throw new ArgumentException("Partial structure operations require exactly one workspace root.");
             if (structureWorkflow && options.Command != "partial-structure-preview" && options.Command != "partial-structure-status" && !yes) throw new ArgumentException("Partial structure writes require --yes.");
             bool partialFile = new[] { "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve" }.Contains(options.Command);
@@ -591,7 +635,8 @@ namespace TortoiseSCM
             bool directoryResolution = options.Command == "merge-directory-resolve";
             if ((directoryResolution || options.Command == "merge-continue" || options.Command == "merge-directory-cancel") && !yes) throw new ArgumentException("Merge writes require --yes.");
             if (directoryResolution != options.Conflict.HasValue) throw new ArgumentException("--conflict is required only for merge-directory-resolve.");
-            if ((directoryResolution || structureResolution) != (options.Resolution != null)) throw new ArgumentException("--resolution is required only for structural resolution commands.");
+            if ((directoryResolution || structureResolution || partialDirectoryResolution) != (options.Resolution != null)) throw new ArgumentException("--resolution is required only for structural resolution commands.");
+            if (partialDirectoryResolution && !new[] { "keep-local", "take-incoming" }.Contains(options.Resolution)) throw new ArgumentException("--resolution must be keep-local or take-incoming.");
             if (directoryResolution && !new[] { "src", "dst", "rename" }.Contains(options.Resolution)) throw new ArgumentException("--resolution must be src, dst or rename.");
             if (structureResolution && !new[] { "keep-local", "take-incoming", "rename" }.Contains(options.Resolution)) throw new ArgumentException("--resolution must be keep-local, take-incoming or rename.");
             if (((directoryResolution || structureResolution) && options.Resolution == "rename") != (options.Rename != null)) throw new ArgumentException("--rename is required only for rename resolution.");
@@ -604,7 +649,7 @@ namespace TortoiseSCM
             if ((options.Command == "unlock") != options.LockId.HasValue) throw new ArgumentException("--lock-id is required only for unlock.");
             if ((options.Command == "locks" || options.Command == "unlock") && options.Paths.Count != 1) throw new ArgumentException("Lock operations require exactly one workspace root.");
             bool mergeWorkflow = options.Command.StartsWith("merge-", StringComparison.Ordinal);
-            bool conflictFile = partialFile || options.Command == "partial-structure-prepare" || options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
+            bool conflictFile = partialFile || options.Command == "partial-structure-prepare" || options.Command == "partial-directory-prepare" || options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
             bool needsChangeset = new[] { "changeset", "rollback", "switch", "export", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
             if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("This command " + (needsChangeset ? "requires" : "does not accept") + " --changeset.");
             if (needsChangeset && options.Paths.Count != 1) throw new ArgumentException("Select exactly one file or directory scope for this command.");

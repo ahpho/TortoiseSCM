@@ -14,6 +14,13 @@ namespace TortoiseSCM
     {
         public async Task<PlasticCommandResult> RemoveAsync(string path, CancellationToken token)
         {
+            var context = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
+            using (var gate = StructureGate(context.WorkingDirectory))
+                return await RemoveLockedAsync(path, token).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> RemoveLockedAsync(string path, CancellationToken token)
+        {
             var command = await PrepareFileMutationAsync(path, token).ConfigureAwait(false);
             var workspace = await GetWorkspaceAsync(path, token).ConfigureAwait(false);
             command.Arguments = workspace.IsPartial ? new[] { "partial", "remove", Path.GetFullPath(path) } : new[] { "remove", Path.GetFullPath(path) };
@@ -21,6 +28,13 @@ namespace TortoiseSCM
         }
 
         public async Task<PlasticCommandResult> MoveAsync(string path, string destination, CancellationToken token)
+        {
+            var context = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
+            using (var gate = StructureGate(context.WorkingDirectory))
+                return await MoveLockedAsync(path, destination, token).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> MoveLockedAsync(string path, string destination, CancellationToken token)
         {
             var command = await PrepareFileMutationAsync(path, token).ConfigureAwait(false);
             if (String.IsNullOrWhiteSpace(destination) || !Path.IsPathRooted(destination)) throw new ArgumentException("目标必须是完整绝对路径。");
@@ -68,6 +82,13 @@ namespace TortoiseSCM
         }
 
         public async Task<PlasticCommandResult> IgnoreAsync(string path, CancellationToken token)
+        {
+            var context = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
+            using (var gate = StructureGate(context.WorkingDirectory))
+                return await IgnoreLockedAsync(path, token).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> IgnoreLockedAsync(string path, CancellationToken token)
         {
             var command = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
             string absolute = command.Arguments[1], root = command.WorkingDirectory;

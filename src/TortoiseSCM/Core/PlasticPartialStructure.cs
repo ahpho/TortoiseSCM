@@ -50,7 +50,10 @@ namespace TortoiseSCM
         }
         public bool HasSavedPartialStructureSession(string root) { return File.Exists(StructureIndex(Path.GetFullPath(root))); }
         public void ThrowIfPartialStructureActive(string root)
-        { if (HasSavedPartialStructureSession(root)) throw new ArgumentException("A Partial structural decision is active. Finish it, cancel an unapplied preparation, or explicitly recover to the incoming state first."); }
+        {
+            ThrowIfPartialDirectoryActive(root);
+            if (HasSavedPartialStructureSession(root)) throw new ArgumentException("A Partial structural decision is active. Finish it, cancel an unapplied preparation, or explicitly recover to the incoming state first.");
+        }
         private static string StructureIndex(string root) { return Path.Combine(root, ".plastic", "tortoisescm-structure.session"); }
         private static FileStream StructureGate(string root)
         {
@@ -93,7 +96,18 @@ namespace TortoiseSCM
                         continue;
                     }
                     conflict.BaseChangeset = loaded;
-                    conflict.ItemId = await PartialItemIdAsync(workspace, original, loaded, token).ConfigureAwait(false);
+                    if (change.StatusCode == "DE")
+                    {
+                        try { conflict.ItemId = await StructureDeletedItemIdAsync(workspace, change.Path, loaded, token).ConfigureAwait(false); }
+                        catch (ArgumentException error)
+                        {
+                            // Keep an unresolvable deletion scoped to its own
+                            // path; it must not block preview/checkin elsewhere.
+                            conflict.Kind = "local-delete"; conflict.Reason = error.Message;
+                            result.Add(conflict); continue;
+                        }
+                    }
+                    else conflict.ItemId = await StructureLocalItemIdAsync(root, change.Path, token).ConfigureAwait(false);
                     incoming = tree.Items.SingleOrDefault(item => (long?)item.Element("ItemId") == conflict.ItemId);
                     if (incoming == null) conflict.Kind = "incoming-delete";
                     else if ((string)incoming.Element("CurrentPath") != original) conflict.Kind = "incoming-move";
@@ -153,7 +167,7 @@ namespace TortoiseSCM
                 string local = MergeLocalPath(root, repositoryPath);
                 state.LocalHash = StructureFileHash(local);
                 if (File.Exists(local)) { StructureRequireSingleLink(local); File.Copy(local, StructureBackup(state, "local"), false); }
-                if (conflict.BaseChangeset >= 0) await DownloadHistoricalFileAsync(workspace, conflict.OriginalPath, conflict.BaseChangeset, StructureBackup(state, "base"), token).ConfigureAwait(false);
+                if (conflict.BaseChangeset >= 0) await DownloadPartialIdentityFileAsync(workspace, conflict.ItemId, conflict.BaseChangeset, StructureBackup(state, "base"), token).ConfigureAwait(false);
                 if (conflict.IncomingItemId >= 0) await DownloadHistoricalFileAsync(workspace, conflict.IncomingPath, conflict.IncomingChangeset, StructureBackup(state, "incoming"), token).ConfigureAwait(false);
                 state.BaseHash = StructureFileHash(StructureBackup(state, "base")); state.IncomingHash = StructureFileHash(StructureBackup(state, "incoming"));
                 if (StructureFileHash(local) != state.LocalHash || (state.LocalHash != "missing" && MergeHash(StructureBackup(state, "local")) != state.LocalHash)) throw new IOException("The local contributor changed during preparation.");
@@ -172,7 +186,7 @@ namespace TortoiseSCM
         {
             await PartialWorkspaceAsync(root, token).ConfigureAwait(false);
             using (var gate = StructureGate(root))
-            { var state = LoadStructureState(root, true); if (!state.Session.Ready || state.Session.Applying) throw new ArgumentException("An applied or interrupted decision requires explicit recovery to the incoming state."); File.Delete(StructureIndex(root)); }
+            { ThrowIfPartialDirectoryActive(root); var state = LoadStructureState(root, true); if (!state.Session.Ready || state.Session.Applying) throw new ArgumentException("An applied or interrupted decision requires explicit recovery to the incoming state."); File.Delete(StructureIndex(root)); }
         }
         public async Task<PlasticCommandResult> ResolvePartialStructureAsync(string root, string resolution, string rename, CancellationToken token)
         {
@@ -180,6 +194,7 @@ namespace TortoiseSCM
             using (var gate = StructureGate(root))
             {
                 var state = LoadStructureState(root, true); var conflict = state.Session.Conflict;
+                ThrowIfPartialDirectoryActive(root);
                 ValidateStructureConfiguration(state, workspace);
                 if (!state.Session.Ready || state.Session.Applying) throw new ArgumentException("Use explicit recovery to the incoming state for an interrupted structural decision.");
                 if (!conflict.ResolutionOptions.Contains(resolution)) throw new ArgumentException("Choose one of the offered structural resolutions.");
@@ -214,6 +229,7 @@ namespace TortoiseSCM
             using (var gate = StructureGate(root))
             {
                 var state = LoadStructureState(root, true); ValidateStructureConfiguration(state, workspace);
+                ThrowIfPartialDirectoryActive(root);
                 if (state.Session.Ready && !state.Session.Applying) throw new ArgumentException("This preparation was not applied; cancel it instead.");
                 var changes = await GetStatusAsync(root, token).ConfigureAwait(false);
                 if (changes.Any(item => item.IsDirectory && StructurePaths(state).Any(path => IsWithin(MergeLocalPath(root, path), item.Path)))) throw new ArgumentException("A parent directory has pending structural changes. Preserve and finish those changes before file recovery.");
@@ -251,11 +267,11 @@ namespace TortoiseSCM
                 if (change.StatusCode != "AD")
                 {
                     long identity;
-                    if (change.StatusCode == "DE" || change.StatusCode == "LD")
+                    if (change.StatusCode == "DE")
                     {
                         var info = await StructureFileInfoAsync(root, change.Path, token).ConfigureAwait(false);
                         long revision = (long?)info.Element("RevisionChangeset") ?? -1;
-                        identity = revision < 0 ? -1 : await PartialItemIdAsync(workspace, StructureRepositoryPath(root, change.Path), revision, token).ConfigureAwait(false);
+                        identity = revision < 0 ? -1 : await StructureDeletedItemIdAsync(workspace, change.Path, revision, token).ConfigureAwait(false);
                     }
                     else identity = await StructureLocalItemIdAsync(root, change.Path, token).ConfigureAwait(false);
                     if (identity != conflict.ItemId && identity != conflict.IncomingItemId) throw new ArgumentException("A structural path now belongs to a different controlled item; recovery did not overwrite it.");
@@ -475,6 +491,38 @@ namespace TortoiseSCM
         { var result = await ExecuteAsync(RevisionCommand(root, new[] { "fileinfo", path, "--fields=RevisionChangeset,Status", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result); return SafeXml.Load(result.Output).Descendants("FileInfo").Single(); }
         private async Task<long> StructureLocalItemIdAsync(string root, string path, CancellationToken token)
         { var result = await ExecuteAsync(RevisionCommand(root, new[] { "ls", path, "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result); return (long)SafeXml.Load(result.Output).Descendants("LsItem").Single().Element("ItemId"); }
+        private async Task<long> StructureDeletedItemIdAsync(PlasticWorkspace workspace, string path, long loadedRevision, CancellationToken token)
+        {
+            // Native DE omits the item from local ls. Paths cannot identify it:
+            // pure directory/file moves preserve revision changesets, and names
+            // can be swapped between two items created in the same changeset.
+            // Use native loaded revision/hash metadata only when it identifies
+            // exactly one regular item in that revision's complete history tree.
+            string root = workspace.RootPath, parent = Path.GetDirectoryName(path);
+            RejectReparsePath(parent);
+            var nested = DiscoverWorkspace(parent);
+            if (!Directory.Exists(parent) || nested == null || !SamePath(nested.RootPath, root)) throw new ArgumentException("The deleted file's loaded parent cannot be verified.");
+            var pending = await GetStatusAsync(root, token).ConfigureAwait(false);
+            if (pending.Any(item => item.IsDirectory && (IsWithin(path, item.Path) || (!String.IsNullOrEmpty(item.OldPath) && IsWithin(path, item.OldPath))))) throw new ArgumentException("Complete pending parent directory changes before resolving this deletion.");
+            var result = await ExecuteAsync(RevisionCommand(root, new[] { "fileinfo", parent, "--fields=RevisionChangeset,Type,Status,IsUnderXlink,RepSpec", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result);
+            var info = SafeXml.Load(result.Output).Descendants("FileInfo").Single();
+            long parentRevision;
+            if (!Int64.TryParse((string)info.Element("RevisionChangeset"), out parentRevision) || parentRevision < 0 || loadedRevision < 0 ||
+                (string)info.Element("Type") != "dir" || !new[] { "controlled", "checked-out" }.Contains((string)info.Element("Status")) ||
+                (string)info.Element("IsUnderXlink") != "false" || (string)info.Element("RepSpec") != workspace.Repository) throw new ArgumentException("The deleted file's parent must be a loaded directory in this repository.");
+            result = await ExecuteAsync(RevisionCommand(root, new[] { "fileinfo", path, "--fields=RevisionChangeset,Hash,Status,Type,IsUnderXlink", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result);
+            var deleted = SafeXml.Load(result.Output).Descendants("FileInfo").Single();
+            string hash = (string)deleted.Element("Hash");
+            if ((long?)deleted.Element("RevisionChangeset") != loadedRevision || String.IsNullOrEmpty(hash) ||
+                (string)deleted.Element("Status") != "deleted" || !new[] { "txt", "bin" }.Contains((string)deleted.Element("Type")) ||
+                (string)deleted.Element("IsUnderXlink") != "false") throw new ArgumentException("The deleted file's loaded revision and content identity cannot be verified.");
+            string tree = "--tree=cs:" + loadedRevision.ToString(CultureInfo.InvariantCulture) + "@" + workspace.Repository;
+            result = await ExecuteAsync(RevisionCommand(root, new[] { "ls", "/", tree, "-R", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false); RequireSuccess(result);
+            var historical = SafeXml.Load(result.Output).Descendants("LsItem").ToList();
+            var matches = historical.Where(item => (long?)item.Element("Changeset") == loadedRevision && (string)item.Element("Hash") == hash && StructureRegularFile(item, workspace.Repository)).ToList();
+            if (matches.Count != 1 || ((long?)matches[0].Element("ItemId") ?? -1) <= 0) throw new ArgumentException("The deleted file's identity is ambiguous: multiple items may share its loaded revision and content. Automatic structural resolution was refused; preserve the deletion and resolve it with the native client.");
+            return (long)matches[0].Element("ItemId");
+        }
         private async Task<string> StructurePendingFingerprintAsync(string root, PlasticPartialStructureConflict conflict, CancellationToken token)
         { return String.Join("\n", (await GetStatusAsync(root, token).ConfigureAwait(false)).Where(item => SamePath(item.Path, MergeLocalPath(root, conflict.RepositoryPath)) || SamePath(item.Path, MergeLocalPath(root, conflict.OriginalPath))).Select(item => item.StatusCode + "|" + item.Path.ToUpperInvariant() + "|" + item.OldPath).OrderBy(value => value)); }
         private void SaveStructureState(StructureState state)

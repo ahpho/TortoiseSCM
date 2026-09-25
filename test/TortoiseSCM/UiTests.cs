@@ -372,6 +372,47 @@ namespace TortoiseSCM
                 directory.Close();
             }
             string invalidRoot = Path.Combine(Path.GetTempPath(), "tscm-ui-missing-" + Guid.NewGuid().ToString("N"));
+            using (var directory = new PartialDirectoryForm(new PlasticClient(PlasticClientConfig.Load()), invalidRoot))
+            {
+                Prepare(directory); WaitUntil(() => !(bool)Field(directory, "busy"), "Partial directory unavailable workspace lookup completes");
+                Require(!((Button)Field(directory, "prepare")).Enabled && !((Button)Field(directory, "recover")).Enabled, "Unavailable directory session cannot mutate files");
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var row = new PlasticPartialDirectoryConflict { RepositoryPath = "/中文目录", IncomingPath = "/资源/中文目录", Kind = "incoming-directory-move", IncomingChangeset = 30,
+                    Reason = "完整加载的目录随服务器移动；本地修改由明确选择处理。", ResolutionOptions = new[] { "take-incoming", "keep-local" },
+                    Items = new[] {
+                        new PlasticPartialDirectoryItem { RepositoryPath = "/中文目录", IncomingPath = "/资源/中文目录", IsDirectory = true, ItemId = 91 },
+                        new PlasticPartialDirectoryItem { RepositoryPath = "/中文目录/readme.txt", IncomingPath = "/资源/中文目录/readme.txt", HasLocalChanges = true, ItemId = 92 },
+                        new PlasticPartialDirectoryItem { RepositoryPath = "/中文目录/sub/clean.txt", IncomingPath = "/资源/中文目录/sub/clean.txt", ItemId = 93 } } };
+                typeof(PartialDirectoryForm).GetField("session", flags).SetValue(directory, null);
+                typeof(PartialDirectoryForm).GetField("conflicts", flags).SetValue(directory, new System.Collections.Generic.List<PlasticPartialDirectoryConflict> { row });
+                typeof(PartialDirectoryForm).GetMethod("Render", flags).Invoke(directory, null);
+                ((ListView)Field(directory, "directories")).Items[0].Selected = true; Application.DoEvents();
+                Require(((ListView)Field(directory, "descendants")).Items.Count == 3 && ((Button)Field(directory, "prepare")).Enabled && !((Button)Field(directory, "apply")).Enabled,
+                    "Directory preview lists full scope and requires backup before application");
+                var session = new PlasticPartialDirectorySession { SessionId = "UI-directory", Conflict = row, Ready = true, RecoveryDirectory = @"C:\UI-fixture\directory-backups" };
+                typeof(PartialDirectoryForm).GetField("session", flags).SetValue(directory, session);
+                typeof(PartialDirectoryForm).GetMethod("Render", flags).Invoke(directory, null);
+                var choices = (ComboBox)Field(directory, "resolution");
+                Require(choices.Enabled && choices.SelectedIndex == -1 && !((Button)Field(directory, "apply")).Enabled, "Prepared directory session never defaults to a destructive choice");
+                choices.SelectedIndex = 1;
+                Require(((Button)Field(directory, "apply")).Enabled && choices.Text.Contains("本地已修改") && ((TextBox)Field(directory, "details")).Text.Contains(session.RecoveryDirectory), "Directory keep-local explains edited files and exposes recovery location");
+                Save(directory, Path.Combine(artifacts, "partial-directory.png")); directory.Size = directory.MinimumSize; Application.DoEvents();
+                foreach (string name in new[] { "refresh", "prepare", "apply", "cancel", "recover", "close", "resolution" })
+                {
+                    var control = (Control)Field(directory, name); var bounds = control.RectangleToScreen(control.ClientRectangle);
+                    Require(control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(bounds), "Partial directory " + name + " visible at minimum size");
+                }
+                Save(directory, Path.Combine(artifacts, "partial-directory-minimum.png"));
+                session.Ready = false; session.Applying = true;
+                typeof(PartialDirectoryForm).GetMethod("Render", flags).Invoke(directory, null);
+                Require(!((Button)Field(directory, "apply")).Enabled && !((Button)Field(directory, "cancel")).Enabled && ((Button)Field(directory, "recover")).Enabled && !choices.Enabled, "Interrupted directory session permits only explicit recovery");
+                session = null; row.ResolutionOptions = new string[0]; row.Reason = "目录含未加载后代，暂不能处理。";
+                typeof(PartialDirectoryForm).GetField("session", flags).SetValue(directory, null);
+                typeof(PartialDirectoryForm).GetMethod("Render", flags).Invoke(directory, null);
+                ((ListView)Field(directory, "directories")).Items[0].Selected = true; Application.DoEvents();
+                Require(!((Button)Field(directory, "prepare")).Enabled && ((TextBox)Field(directory, "details")).Text.Contains("未加载"), "Unsupported directory scope remains visible with a reason and cannot prepare");
+                directory.Close();
+            }
             using (var structure = new PartialStructureForm(new PlasticClient(PlasticClientConfig.Load()), invalidRoot))
             {
                 Prepare(structure); WaitUntil(() => !(bool)Field(structure, "busy"), "Structure unavailable workspace lookup completes");

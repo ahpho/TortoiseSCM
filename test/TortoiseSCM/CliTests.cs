@@ -76,6 +76,16 @@ internal static class CliTests
                 Run(2, "--command", action, "--path", temporary, "--item", "/file.txt", "--changeset", "1", "--yes");
             }
             Run(2, "--command", "partial-conflict-cancel", "--path", temporary);
+            foreach (string operation in new[] { "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" })
+                Run(2, "--command", operation, "--path", temporary);
+            Run(2, "--command", "partial-directory-preview", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"));
+            Run(2, "--command", "partial-directory-preview", "--path", temporary, "--item", "/tree");
+            Run(2, "--command", "partial-directory-prepare", "--path", temporary, "--yes");
+            Run(2, "--command", "partial-directory-resolve", "--path", temporary, "--yes");
+            Run(2, "--command", "partial-directory-resolve", "--path", temporary, "--resolution", "rename", "--yes");
+            Run(2, "--command", "partial-directory-resolve", "--path", temporary, "--resolution", "take-incoming", "--rename", "new", "--yes");
+            Run(2, "--command", "partial-directory-resolve", "--path", temporary, "--resolution", "take-incoming", "--item", "/tree", "--yes");
+            Run(2, "--command", "partial-directory-status", "--path", temporary, "--changeset", "1");
             foreach (string operation in new[] { "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover" })
                 Run(2, "--command", operation, "--path", temporary);
             Run(2, "--command", "partial-structure-preview", "--path", temporary, "--item", "/file.txt");

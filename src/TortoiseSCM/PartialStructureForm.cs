@@ -113,7 +113,7 @@ namespace TortoiseSCM
                     conflict.ResolutionOptions != null && conflict.ResolutionOptions.Count > 0 ? "可处理" : "暂不支持" }) { Tag = conflict };
                 items.Items.Add(row); row.Selected = session != null || conflict.RepositoryPath == selected;
             }
-            status.Text = session == null ? "发现 " + conflicts.Count + " 个文件结构冲突；不扫描目录级冲突。" : session.Ready && !session.Applying ? "备份已准备；请选择处理方式。" : "上次处理未完成，已阻止提交。请查看备份并恢复。";
+            status.Text = session == null ? "发现 " + conflicts.Count + " 个文件结构冲突；目录变化请从“操作 → Partial 目录冲突”处理。" : session.Ready && !session.Applying ? "备份已准备；请选择处理方式。" : "上次处理未完成，已阻止提交。请查看备份并恢复。";
             ShowDetails(); UpdateButtons();
         }
         private async Task ReadStateAsync()

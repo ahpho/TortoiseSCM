@@ -111,6 +111,13 @@ namespace TortoiseSCM
         // Revert restores tracked content as pending changes. It never rewrites server history.
         public async Task<PlasticCommandResult> RollbackAsync(string path, long changeset, CancellationToken cancellationToken)
         {
+            var context = await BuildReadCommandAsync(path, cancellationToken).ConfigureAwait(false);
+            using (var gate = StructureGate(context.WorkingDirectory))
+                return await RollbackLockedAsync(path, changeset, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> RollbackLockedAsync(string path, long changeset, CancellationToken cancellationToken)
+        {
             ValidateChangeset(changeset);
             var validated = await BuildReadCommandAsync(path, cancellationToken).ConfigureAwait(false);
             string absolute = validated.Arguments[1], root = validated.WorkingDirectory;
@@ -154,6 +161,13 @@ namespace TortoiseSCM
         // Standard uses a changeset selector. Partial preserves its loaded scope and working
         // branch, loading that scope at the requested changeset using the native partial update.
         public async Task<PlasticCommandResult> SwitchAsync(string root, long changeset, CancellationToken cancellationToken)
+        {
+            var context = await BuildReadCommandAsync(root, cancellationToken).ConfigureAwait(false);
+            using (var gate = StructureGate(context.WorkingDirectory))
+                return await SwitchLockedAsync(root, changeset, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<PlasticCommandResult> SwitchLockedAsync(string root, long changeset, CancellationToken cancellationToken)
         {
             ValidateChangeset(changeset);
             var validated = await BuildReadCommandAsync(root, cancellationToken).ConfigureAwait(false);

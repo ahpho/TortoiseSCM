@@ -102,7 +102,7 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-structure-integration.txt'), $structureManifest)
         & $structureOutput $structureManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Partial structure tests failed. Inspect $structureManifest." }
-        foreach ($moveSuite in @('PartialCrossDirectoryTests', 'PartialIncomingMoveTests', 'PartialMoveCollisionTests')) {
+        foreach ($moveSuite in @('PartialCrossDirectoryTests', 'PartialIncomingMoveTests', 'PartialMoveCollisionTests', 'PartialDirectoryIntegrationTests', 'PartialDirectoryRepeatedMoveTests', 'PartialDeletedIdentityTests')) {
             $moveOutput = Join-Path $out ($moveSuite + '.exe')
             $moveSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
             $moveSources += Join-Path $PSScriptRoot ('test\TortoiseSCM\' + $moveSuite + '.cs')
@@ -111,12 +111,31 @@ if ($Test -or $Integration) {
             $moveManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
             if (-not $moveManifest -or -not (Test-Path -LiteralPath $moveManifest)) { throw "$moveSuite setup failed." }
             [IO.File]::WriteAllText((Join-Path $PSScriptRoot ('bin\TortoiseSCM\qa\latest-' + $moveSuite + '.txt')), $moveManifest)
-            & $moveOutput $moveManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+            if ($moveSuite -eq 'PartialDeletedIdentityTests') {
+                & $moveOutput $moveManifest 'D:\Program Files\PlasticSCM5\client\cm.exe' (Join-Path $out 'TortoiseSCM.exe')
+            } else {
+                & $moveOutput $moveManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+            }
             if ($LASTEXITCODE -ne 0) { throw "$moveSuite failed. Inspect $moveManifest." }
+            if ($moveSuite -eq 'PartialDirectoryIntegrationTests') {
+                $fullManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+                if (-not $fullManifest -or -not (Test-Path -LiteralPath $fullManifest)) { throw 'Full-mode directory setup failed.' }
+                [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-partial-directory-full.txt'), $fullManifest)
+                & $moveOutput $fullManifest 'D:\Program Files\PlasticSCM5\client\cm.exe' '--full'
+                if ($LASTEXITCODE -ne 0) { throw "Full-mode directory tests failed. Inspect $fullManifest." }
+            }
         }
         $structureCliManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $structureCliManifest -or -not (Test-Path -LiteralPath $structureCliManifest)) { throw 'Partial structure CLI setup did not produce a manifest.' }
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialStructureCliTests.ps1') -Manifest $structureCliManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        $directoryCliManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $directoryCliManifest -or -not (Test-Path -LiteralPath $directoryCliManifest)) { throw 'Partial directory CLI setup did not produce a manifest.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-partial-directory-cli.txt'), $directoryCliManifest)
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialDirectoryCliTests.ps1') -Manifest $directoryCliManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        $directoryFullCliManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $directoryFullCliManifest -or -not (Test-Path -LiteralPath $directoryFullCliManifest)) { throw 'Full-mode Partial directory CLI setup failed.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-partial-directory-full-cli.txt'), $directoryFullCliManifest)
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialDirectoryCliTests.ps1') -Manifest $directoryFullCliManifest -Executable (Join-Path $out 'TortoiseSCM.exe') -FullWorkspace
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\Invoke-DirectoryMatrixTests.ps1')
     }
 }

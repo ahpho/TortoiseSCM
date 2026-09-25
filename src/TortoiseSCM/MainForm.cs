@@ -169,6 +169,11 @@ namespace TortoiseSCM
                 using (var dialog = new PartialStructureForm(client, workspace.RootPath)) dialog.ShowDialog(this);
                 await RefreshAsync();
             });
+            operations.Items.Add("Partial 目录冲突…", null, async delegate {
+                if (busy || !loaded) return;
+                using (var dialog = new PartialDirectoryForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+                await RefreshAsync();
+            });
             operations.Items.Add("锁管理…", null, delegate {
                 if (busy || !loaded) return;
                 using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);

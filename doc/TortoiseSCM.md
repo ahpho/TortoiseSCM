@@ -284,8 +284,33 @@ Partial 内容处理中断时会保留原始和审核结果备份，并阻止提
 & $exe --cli --command partial-structure-recover --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
 
-当前结构处理限普通文件。目录级 Partial 结构冲突、服务器移动同时叠加本地移动/删除、仅大小写变化的服务器改名、路径被不同身份文件替换、Xlink 与符号链接仍会拒绝或显示不支持原因。
+此文件窗口处理普通文件；目录变化使用下述独立目录窗口。服务器移动同时叠加本地移动/删除、仅大小写变化的服务器改名、路径被不同身份文件替换、Xlink 与符号链接仍会拒绝或显示不支持原因。
+原生已删除状态（DE）的文件不再出现在本地身份列表中。本程序仅在已加载版本和内容校验值能唯一确定历史文件身份时处理；同一版本有多个内容相同的文件时会拒绝自动处理，保留待定删除。仅从磁盘删除的缺失状态（LD）仍可读取受控身份，不受此限制。
 即使选中单文件，原生 Partial 更新也可能处理已删除目录。因此准备和应用冲突前会检查已加载目录在目标版本中的身份；遇到目录删除、移动或替换，会指出具体目录并要求先单独处理，不自动扩大更新范围。内容冲突处理也使用此检查。原生目录更新的递归行为见 [PARTIAL UPDATE](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-update)。
+
+### Partial 目录冲突
+
+从“操作 → Partial 目录冲突…”进入。上栏列出服务器移动或删除的已加载目录，下栏显示该目录及全部已加载后代的原路径、传入路径和本地修改标记。单次处理一棵目录，必须先准备整树备份，再明确选择处理方式；不会默认选择或自动提交。
+
+- 服务器移动：可采用服务器目录和内容，或跟随新位置并保留本地已修改文件的内容。原来未修改的文件仍采用服务器版本，目录与后代的 ItemId 保持。
+- 服务器删除：目前支持采用删除；本地原始内容保留在恢复备份中。
+- 本轮要求目录子树完整加载，支持工作区全量加载模式和显式目录加载规则，且服务器移动保持相同后代结构。含未加载后代、私有/忽略项、待定增删移动、链接、嵌套工作区、不同身份替换或仅大小写移动时拒绝。同次存在其他已加载目录结构变化也暂不支持；预检会显示具体原因，不自动扩大加载范围。
+
+```powershell
+& $exe --cli --command partial-directory-preview --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command partial-directory-prepare --path 'D:\workspace' --item '/Assets/OldFolder' --yes --json | ConvertFrom-Json
+& $exe --cli --command partial-directory-status --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command partial-directory-resolve --path 'D:\workspace' --resolution keep-local --yes --json | ConvertFrom-Json
+# 另一选择为 take-incoming；prepare 返回的 resolutionOptions 决定该目录可用的选择。
+# 未应用的准备可取消；已中断的处理必须显式恢复：
+& $exe --cli --command partial-directory-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
+& $exe --cli --command partial-directory-recover --path 'D:\workspace' --yes --json | ConvertFrom-Json
+```
+
+目录会话持久记录在工作区元数据中，换配置文件或重启不会绕过保护。准备和应用分离，旧选择不能覆盖后续编辑；中断后阻止其他修改操作，状态命令返回恢复目录。显式恢复会先另存已知路径的新编辑；新出现的其他文件或变化的服务器结构会阻止恢复并保留现状，需要先处理这些变化。整树卸载/加载使用原生 [PARTIAL CONFIGURE](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-configure)，不会隐式更新父目录。
+
+### 锁管理
+
 锁列表限定当前仓库；只有当前用户、当前工作区持有的锁才允许释放，执行前再次读取核验。
 锁获取遵循服务器规则：普通签出并不保证获得锁。本程序不修改服务器锁规则，服务器权限仍决定能否释放。
 
@@ -365,7 +390,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 自定义 diff / merge | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：分支浏览、Partial 目录级及传入移动结构冲突处理、拖放移动、仓库创建、
+尚未提供：分支浏览、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

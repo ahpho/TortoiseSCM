@@ -184,3 +184,21 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 目标碰撞修复后再次完整构建并通过本地 `-Test -Workspace`，最终程序时间及 SHA-256 记录在 `qa/move-release-record.json`。前述 77/50/54/55 项矩阵在此额外保护之前通过；该保护使用专门的真实碰撞回归复核，避免把早期矩阵误记为最终二进制测试。
 - 最终源码的目标碰撞回归 12 项通过（`qa/integration-20260925-173257-9bf1bd95/partial-move-collision-results.xml`）：原文件版本不变的碰撞仍显示在两种预检中，准备和提交拒绝且不改变本地字节、选择器及服务器内容；无碰撞的移动并编辑可正常提交，独立工作区收到正确内容。该测试已加入 `build-tortoisescm.ps1 -Integration`。
 - 最终主 EXE 另通过 5 项公开 CLI 碰撞验证（同目录 `partial-move-collision-cli-results.json`）：两种预检显示冲突，准备和提交退出码为 2，全部本地字节和 selector 保持不变。
+
+# 第八阶段：Partial 目录变化的完整范围审核（2026-09-25）
+
+- 新增独立目录预检/准备/应用/取消/恢复流程及 GUI/CLI 入口。支持显式完整加载子树和默认全量加载工作区的服务器移动，以及采用服务器目录删除；移动时可在新位置保留本地已修改文件内容，未修改文件使用传入内容。影响清单包括目录和全部后代，准备整树备份后才允许明确选择。
+- 原生证据：`qa/integration-20260925-174102-418f12fd/partial-directory-native-probe.json` 验证完整子树移动保留所有身份及范围外加载状态；`qa/integration-20260925-174138-0c15f9ac/` 证明目录加载会扩大部分加载范围，且卸载保留私有项；`qa/integration-20260925-174327-5f8d4fb1/` 证明配置选中目录时也可能改变其他已删除目录的加载规则，因此这些情况须预先拒绝。可复现实验脚本为 `test/TortoiseSCM/Probe-PartialDirectoryIncoming.ps1`。
+- 首批拒绝部分加载子树、私有/忽略项、嵌套工作区、链接、本地结构变更、目录身份替换、后代结构变化，以及同时存在其他已加载目录的服务器结构变化。全量加载的移动/删除证据分别为 `qa/integration-20260925-174521-1c00cfa8/`、`qa/integration-20260925-174626-069831ae/`；实现对全量标记、目录卸载后的临时规则及完成后的原模式分别建模。逐已加载文件重建研究见 `qa/integration-20260925-174637-11d0f796/`，本阶段尚未开放这种部分加载范围。
+- 写操作共用结构互斥锁，目录会话使用独立工作区标记，避免与 Standard 目录合并标记混淆。新增保护覆盖普通添加/签出/签入/撤销/更新、文件移动/删除/忽略、历史恢复/切换，以及输出到该工作区的历史导出和外部合并工具。更换 settings 不会绕过会话标记。
+- 纯目录移动不会必然改变子文件的内容版本号。已修正普通内容/文件结构预检使用本地受控身份与当前分支树核对，备份通过历史树的 ItemId 查找当时路径，避免新路径在旧内容版本中不存在导致后续提交或内容冲突准备失败。目录后代分次提交的版本实验见 `qa/integration-20260925-175229-2c0624ab/partial-directory-revision-probe.json`。
+- 全量模式的原生加载规则使用不透明 GUID 命名空间，并非仓库 GUID。准备时记录受控目录 ItemId 集合；卸载后的中间态要求合法单一命名空间、无重复或未知 ID、范围外目录成员不变，并核对本地/服务器身份及范围外字节后才保存该命名空间。完成后必须恢复原 fullupdate 标记及空显式规则。
+- 补齐连续纯目录移动的历史路径处理：目录本身也可能保留旧版本号，预检按历史根 ItemId 映射相对层级，而非假设当前路径在旧版本中存在。后端全量模式连续移动 14 项通过（`qa/integration-20260925-182143-3024050d/partial-directory-repeated-full-results.json`）。物理缺失 LD 使用仍保留的本地受控身份。DE 的最初历史父路径方案在后续安全审查中被替换，见下方身份歧义验证。
+- 目录公开 CLI 的显式/全量模式各 49 项通过（`qa/integration-20260925-181351-2efead46/`、`qa/integration-20260925-181358-5d351c5d/`），涵盖 prepare/status/cancel、两种移动选择、删除、提交/独立消费者，以及移动后的再次内容冲突。两组使用历史父路径最后修正之前的候选主 EXE，其 SHA-256 单独记于 `qa/partial-directory-main-matrix-record.json`；目录历史路径修正由后续 EXE 的连续纯移动聚焦用例复核，DE 身份安全修正另见下方记录。
+- 全量模式 148 项真实后端检查通过（`qa/integration-20260925-180623-46d8652b/partial-directory-full-results.json`），涵盖无关结构/配置变化拒绝、卸载前后/加载后的故障恢复、加载规则命名空间篡改拒绝、已知路径新字节另存和未知项保护。原文件结构 77 项通过（`qa/integration-20260925-181248-ae21688c/partial-structure-results.json`）；内容冲突 35 项通过（`qa/partial-directory-content-regression.log`）。这些矩阵使用最后历史路径修正之前的 Core；后续专项测试单独记录。
+- 显式加载模式完整 199 项真实后端检查通过（`qa/integration-20260925-180853-4e688f69/partial-directory-results.json`），包含 15 类写入口阻断、不同 settings、完整/不完整子树边界、配置/服务器版本/新编辑变化及三个故障边界。目录历史路径修正后的 EXE 连续纯移动公开 CLI 在显式/全量模式各 14 项通过（`qa/integration-20260925-182106-3ef30e8b/`、`qa/integration-20260925-182106-c763d91d/`）。
+- 末次身份审查真实复现了同版本 A/B 交换文件名再删除的误认（`qa/integration-20260925-182632-84cd5e6c/deleted-swap-identity-probe.json`）。最终 DE 实现读取原生已加载版本与内容 Hash，在该版本完整历史树中只接受唯一的同仓库常规文件身份；多项同版本同内容时明确拒绝。原反例使用新 Core 复测已拒绝（同目录 `deleted-swap-fixed-preview.log`），没有执行错误的恢复或覆盖。纯目录移动后的 LD 仍使用本地 ItemId。
+- 完整本地 `-Test -Workspace` 通过（`qa/partial-directory-shipping-validation.log`），包括后端、980 项 CLI、Shell 和 GUI。其后仅将无法确定身份的 DE 转为该路径的“不支持”记录，使无关范围不被阻断；主 EXE 已重新构建，并再次通过 980 项 CLI（`qa/partial-directory-cli-final.log`）和 25 项安装包测试（`qa/partial-directory-package-final.log`）。最终程序 SHA-256 和源码/构建时间见 `qa/partial-directory-release-record.json`。
+- 新窗口正常和最小尺寸均已生成并目视检查：`qa/Release/partial-directory.png`、`partial-directory-minimum.png`。沿用原生列表、上下窗格、标准按钮和明确选择；整树备份路径、完整影响范围及中断恢复入口可见。尚未增加真人等效的 Explorer 点击、多显示器 DPI 或机器级图标安装验证。
+- DE/LD 专项覆盖纯目录移动后的接受/保留删除/中断恢复、单文件独立更新和根目录删除，共八种正常场景，公开 EXE 与独立消费者结果均通过（`qa/deleted-identity-shipping.log`，fixture `qa/integration-20260925-182938-5bed2083/`）。该候选 EXE 的记录单独保存在 `qa/partial-directory-deleted-matrix-record.json`。旧测试末尾直接比较 XML 的失败仅由 PrintableLastModified 的“4分钟前→5分钟前”引起，原始失败证据保留；测试已改用稳定的短机器格式比较。
+- 最后范围修正后的主 EXE 14 项真实专项通过（同 fixture 的 `partial-deleted-identity-ambiguity-results.json`、`qa/deleted-identity-scope.log`）：歧义 DE 在 GUI/CLI 预检中作为单条不支持记录显示；准备及该项签入拒绝且无会话/无字节修改；无关 sentinel 使用唯一文件路径提交成功，消费者核对服务器内容且本地 DE 仍保留。原 TestSCM 保持无待定变更，selector 仍为 `/main`；全部服务器测试均位于独立测试分支。

@@ -38,6 +38,23 @@ namespace TortoiseSCM
         public async Task<PlasticCommandResult> ExportRevisionAsync(string workspacePath, string repositoryPath, long changeset, string outputPath, bool overwrite, CancellationToken cancellationToken)
         {
             string output = ValidateHistoricalOutput(outputPath, overwrite);
+            using (var gate = OpenPartialDirectoryOutputGate(output))
+                return await ExportRevisionLockedAsync(workspacePath, repositoryPath, changeset, output, overwrite, cancellationToken).ConfigureAwait(false);
+        }
+
+        private FileStream OpenPartialDirectoryOutputGate(string output)
+        {
+            output = ValidateHistoricalOutput(output, true);
+            var workspace = DiscoverWorkspace(output);
+            if (workspace == null) return null;
+            var gate = StructureGate(workspace.RootPath);
+            try { ThrowIfPartialDirectoryActive(workspace.RootPath); return gate; }
+            catch { gate.Dispose(); throw; }
+        }
+
+        private async Task<PlasticCommandResult> ExportRevisionLockedAsync(string workspacePath, string repositoryPath, long changeset, string outputPath, bool overwrite, CancellationToken cancellationToken)
+        {
+            string output = ValidateHistoricalOutput(outputPath, overwrite);
             var context = await HistoricalContextAsync(workspacePath, repositoryPath, changeset, cancellationToken).ConfigureAwait(false);
             // Download outside the destination first: server failure never touches existing bytes.
             string temporary = NewHistoricalTemporaryDirectory();

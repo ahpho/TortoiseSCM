@@ -51,6 +51,7 @@ namespace TortoiseSCM
                 IncomingChangeset = structural.IncomingChangeset, ItemId = structural.ItemId, CanResolve = false, Reason = "Use structural conflict decisions: " + structural.Kind + ". " + structural.Reason });
             var addedPaths = changes.Where(item => item.StatusCode == "AD").ToList();
             HashSet<string> headPaths = addedPaths.Count == 0 ? null : await PartialHeadPathsAsync(workspace, cancellationToken).ConfigureAwait(false);
+            StructureTree contentHead = null;
             foreach (var pending in changes)
             {
                 string path = "/" + pending.Path.Substring(workspace.RootPath.TrimEnd('\\').Length).TrimStart('\\').Replace('\\', '/');
@@ -69,7 +70,8 @@ namespace TortoiseSCM
                 {
                     continue;
                 }
-                var conflict = await ReadPartialConflictAsync(workspace, path, cancellationToken).ConfigureAwait(false);
+                if (contentHead == null) contentHead = await ReadStructureTreeAsync(workspace, cancellationToken).ConfigureAwait(false);
+                var conflict = await ReadPartialConflictAsync(workspace, path, cancellationToken, contentHead).ConfigureAwait(false);
                 if (conflict.BaseChangeset != conflict.IncomingChangeset || !conflict.CanResolve) conflicts.Add(conflict);
             }
             return conflicts;
@@ -134,8 +136,8 @@ namespace TortoiseSCM
                 state.InputDirectories[repositoryPath] = Guid.NewGuid().ToString("N");
                 var files = PartialFiles(state, repositoryPath);
                 CreatePrivateMergeDirectory(Path.GetDirectoryName(files.BasePath));
-                await DownloadHistoricalFileAsync(workspace, repositoryPath, conflict.BaseChangeset, files.BasePath, cancellationToken).ConfigureAwait(false);
-                await DownloadHistoricalFileAsync(workspace, repositoryPath, conflict.IncomingChangeset, files.RemotePath, cancellationToken).ConfigureAwait(false);
+                await DownloadPartialIdentityFileAsync(workspace, conflict.ItemId, conflict.BaseChangeset, files.BasePath, cancellationToken).ConfigureAwait(false);
+                await DownloadPartialIdentityFileAsync(workspace, conflict.ItemId, conflict.IncomingChangeset, files.RemotePath, cancellationToken).ConfigureAwait(false);
                 File.Copy(local, files.LocalPath, false);
                 if (hash != MergeHash(local) || hash != MergeHash(files.LocalPath)) throw new ArgumentException("The local file changed while preparing the conflict. No workspace bytes were changed.");
                 foreach (string input in new[] { files.BasePath, files.LocalPath, files.RemotePath }) File.SetAttributes(input, File.GetAttributes(input) | FileAttributes.ReadOnly);
@@ -299,7 +301,7 @@ namespace TortoiseSCM
             if (HasSavedMergeSession(workspace.RootPath) || File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress"))) throw new ArgumentException("Complete the existing native merge before resolving Partial incoming changes.");
             return workspace;
         }
-        private async Task<PlasticPartialConflict> ReadPartialConflictAsync(PlasticWorkspace workspace, string path, CancellationToken token)
+        private async Task<PlasticPartialConflict> ReadPartialConflictAsync(PlasticWorkspace workspace, string path, CancellationToken token, StructureTree knownHead = null)
         {
             string local = MergeLocalPath(workspace.RootPath, path);
             var result = await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "fileinfo", local,
@@ -314,11 +316,25 @@ namespace TortoiseSCM
             conflict.BaseChangeset = loaded; conflict.IncomingChangeset = incoming;
             if ((string)info.Element("ServerPath") != path || (string)info.Element("RepSpec") != workspace.Repository || (string)info.Element("IsUnderXlink") != "false" ||
                 ((string)info.Element("Type") != "txt" && (string)info.Element("Type") != "bin") || !File.Exists(local)) return conflict;
-            long baseItem = await PartialItemIdAsync(workspace, path, loaded, token).ConfigureAwait(false);
-            long incomingItem = await PartialItemIdAsync(workspace, path, incoming, token).ConfigureAwait(false);
+            // A parent-directory move can preserve the file revision number.
+            // The current path may not exist at that old revision: use the loaded
+            // identity and verify its current branch-head path independently.
+            long baseItem = await StructureLocalItemIdAsync(workspace.RootPath, local, token).ConfigureAwait(false);
+            var tree = knownHead ?? await ReadStructureTreeAsync(workspace, token).ConfigureAwait(false);
+            var head = tree.Items.SingleOrDefault(entry => (string)entry.Element("CurrentPath") == path);
+            long incomingItem = head == null || !StructureRegularFile(head, workspace.Repository) ? -1 : (long)head.Element("ItemId");
             conflict.ItemId = baseItem;
-            if (baseItem != incomingItem || baseItem < 0) return conflict;
+            if (baseItem != incomingItem || baseItem < 0 || (long?)head.Element("Changeset") != incoming) return conflict;
             conflict.CanResolve = true; conflict.Reason = ""; return conflict;
+        }
+        private async Task DownloadPartialIdentityFileAsync(PlasticWorkspace workspace, long itemId, long changeset, string destination, CancellationToken token)
+        {
+            if (itemId <= 0 || changeset < 0) throw new ArgumentException("A committed file identity and revision are required.");
+            var result = await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "ls", "/", "--tree=cs:" + changeset.ToString(CultureInfo.InvariantCulture) + "@" + workspace.Repository, "-R", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
+            RequireSuccess(result);
+            var entry = SafeXml.Load(result.Output).Descendants("LsItem").SingleOrDefault(item => (long?)item.Element("ItemId") == itemId);
+            if (entry == null || !StructureRegularFile(entry, workspace.Repository)) throw new ArgumentException("The historical file identity is missing, replaced or linked.");
+            await DownloadHistoricalFileAsync(workspace, (string)entry.Element("CurrentPath"), changeset, destination, token).ConfigureAwait(false);
         }
         private async Task<long> PartialItemIdAsync(PlasticWorkspace workspace, string path, long changeset, CancellationToken token)
         {
