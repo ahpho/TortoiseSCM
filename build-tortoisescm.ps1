@@ -92,6 +92,20 @@ if ($Test -or $Integration) {
         & $partialOutput $partialManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Partial conflict tests failed. Inspect $partialManifest and partial-conflict-results.json beside it." }
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialConflictCliTests.ps1') -Manifest $partialManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        $structureOutput = Join-Path $out 'PartialStructureIntegrationTests.exe'
+        $structureSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+        $structureSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialStructureIntegrationTests.cs'
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$structureOutput" $structureSources
+        if ($LASTEXITCODE -ne 0) { throw 'Partial structure integration test compilation failed.' }
+        $structureManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $structureManifest -or -not (Test-Path -LiteralPath $structureManifest)) { throw 'Partial structure setup did not produce a manifest.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-structure-integration.txt'), $structureManifest)
+        & $structureOutput $structureManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+        if ($LASTEXITCODE -ne 0) { throw "Partial structure tests failed. Inspect $structureManifest." }
+        $structureCliManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $structureCliManifest -or -not (Test-Path -LiteralPath $structureCliManifest)) { throw 'Partial structure CLI setup did not produce a manifest.' }
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialStructureCliTests.ps1') -Manifest $structureCliManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\Invoke-DirectoryMatrixTests.ps1')
     }
 }
 Write-Host "Built: $out\TortoiseSCM.exe"

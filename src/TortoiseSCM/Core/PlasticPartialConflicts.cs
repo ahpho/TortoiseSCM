@@ -46,11 +46,15 @@ namespace TortoiseSCM
             var workspace = await PartialWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
             var conflicts = new List<PlasticPartialConflict>();
             var changes = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
+            var structures = changes.Count == 0 ? new List<PlasticPartialStructureConflict>() : await PreviewPartialStructureAsync(root, cancellationToken).ConfigureAwait(false);
+            foreach (var structural in structures) conflicts.Add(new PlasticPartialConflict { RepositoryPath = structural.RepositoryPath, BaseChangeset = structural.BaseChangeset,
+                IncomingChangeset = structural.IncomingChangeset, ItemId = structural.ItemId, CanResolve = false, Reason = "Use structural conflict decisions: " + structural.Kind + ". " + structural.Reason });
             var addedPaths = changes.Where(item => item.StatusCode == "AD").ToList();
             HashSet<string> headPaths = addedPaths.Count == 0 ? null : await PartialHeadPathsAsync(workspace, cancellationToken).ConfigureAwait(false);
             foreach (var pending in changes)
             {
                 string path = "/" + pending.Path.Substring(workspace.RootPath.TrimEnd('\\').Length).TrimStart('\\').Replace('\\', '/');
+                if (structures.Any(item => String.Equals(item.RepositoryPath, path, StringComparison.OrdinalIgnoreCase))) continue;
                 if (pending.StatusCode == "AD" && headPaths.Contains(path))
                 {
                     conflicts.Add(new PlasticPartialConflict { RepositoryPath = path, BaseChangeset = -1, IncomingChangeset = -1,
@@ -59,12 +63,6 @@ namespace TortoiseSCM
                 }
                 if (pending.IsDirectory || (pending.StatusCode != "CH" && pending.StatusCode != "CO"))
                 {
-                    if (pending.StatusCode == "MV" || pending.StatusCode == "DE" || pending.StatusCode == "LD" || pending.StatusCode == "D")
-                    {
-                        var structural = await ReadPartialConflictAsync(workspace, path, cancellationToken).ConfigureAwait(false);
-                        if (structural.BaseChangeset != structural.IncomingChangeset || structural.BaseChangeset < 0)
-                        { structural.CanResolve = false; structural.Reason = "Incoming changes overlap this local move/deletion. Preserve the local changes and undo or finish the structural decision first."; conflicts.Add(structural); }
-                    }
                     continue;
                 }
                 var conflict = await ReadPartialConflictAsync(workspace, path, cancellationToken).ConfigureAwait(false);
@@ -101,10 +99,14 @@ namespace TortoiseSCM
         }
         public async Task<PlasticMergeConflictFiles> PreparePartialConflictAsync(string root, string repositoryPath, CancellationToken cancellationToken)
         {
+            ThrowIfPartialStructureActive(root);
             var workspace = await PartialWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
+            ValidateMergeStorageLocation(workspace.RootPath);
             string local = MergeLocalPath(workspace.RootPath, repositoryPath);
+            using (var structureGate = StructureGate(root))
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
+                ThrowIfPartialStructureActive(root);
                 var state = LoadPartialState(workspace.RootPath, false);
                 if (state != null) ValidatePartialConfiguration(state, workspace);
                 if (state != null && (!state.Session.Ready || state.Session.Applying)) throw new ArgumentException("A Partial resolution was interrupted. Preserve its backups and explicitly undo the affected file before retrying.");
@@ -141,12 +143,15 @@ namespace TortoiseSCM
         }
         public async Task<PlasticCommandResult> ResolvePartialConflictAsync(string root, string repositoryPath, string resultPath, CancellationToken cancellationToken)
         {
+            ThrowIfPartialStructureActive(root);
             var workspace = await PartialWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
             string local = MergeLocalPath(workspace.RootPath, repositoryPath);
             string result = Path.GetFullPath(resultPath); RejectReparsePath(result);
             if (!File.Exists(result) || SamePath(result, local) || SameExistingFile(result, local)) throw new ArgumentException("Save the reviewed result to a separate file.");
+            using (var structureGate = StructureGate(root))
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
+                ThrowIfPartialStructureActive(root);
                 var state = LoadPartialState(workspace.RootPath, true); ValidatePartialConfiguration(state, workspace);
                 if (!state.Session.Ready || state.Session.Applying) throw new ArgumentException("An interrupted resolution requires explicit file undo before continuing. Backups remain in the session.");
                 var conflict = state.Session.Conflicts.SingleOrDefault(item => item.RepositoryPath == repositoryPath);
@@ -212,6 +217,20 @@ namespace TortoiseSCM
         }
         private async Task<PlasticCommandResult> ExecuteWithPartialConflictGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken)
         {
+            if (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Update || request.Command == PlasticCommand.Undo)
+            {
+                using (var gate = StructureGate(command.WorkingDirectory))
+                {
+                    ThrowIfPartialStructureActive(command.WorkingDirectory);
+                    return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken).ConfigureAwait(false);
+        }
+        private async Task<PlasticCommandResult> ExecutePartialConflictGuardCoreAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken)
+        {
+            if (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Update || request.Command == PlasticCommand.Undo)
+                ThrowIfPartialStructureActive(command.WorkingDirectory);
             if (request.Command != PlasticCommand.Checkin && request.Command != PlasticCommand.Undo)
                 return await ExecuteWithMergeGuardAsync(command, request, cancellationToken).ConfigureAwait(false);
             var workspace = await GetWorkspaceAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false);

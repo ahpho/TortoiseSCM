@@ -114,6 +114,7 @@ namespace TortoiseSCM
             ValidateChangeset(changeset);
             var validated = await BuildReadCommandAsync(path, cancellationToken).ConfigureAwait(false);
             string absolute = validated.Arguments[1], root = validated.WorkingDirectory;
+            ThrowIfPartialStructureActive(root);
             if (SamePath(absolute, root)) return await RollbackWorkspaceAsync(root, changeset, cancellationToken).ConfigureAwait(false);
             await ValidateCleanRevisionOperationAsync(root, absolute, cancellationToken).ConfigureAwait(false);
             await GetChangesetAsync(root, changeset, cancellationToken).ConfigureAwait(false);
@@ -158,6 +159,7 @@ namespace TortoiseSCM
             var validated = await BuildReadCommandAsync(root, cancellationToken).ConfigureAwait(false);
             if (!SamePath(validated.Arguments[1], validated.WorkingDirectory)) throw new ArgumentException("切换历史快照必须显式选择工作区根目录。");
             root = validated.WorkingDirectory;
+            ThrowIfPartialStructureActive(root);
             var workspace = await GetWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
             await ValidateCleanRevisionOperationAsync(root, root, cancellationToken).ConfigureAwait(false);
             await GetChangesetAsync(root, changeset, cancellationToken).ConfigureAwait(false);

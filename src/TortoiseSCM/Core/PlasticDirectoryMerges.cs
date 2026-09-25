@@ -14,6 +14,7 @@ namespace TortoiseSCM
     {
         private async Task<PlasticMergeSession> BeginDirectoryMergePlanAsync(PlasticWorkspace workspace, PlasticMergePlan plan, CancellationToken token)
         {
+            ValidateMergeStorageLocation(workspace.RootPath);
             if (plan.DirectoryConflicts.Any(item => item.ResolutionOptions.Count == 0)) throw new ArgumentException("This merge contains an unrecognized directory conflict type. No merge plan was started.");
             await RejectIgnoredDirectoryMergePathsAsync(workspace.RootPath, plan, token).ConfigureAwait(false);
             var state = new MergeSessionState { Selector = workspace.Selector, DirectoryFingerprint = DirectoryMergeFingerprint(workspace.RootPath, token),
@@ -179,7 +180,7 @@ namespace TortoiseSCM
         }
 
         private static bool SameDirectoryConflict(PlasticDirectoryConflict left, PlasticDirectoryConflict right)
-        { return left.ItemId == right.ItemId && left.Kind == right.Kind && left.SourcePath == right.SourcePath && left.DestinationPath == right.DestinationPath && left.SourceOriginalPath == right.SourceOriginalPath && left.DestinationOriginalPath == right.DestinationOriginalPath && left.SourceOperation == right.SourceOperation && left.DestinationOperation == right.DestinationOperation; }
+        { return left.ItemId == right.ItemId && left.Kind == right.Kind && left.IsDirectory == right.IsDirectory && left.SourcePath == right.SourcePath && left.DestinationPath == right.DestinationPath && left.SourceOriginalPath == right.SourceOriginalPath && left.DestinationOriginalPath == right.DestinationOriginalPath && left.SourceOperation == right.SourceOperation && left.DestinationOperation == right.DestinationOperation; }
 
         private static void SynchronizeDirectoryPlan(MergeSessionState state, PlasticMergePlan current)
         {

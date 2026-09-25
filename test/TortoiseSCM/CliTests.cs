@@ -19,6 +19,7 @@ internal static class CliTests
     private static string application;
     private static string fakeCm;
     private static string temporary;
+    private static string mergeSettingsDirectory;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
 
     private static int Main(string[] args)
@@ -28,6 +29,7 @@ internal static class CliTests
         if (args.Length > 0 && !args[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return FakeCm(args);
         // Leave headroom below legacy helper MAX_PATH for nested private merge artifacts.
         temporary = Path.Combine(Path.GetTempPath(), "TSCMCLI-" + Guid.NewGuid().ToString("N").Substring(0, 12) + " 中文 空格");
+        mergeSettingsDirectory = temporary + "-settings";
         try
         {
             if (args.Length != 1) throw new ArgumentException("Usage: CliTests.exe <TortoiseSCM.exe>");
@@ -74,6 +76,18 @@ internal static class CliTests
                 Run(2, "--command", action, "--path", temporary, "--item", "/file.txt", "--changeset", "1", "--yes");
             }
             Run(2, "--command", "partial-conflict-cancel", "--path", temporary);
+            foreach (string operation in new[] { "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover" })
+                Run(2, "--command", operation, "--path", temporary);
+            Run(2, "--command", "partial-structure-preview", "--path", temporary, "--item", "/file.txt");
+            Run(2, "--command", "partial-structure-preview", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"));
+            Run(2, "--command", "partial-structure-prepare", "--path", temporary, "--yes");
+            Run(2, "--command", "partial-structure-resolve", "--path", temporary, "--yes");
+            Run(2, "--command", "partial-structure-resolve", "--path", temporary, "--resolution", "src", "--yes");
+            Run(2, "--command", "partial-structure-resolve", "--path", temporary, "--resolution", "rename", "--yes");
+            Run(2, "--command", "partial-structure-resolve", "--path", temporary, "--resolution", "keep-local", "--rename", "other.txt", "--yes");
+            Run(2, "--command", "partial-structure-resolve", "--path", temporary, "--resolution", "take-incoming", "--conflict", "1", "--yes");
+            Run(2, "--command", "partial-structure-resolve", "--path", temporary, "--resolution", "take-incoming", "--item", "/file.txt", "--yes");
+            Run(2, "--command", "partial-structure-prepare", "--path", temporary, "--item", "/file.txt", "--changeset", "1", "--yes");
             Run(2, "--command", "partial-conflict-status", "--path", temporary, "--item", "/file.txt");
             Run(2, "--command", "partial-conflicts", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"));
             Run(2, "--command", "partial-conflict-resolve", "--path", temporary, "--item", "/file.txt", "--yes");
@@ -151,7 +165,11 @@ internal static class CliTests
             File.WriteAllText(Path.Combine(temporary, "fake-partial.marker"), "partial");
             var partial = Run(0, "--command", "update", "--yes", "--path", Path.Combine(temporary, "file.txt"), "--cm", fakeCm);
             Check(partial["output"].ToString().StartsWith("partial\nupdate\n"), "Partial file update preserves its explicit scope");
+            // Text transport is independent of remote Partial structure discovery.
+            // Use the Standard fixture; real Partial publishing is covered separately.
+            File.Delete(Path.Combine(temporary, "fake-partial.marker"));
             TextModeTests();
+            File.WriteAllText(Path.Combine(temporary, "fake-partial.marker"), "partial");
             ToolTests(controlled);
             HistoricalFileTests();
             LockTests();
@@ -169,7 +187,15 @@ internal static class CliTests
             if (File.Exists(log)) Console.Error.WriteLine("Last fake cm calls:\n" + String.Join("\n", File.ReadAllLines(log).Reverse().Take(12).Reverse()));
             return 1;
         }
-        finally { if (Directory.Exists(temporary)) Directory.Delete(temporary, true); }
+        finally
+        {
+            if (Directory.Exists(temporary)) Directory.Delete(temporary, true);
+            if (Directory.Exists(mergeSettingsDirectory))
+            {
+                foreach (string file in Directory.GetFiles(mergeSettingsDirectory, "*", SearchOption.AllDirectories)) File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(mergeSettingsDirectory, true);
+            }
+        }
     }
 
     private static Dictionary<string, object> Data(Dictionary<string, object> response) { return (Dictionary<string, object>)response["data"]; }
@@ -343,7 +369,7 @@ internal static class CliTests
     {
         File.Delete(Path.Combine(temporary, "fake-partial.marker"));
         File.WriteAllText(Path.Combine(temporary, "fake-clean.marker"), "clean");
-        string file = Path.Combine(temporary, "merge-conflict.txt"), settings = Path.Combine(temporary, "merge-config", "settings.xml");
+        string file = Path.Combine(temporary, "merge-conflict.txt"), settings = Path.Combine(mergeSettingsDirectory, "settings.xml");
         File.WriteAllText(file, "merge local 中文\n", new UTF8Encoding(false));
         Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--merge-tool", fakeCm, "--merge-args", "--tool-merge \"{base}\" \"{local}\" \"{remote}\" \"{merged}\"");
         Check(Data(Run(0, "--command", "merge-status", "--path", temporary, "--cm", fakeCm, "--settings-file", settings))["sessionId"] == null, "Merge status reports no active session without opening UI");
@@ -369,7 +395,7 @@ internal static class CliTests
         var resolved = (Dictionary<string, object>)Data(Run(0, "--command", "merge-status", "--path", temporary, "--cm", fakeCm, "--settings-file", settings))["plan"];
         Check((bool)((Dictionary<string, object>)((IList)resolved["fileConflicts"])[0])["resolved"], "Merge status persists resolved state");
         // Session input files are deliberately read-only; normalize only our fixture artifacts for cleanup.
-        foreach (string artifact in Directory.GetFiles(Path.Combine(temporary, "merge-config"), "*", SearchOption.AllDirectories)) File.SetAttributes(artifact, FileAttributes.Normal);
+        foreach (string artifact in Directory.GetFiles(mergeSettingsDirectory, "*", SearchOption.AllDirectories)) File.SetAttributes(artifact, FileAttributes.Normal);
     }
 
     private static Tuple<int, string, string> Invoke(IEnumerable<string> arguments)

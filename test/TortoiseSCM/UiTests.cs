@@ -297,6 +297,33 @@ namespace TortoiseSCM
         }
         private static void CheckConflictDialogs(string artifacts)
         {
+            using (var choice = new PartialStructureChoiceForm("本地：/中文目录/file.txt\r\n传入：/中文目录/file.txt\r\n双方分别新增了同名文件。\r\n请检查已保存的备份和处理方式。", new[] { "take-incoming", "keep-local", "rename", "unknown" }, "add-add"))
+            {
+                Prepare(choice);
+                var choices = (ComboBox)Field(choice, "choices");
+                var rename = (TextBox)Field(choice, "rename");
+                var accept = (Button)choice.AcceptButton;
+                Require(choices.Items.Count == 3 && choices.SelectedIndex == -1 && !accept.Enabled, "Partial structural choice requires explicit supported selection");
+                choices.SelectedIndex = 2;
+                Require(rename.Enabled && !accept.Enabled, "Partial rename requires a nonempty reviewed name");
+                rename.Text = "local-copy.txt";
+                Require(accept.Enabled && choice.Rename == "local-copy.txt", "Partial rename exposes the reviewed name");
+                Save(choice, Path.Combine(artifacts, "partial-structure-choice.png"));
+                choice.Size = choice.MinimumSize; Application.DoEvents();
+                Require(choice.RectangleToScreen(choice.ClientRectangle).Contains(accept.RectangleToScreen(accept.ClientRectangle)), "Partial structural confirmation remains visible at minimum size");
+                Save(choice, Path.Combine(artifacts, "partial-structure-choice-minimum.png"));
+                choices.SelectedIndex = 0;
+                Require(accept.Enabled && choice.Rename == null && !rename.Enabled, "Taking incoming cannot accidentally retain the rename argument");
+                choice.Close();
+            }
+            using (var choice = new PartialStructureChoiceForm("本地重命名与传入修改", new[] { "keep-local", "take-incoming", "rename" }, "local-move"))
+            {
+                Prepare(choice); ((ComboBox)Field(choice, "choices")).SelectedIndex = 2;
+                Require(!choice.ChoiceText.Contains("保留双方") && ((Label)Field(choice, "explanation")).Text.Contains("原路径不再保留"), "Local move rename explains relocation without promising two copies");
+                ((ComboBox)Field(choice, "choices")).SelectedIndex = 0;
+                Require(((Label)Field(choice, "explanation")).Text.Contains("采用备份中的本地内容"), "Local move decision explains content edits replacing incoming bytes");
+                choice.Close();
+            }
             using (var directory = new DirectoryConflictForm("两个分支分别新增同名文件，请核对双方路径后选择。", "/中文 空格/collision.txt", "/中文 空格/collision.txt", new[] { "src", "dst", "rename", "unknown", "src" }))
             {
                 Prepare(directory);
@@ -325,6 +352,36 @@ namespace TortoiseSCM
                 directory.Close();
             }
             string invalidRoot = Path.Combine(Path.GetTempPath(), "tscm-ui-missing-" + Guid.NewGuid().ToString("N"));
+            using (var structure = new PartialStructureForm(new PlasticClient(PlasticClientConfig.Load()), invalidRoot))
+            {
+                Prepare(structure); WaitUntil(() => !(bool)Field(structure, "busy"), "Structure unavailable workspace lookup completes");
+                Require(!((Button)Field(structure, "prepare")).Enabled && !((Button)Field(structure, "recover")).Enabled, "Unavailable structure session cannot mutate files");
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var row = new PlasticPartialStructureConflict { RepositoryPath = "/中文目录/local.txt", OriginalPath = "/中文目录/original.txt", IncomingPath = "/中文目录/original.txt",
+                    Kind = "local-move", BaseChangeset = 20, IncomingChangeset = 22, ItemId = 99, Reason = "本地移动与服务器修改重叠。", ResolutionOptions = new[] { "keep-local", "take-incoming" } };
+                typeof(PartialStructureForm).GetField("session", flags).SetValue(structure, null);
+                typeof(PartialStructureForm).GetField("conflicts", flags).SetValue(structure, new System.Collections.Generic.List<PlasticPartialStructureConflict> { row });
+                typeof(PartialStructureForm).GetMethod("Render", flags).Invoke(structure, null);
+                ((ListView)Field(structure, "items")).Items[0].Selected = true; Application.DoEvents();
+                Require(((Button)Field(structure, "prepare")).Enabled && !((Button)Field(structure, "apply")).Enabled, "Structural preview requires backup preparation before decisions");
+                var session = new PlasticPartialStructureSession { SessionId = "UI-structure", Conflict = row, Ready = true, RecoveryDirectory = @"C:\UI-fixture\structure-backups" };
+                typeof(PartialStructureForm).GetField("session", flags).SetValue(structure, session);
+                typeof(PartialStructureForm).GetMethod("Render", flags).Invoke(structure, null);
+                Require(!((Button)Field(structure, "prepare")).Enabled && ((Button)Field(structure, "apply")).Enabled && ((Button)Field(structure, "cancel")).Enabled && !((Button)Field(structure, "recover")).Enabled,
+                    "Prepared structural session permits only explicit decision or cancellation");
+                Save(structure, Path.Combine(artifacts, "partial-structure.png")); structure.Size = structure.MinimumSize; Application.DoEvents();
+                foreach (string name in new[] { "refresh", "prepare", "apply", "cancel", "recover", "close" })
+                {
+                    var button = (Button)Field(structure, name); var bounds = button.RectangleToScreen(button.ClientRectangle);
+                    Require(button.Parent.RectangleToScreen(button.Parent.ClientRectangle).Contains(bounds), "Structure " + name + " visible at minimum size");
+                }
+                Save(structure, Path.Combine(artifacts, "partial-structure-minimum.png"));
+                session.Ready = false; session.Applying = true;
+                typeof(PartialStructureForm).GetMethod("Render", flags).Invoke(structure, null);
+                Require(!((Button)Field(structure, "apply")).Enabled && !((Button)Field(structure, "cancel")).Enabled && ((Button)Field(structure, "recover")).Enabled && ((TextBox)Field(structure, "details")).Text.Contains(session.RecoveryDirectory),
+                    "Interrupted structural session exposes backup and explicit recovery, not normal application");
+                structure.Close();
+            }
             using (var partial = new PartialConflictForm(new PlasticClient(PlasticClientConfig.Load()), invalidRoot))
             {
                 Prepare(partial);

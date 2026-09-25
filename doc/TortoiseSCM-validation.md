@@ -154,4 +154,16 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - Partial 集成覆盖精确基础/本地/传入三方文件、旧结果拒绝、显式重新准备、继续编辑与提交、原生 ParentRevId、选择器和加载规则不变。故意让原生 undo 成功后的 update 失败，验证保留备份、阻止提交、重启显示恢复目录及单文件撤销恢复。
 - `qa/integration-20260925-135023-f5c99b3a/partial-cli-results.json`：实际主 EXE 9 项真实 CLI 断言通过，包括 JSON 三方文件、跨进程恢复、显式应用后保持待定、显式签入及消费者字节；缺少 --yes 和未解决签入有失败检查。
 - 新窗口正常/最小尺寸均完成渲染和视觉检查：`qa/Release/directory-conflict*.png`、`partial-conflicts*.png`。GUI 强制先准备再应用；新传入不会被旧已解决状态遮盖，应用动作不会静默重新准备并套用旧审核结果。
-- 当前仍不支持 Partial 传入结构冲突、Xlink，以及未列出的原生目录冲突类型；无冲突路径中的现有目录自动移动/删除仍有保护性限制。正常流程不启动官方 GUI，仍依赖已安装的 cm.exe。
+- 本阶段结束时仍不支持 Partial 传入结构冲突、Xlink，以及未列出的原生目录冲突类型；无冲突路径中的现有目录自动移动/删除仍有保护性限制。后续扩展见第六阶段。正常流程不启动官方 GUI，仍依赖已安装的 cm.exe。
+
+# 第六阶段：扩展结构冲突与失败恢复（2026-09-25）
+
+- 最终 Release 构建与本地回归通过，日志 `qa/structure-release-validation.log`：CLI 920、目录及备份存储保护 58、原有合并保护 40，以及全部后端、Shell、GUI 检查。最终 EXE 的 Partial 内容 CLI 另有 9 项真实测试通过（`qa/structure-release-content-cli.log`，清单由 `latest-release-partial-cli.txt` 指向）。打包、隔离安装和卸载检查 25 项通过，日志 `qa/structure-package-validation.log`。
+- 最终源码的结构后端 77 项真实测试通过（`qa/integration-20260925-151824-0b19dd6d/partial-structure-results.json`）；最终主 EXE 的结构 CLI 33 项通过（`qa/integration-20260925-152438-405589f2/partial-structure-cli-results.json`）。主 EXE 在最后一次源码修改后重新构建，构建时间及 SHA-256 另记于 `qa/structure-release-record.json`。
+- 完整集成脚本退出码为 0，日志 `qa/structure-final-validation.log`；常规真实 CLI 70、分支合并 25、Partial 内容 35 及内容 CLI 9 项均通过。最终目录矩阵 `qa/integration-20260925-152622-2d542d2a/directory-matrix-results.json` 验证来源选择 23、目标选择 23、无冲突目录处理 13 项，并由独立消费者核验整棵树及原生合并链接。
+- Standard 新增 MV_RM、RM_MV、MV_EVIL、ADD_MV、MV_ADD 的来源/目标选择；无冲突目录移动、删除在检查私有/忽略后代、版本、选择器和完整工作树指纹后执行。真实矩阵验证双方选择以及独立消费者的整棵目录和原生合并关系，早期证据为 `qa/integration-20260925-145509-08256c1d/directory-matrix-results.json`。
+- Partial 新增文件结构会话：同名新增、传入删除/本地修改、本地删除/传入修改、本地同目录重命名/传入修改。11 种选择均执行真实原生命令，验证准确字节、待定状态、选择器/加载配置和未选中文件不变；同名新增尚未加载时只配置明确选中的文件。准备和应用分离，不自动提交。
+- 广矩阵早期完整运行 77 项通过：`qa/integration-20260925-150719-3d909a65/partial-structure-results.json`。包括跨 settings 的工作区会话保护、取消准备、非法重命名、故意让 undo 后 update 失败、恢复时另存新编辑、7 次显式签入及独立消费者验收。`qa/integration-20260925-150208-bcfef1b7/partial-move-content-results.json` 另验证本地重命名同时编辑时保留本地字节。
+- 新 GUI 使用原生列表、详情和标准按钮；正常/最小尺寸渲染已查看：`qa/Release/partial-structure.png`、`partial-structure-minimum.png`、`partial-structure-choice.png`、`partial-structure-choice-minimum.png`。检查未备份不能应用、未默认选择处理方式、必填改名、失败会话只能恢复，以及不同冲突的文案与实际处理一致。
+- 收尾检查包括文件路径变目录时拒绝递归更新、加载前后身份校验、重命名目标占用检查；新会话禁止将 settings/恢复资料放入工作区，已有会话仍可读取和恢复。
+- 剩余边界：Partial 服务器移动、目录结构冲突、跨目录本地移动、路径被另一身份占用、Xlink/符号链接暂不处理。文件结构窗口明确说明不扫描目录级冲突。尚未完成真人等效的 Explorer 点击、机器级图标以及多 DPI 验收。

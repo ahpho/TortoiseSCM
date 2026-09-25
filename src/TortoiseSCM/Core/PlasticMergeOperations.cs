@@ -41,7 +41,7 @@ namespace TortoiseSCM
         public string Resolution { get; set; }
         public string Rename { get; set; }
         public IList<string> ResolutionOptions { get { return Kind == "EVIL" ? new[] { "src", "dst", "rename" } :
-            new[] { "DIV_MV", "CHG_RM", "RM_CHG" }.Contains(Kind) ? new[] { "src", "dst" } : new string[0]; } }
+            new[] { "DIV_MV", "CHG_RM", "RM_CHG", "MV_RM", "RM_MV", "MV_EVIL", "ADD_MV", "MV_ADD" }.Contains(Kind) ? new[] { "src", "dst" } : new string[0]; } }
     }
 
     public sealed class PlasticMergeOperation
@@ -104,6 +104,7 @@ namespace TortoiseSCM
         public async Task<PlasticMergeSession> BeginMergeAsync(string root, long sourceChangeset, CancellationToken cancellationToken)
         {
             var workspace = await MergeWorkspaceAsync(root, cancellationToken).ConfigureAwait(false);
+            ValidateMergeStorageLocation(workspace.RootPath);
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
                 ValidateDirectoryMergeOwner(workspace.RootPath);
@@ -115,6 +116,7 @@ namespace TortoiseSCM
                 if (File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress")))
                     throw new ArgumentException("The workspace already has a native merge in progress. Complete or undo it before starting another merge.");
                 RejectUnsafeDescendants(workspace.RootPath, workspace.RootPath, cancellationToken);
+                string fingerprint = DirectoryMergeFingerprint(workspace.RootPath, cancellationToken);
                 var plan = await PreviewMergeAsync(workspace.RootPath, sourceChangeset, cancellationToken).ConfigureAwait(false);
                 if (plan.AlreadyConnected) throw new ArgumentException("The source is already integrated; there is no merge to start.");
                 if (plan.DirectoryConflicts.Count != 0)
@@ -129,9 +131,15 @@ namespace TortoiseSCM
                         string destination = MergeLocalPath(workspace.RootPath, operation.DestinationPath);
                         if (File.Exists(destination) || Directory.Exists(destination)) throw new ArgumentException("An incoming move has an existing local destination: " + operation.DestinationPath);
                     }
-                    if (Directory.Exists(path) && operation.Kind != "ADD")
-                        throw new ArgumentException("Automatic directory changes require the official Plastic client so ignored descendants can be reviewed: " + operation.Path);
                 }
+                await RejectIgnoredDirectoryMergePathsAsync(workspace.RootPath, plan, cancellationToken).ConfigureAwait(false);
+                var currentWorkspace = await MergeWorkspaceAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
+                if (currentWorkspace.Repository != workspace.Repository || NormalizeMergeSelector(currentWorkspace.Selector) != NormalizeMergeSelector(workspace.Selector) ||
+                    File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress")) ||
+                    await LoadedChangesetAsync(workspace.RootPath, false, cancellationToken).ConfigureAwait(false) != plan.DestinationChangeset ||
+                    (await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false)).Count != 0 ||
+                    DirectoryMergeFingerprint(workspace.RootPath, cancellationToken) != fingerprint)
+                    throw new ArgumentException("Workspace files or selector changed during merge preview. Refresh and begin again; no merge was started.");
                 var state = new MergeSessionState { Session = new PlasticMergeSession { SessionId = Guid.NewGuid().ToString("N"), Plan = plan }, Selector = workspace.Selector };
                 string directory = MergeSessionDirectory(state.Session.SessionId);
                 CreatePrivateMergeDirectory(directory);
@@ -269,14 +277,14 @@ namespace TortoiseSCM
             var validated = await BuildReadCommandAsync(root, cancellationToken).ConfigureAwait(false);
             if (!SamePath(validated.Arguments[1], validated.WorkingDirectory)) throw new ArgumentException("Merge requires the explicit workspace root.");
             var workspace = await GetWorkspaceAsync(validated.WorkingDirectory, cancellationToken).ConfigureAwait(false);
-            if (workspace.IsPartial) throw new ArgumentException("Branch merge requires a Standard workspace. Use the official client for partial workspace incoming conflicts.");
+            if (workspace.IsPartial) throw new ArgumentException("Branch merge requires a Standard workspace. Open TortoiseSCM Partial conflicts or use its partial-conflict CLI commands for incoming conflicts in this workspace.");
             return workspace;
         }
 
         private async Task ValidateMergeSessionAsync(MergeSessionState state, PlasticWorkspace workspace, CancellationToken cancellationToken)
         {
-            if (!state.Ready) throw new InvalidOperationException("The previous merge start did not finish. Inspect pending changes in the official client before retrying.");
-            if (state.Applying) throw new InvalidOperationException("A previous resolution application did not finish reliably. Checkin is blocked: inspect native conflicts and retained result/backup in the official client, then complete or undo the merge there.");
+            if (!state.Ready) throw new InvalidOperationException("The previous merge start did not finish. Checkin is blocked. Inspect and back up pending changes; an applied merge can be recovered with explicit full-workspace Undo in TortoiseSCM. An unapplied directory plan can be cancelled.");
+            if (state.Applying) throw new InvalidOperationException("A previous resolution application did not finish reliably. Checkin is blocked. Inspect pending changes and retained result/backup, save the bytes you need, then use explicit full-workspace Undo in TortoiseSCM to recover an applied merge.");
             if (!SamePath(state.Session.Plan.WorkspaceRoot, workspace.RootPath) || state.Session.Plan.Repository != workspace.Repository || NormalizeMergeSelector(state.Selector) != NormalizeMergeSelector(workspace.Selector))
                 throw new ArgumentException("Workspace configuration changed since the merge began. The saved session cannot be applied.");
             if (state.Session.IsRollback)
@@ -392,6 +400,11 @@ namespace TortoiseSCM
 
         private string MergeStorageRoot()
         { return Path.Combine(Path.GetDirectoryName(Path.GetFullPath(config.SettingsPath)), "merge-sessions"); }
+        private void ValidateMergeStorageLocation(string root)
+        {
+            if (IsWithin(MergeStorageRoot(), root))
+                throw new ArgumentException("Merge session storage cannot be inside the workspace. Choose a settings file outside this workspace before starting a merge.");
+        }
         private string MergeSessionDirectory(string id)
         {
             Guid value;

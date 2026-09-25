@@ -29,11 +29,21 @@ internal static class DirectoryMergeTests
             File.WriteAllText(Path.Combine(root, "second.txt"), "local two");
             var config = new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location, SettingsPath = Path.Combine(temporary, "settings.xml") };
             var client = new PlasticClient(config);
+            var insideSettings = new PlasticClient(new PlasticClientConfig { CmPath = config.CmPath, SettingsPath = Path.Combine(root, "merge-config", "settings.xml") });
+            bool rejectedInsideSettings = false;
+            try { insideSettings.BeginMergeAsync(root, 3, Token).GetAwaiter().GetResult(); }
+            catch (ArgumentException error) { rejectedInsideSettings = error.Message.Contains("settings file outside"); }
+            Check(rejectedInsideSettings, "Workspace-local merge storage rejected with actionable settings guidance");
+            Check(!Directory.Exists(Path.Combine(root, "merge-config")) && !File.Exists(Marker(root, "tortoisescm-directory.session")) && !File.Exists(Marker(root, "plastic.mergeprogress")),
+                "Workspace-local storage rejected before creating locks, sessions or native merge state");
+            PartialPreparationStorageTests(root, config.CmPath);
             const string contributors = "CONTRIBUTOR|SRC|3|cs:3@test@server:8087|/source\nCONTRIBUTOR|DST|2|cs:2@test@server:8087|/main\nCONTRIBUTOR|BASE|0|cs:0@test@server:8087|/main\n";
             var moved = PlasticClient.ParseMergePlan(contributors + "DIR_CONFLICT|DIV_MV|Move|Divergent move|source|destination|42|False|MV|/old.txt|/source.txt|MV|/old.txt|/destination.txt", root, "test@server:8087", 3).DirectoryConflicts.Single();
             Check(moved.SourcePath == "/source.txt" && moved.DestinationPath == "/destination.txt" && moved.SourceOriginalPath == "/old.txt" && moved.DestinationOriginalPath == "/old.txt", "Variable-width native move contributors parsed accurately");
             Check(moved.ResolutionOptions.SequenceEqual(new[] { "src", "dst" }), "Divergent move offers native source/destination choices only");
             Check(new PlasticDirectoryConflict { Kind = "UNRECOGNIZED" }.ResolutionOptions.Count == 0, "Unknown directory kinds fail closed");
+            foreach (string kind in new[] { "MV_RM", "RM_MV", "MV_EVIL", "ADD_MV", "MV_ADD" })
+                Check(new PlasticDirectoryConflict { Kind = kind }.ResolutionOptions.SequenceEqual(new[] { "src", "dst" }), "Observed native kind has only verified contributor choices: " + kind);
             var directoryType = PlasticClient.ParseMergePlan(contributors + "DIR_CONFLICT|EVIL|Twin|Same dir|source|destination|42|True|ADD|/tree|ADD|/tree", root, "test@server:8087", 3).DirectoryConflicts.Single();
             Check(directoryType.IsDirectory && !directoryType.Resolved, "Native boolean identifies directory type, not solved state");
             var session = client.BeginMergeAsync(root, 3, Token).GetAwaiter().GetResult();
@@ -107,6 +117,32 @@ internal static class DirectoryMergeTests
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { Directory.Delete(temporary, true); }
     }
+    private static void PartialPreparationStorageTests(string root, string executable)
+    {
+        string metadata = Marker(root, "plastic.workspace"), original = File.ReadAllText(metadata);
+        try
+        {
+            File.WriteAllText(metadata, "partial-storage-test\nguid\nPartial\n");
+            foreach (bool structural in new[] { false, true })
+            {
+                string directory = Path.Combine(root, structural ? "structure-config" : "content-config");
+                var client = new PlasticClient(new PlasticClientConfig { CmPath = executable, SettingsPath = Path.Combine(directory, "settings.xml") });
+                bool rejected = false;
+                try
+                {
+                    if (structural) client.PreparePartialStructureAsync(root, "/collision.txt", Token).GetAwaiter().GetResult();
+                    else client.PreparePartialConflictAsync(root, "/collision.txt", Token).GetAwaiter().GetResult();
+                }
+                catch (ArgumentException error) { rejected = error.Message.Contains("settings file outside"); }
+                Check(rejected, (structural ? "Structural" : "Content") + " Partial preparation rejects workspace-local settings with actionable guidance");
+                Check(!Directory.Exists(directory) && !Directory.Exists(Path.Combine(root, "merge-sessions")) &&
+                    !File.Exists(Marker(root, "tortoisescm-structure.session")) && !File.Exists(Marker(root, "tortoisescm-partial.session")) &&
+                    !File.Exists(Marker(root, "tortoisescm-structure.lock")),
+                    (structural ? "Structural" : "Content") + " rejection creates no backup directory, session marker or workspace lock");
+            }
+        }
+        finally { File.WriteAllText(metadata, original); }
+    }
     private static int Real(string root, long source)
     {
         try
@@ -174,7 +210,8 @@ internal static class DirectoryMergeTests
         string root = Environment.CurrentDirectory;
         if (args[0] == "status")
         {
-            var result = new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", 2))));
+            bool partial = File.ReadAllLines(Marker(root, "plastic.workspace")).Any(line => line == "Partial");
+            var result = new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", partial ? -1 : 2))));
             if (!args.Contains("--header") && !args.Contains("--ignored") && File.Exists(Marker(root, "plastic.mergeprogress")))
                 result.Add(new XElement("Changes", new XElement("Change", new XElement("Path", Path.Combine(root, "collision.txt")), new XElement("Type", "CH"))));
             Console.WriteLine(result); return 0;

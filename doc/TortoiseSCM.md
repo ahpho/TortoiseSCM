@@ -209,7 +209,7 @@ GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件�
 diff 留空时 GUI 使用官方查看器；普通 CLI `diff` 仍输出文本，只有 `--external` 才启动工具。
 merge 留空时明确报错。设置窗口的“打开合并工具”允许选择四个文件，此入口只编辑文件。
 待定更改窗口的“操作 → 合并变更集 / 解决冲突”提供完整工作区的分支合并流程：预检、开始、三方编辑、确认解决，然后返回待定更改提交。工具退出本身不会标记冲突解决。
-工具通过独立参数调用，不经过命令解释器。`--settings-file <文件>` 可使用隔离配置。
+工具通过独立参数调用，不经过命令解释器。`--settings-file <文件>` 可使用隔离配置；进行分支合并或准备 Partial 冲突时，该配置文件及相邻会话目录必须放在工作区外，避免操作影响自身的恢复资料或将备份误加入提交。
 
 ### 分支合并与锁
 
@@ -231,7 +231,7 @@ merge 留空时明确报错。设置窗口的“打开合并工具”允许选�
 合并和整仓回滚必须整体提交：点击“提交”后会明确确认整个工作区的受控更改范围；CLI 使用根目录 `checkin`。
 放弃这类操作时，可用“操作 → 撤销整个合并 / 回滚”，或根目录 `undo --yes`。失败的整仓回滚同样保留会话，不能绕过检查直接发布。
 Standard 目录结构冲突先建立规划会话，在“结构冲突…”中逐项选择来源或目标；同名新增冲突还可重命名目标以保留双方。记录选择不会修改工作区文件，全部选择后点击“应用结构方案”，然后处理剩余内容冲突并整体提交。未应用的方案可单独取消，取消不会撤销用户文件。
-当前逐项处理同名新增（EVIL）、双方移动到不同位置（DIV_MV）、修改/删除（CHG_RM、RM_CHG）四类；其他原生冲突类型会明确拒绝。无冲突的合并路径中，现有目录的自动移动/删除仍有保护性限制。
+当前逐项处理同名新增（EVIL）、双方移动到不同位置（DIV_MV）、修改/删除（CHG_RM、RM_CHG），以及移动/删除（MV_RM、RM_MV）、移动到同名项（MV_EVIL）、新增/移动（ADD_MV、MV_ADD）。新类型提供采用来源或目标；重命名保留双方仍限定已验证的 EVIL。无冲突目录移动和删除也支持，执行前检查待定、私有和被忽略的后代以及工作区是否发生变化；未知原生冲突类型明确拒绝。
 
 ```powershell
 & $exe --cli --command merge-directory-resolve --path 'D:\workspace' --changeset 123 --conflict 1 --resolution rename --rename 'local-copy.txt' --yes --json | ConvertFrom-Json
@@ -252,7 +252,34 @@ Partial 工作区通过“操作 → Partial 传入冲突…”处理已加载�
 & $exe --cli --command partial-conflict-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
 
-Partial 处理中断时会保留原始和审核结果备份，并阻止提交；`partial-conflict-status` 返回恢复目录。保留需要的备份后，可显式撤销受影响文件、刷新并重新处理。准备期间本地内容、服务器版本或文件身份变化会拒绝旧结果。成功应用后可继续编辑，再按常规勾选提交。Partial 的传入删除、移动、替换路径、Xlink 和本地结构冲突暂不由此内容流程处理；界面会说明不支持的原因。
+Partial 内容处理中断时会保留原始和审核结果备份，并阻止提交；`partial-conflict-status` 返回恢复目录。保留需要的备份后，可显式撤销受影响文件、刷新并重新处理。准备期间本地内容、服务器版本或文件身份变化会拒绝旧结果。成功应用后可继续编辑，再按常规勾选提交。
+
+### Partial 文件结构冲突
+
+从“操作 → Partial 文件结构冲突…”或内容冲突窗口中的“结构冲突…”进入。先预检、准备备份，再显式选择处理方式。单次会话处理一个文件；不会自动提交。同名新增的传入项尚未加载时，仅加载明确选中的文件，不更新父目录。
+
+| 冲突 | 支持的选择 |
+| --- | --- |
+| 双方新增同名文件 | 采用传入、本地内容覆盖传入，或本地另存新名称保留双方 |
+| 服务器删除，本地修改 | 采用删除，或将本地内容作为新增重新加入；可另存新名称 |
+| 本地删除，服务器修改 | 接受传入，或在新的基础上继续删除 |
+| 本地同目录重命名，服务器修改 | 接受传入，或保留本地重命名/另选新名称；纯重命名保留服务器内容，本地同时编辑时显式采用本地内容 |
+
+准备会固定文件身份、服务器变更集和本地内容，并保存备份。应用前重新核验，过期准备会拒绝执行。未完成会话会阻止普通写操作，避免与更新、撤销、回滚交错。未应用准备可取消；失败后使用“恢复为传入版本”，将受影响文件恢复到固定传入状态，原始备份及恢复时的文件内容均保留。此恢复不会重新提交本地内容，可从备份取回后另行处理。
+
+```powershell
+& $exe --cli --command partial-structure-preview --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command partial-structure-prepare --path 'D:\workspace' --item '/file.txt' --yes --json | ConvertFrom-Json
+& $exe --cli --command partial-structure-status --path 'D:\workspace' --json | ConvertFrom-Json
+# 选择必须来自 preview/session 的 resolutionOptions
+& $exe --cli --command partial-structure-resolve --path 'D:\workspace' --resolution rename --rename 'local-copy.txt' --yes --json | ConvertFrom-Json
+# 其他选择为 keep-local / take-incoming；成功后回到常规待定更改检查与提交
+& $exe --cli --command partial-structure-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
+# 仅用于应用中断；采用会话固定的传入状态，保留备份
+& $exe --cli --command partial-structure-recover --path 'D:\workspace' --yes --json | ConvertFrom-Json
+```
+
+当前结构处理限普通文件和同目录本地重命名。服务器移动文件需要原生命令更新父目录，暂不扩大范围执行；目录级 Partial 结构冲突、跨目录本地移动、路径被不同身份文件替换、Xlink 与符号链接仍会拒绝或显示不支持原因。
 锁列表限定当前仓库；只有当前用户、当前工作区持有的锁才允许释放，执行前再次读取核验。
 锁获取遵循服务器规则：普通签出并不保证获得锁。本程序不修改服务器锁规则，服务器权限仍决定能否释放。
 
@@ -332,7 +359,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 自定义 diff / merge | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：分支浏览、Partial 结构冲突处理、拖放移动、仓库创建、
+尚未提供：分支浏览、Partial 目录级及传入移动结构冲突处理、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

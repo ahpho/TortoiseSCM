@@ -10,7 +10,7 @@ TortoiseSCM — Plastic SCM / Unity Version Control for Windows
 `TortoiseSCM.exe --cli` 提供与 GUI 共用后端的无界面模式，支持 JSON 输出及自动化测试。
 支持外部 diff/merge 配置、Standard 工作区文件冲突处理、锁管理，以及独立后台缓存驱动的 Explorer 状态图标。
 提供带校验清单的 Windows x64 安装 ZIP 和 Windows CI；此版本尚未迁移 TortoiseGit 的全部对话框。
-支持 Standard 目录结构冲突逐项选择，以及 Partial 已加载文件的传入内容冲突三方处理；分支图、签名 MSI、自动更新和 Windows 11 一级菜单尚未提供。
+支持 Standard 目录结构冲突逐项选择，以及 Partial 已加载文件的内容冲突和常见文件结构冲突处理；分支图、签名 MSI、自动更新和 Windows 11 一级菜单尚未提供。
 
 ```powershell
 # Visual Studio 2022+：C++ 桌面开发、Windows SDK、.NET Framework 4.8 targeting pack

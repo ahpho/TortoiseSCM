@@ -22,12 +22,13 @@ namespace TortoiseSCM
         private readonly Button apply = DialogStyle.Button("确认应用结果…");
         private readonly Button cancelPreparation = DialogStyle.Button("取消未应用准备…");
         private readonly Button close = DialogStyle.Button("关闭");
+        private readonly Button structure = DialogStyle.Button("结构冲突…");
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private readonly Dictionary<string, PlasticMergeConflictFiles> prepared = new Dictionary<string, PlasticMergeConflictFiles>(StringComparer.Ordinal);
         private IList<PlasticPartialConflict> conflicts = new List<PlasticPartialConflict>();
         private PlasticPartialConflictSession session;
         private bool busy;
-        private const string Guidance = "仅处理 Partial 工作区内已加载文件的传入内容冲突。\r\n先在三方工具中编辑独立的结果文件，再明确确认应用；加载范围保持不变，结果留作待定更改，请回主窗口单独签入。\r\n结构变化或不支持的项目会显示原因。中断时请保留会话中的原始文件及审核结果，先检查备份，再明确撤销受影响文件并重新预检。";
+        private const string Guidance = "此窗口处理 Partial 工作区内已加载文件的传入内容冲突；新增、移动、删除冲突请点击“结构冲突”。\r\n先在三方工具中编辑独立的结果文件，再明确确认应用；加载范围保持不变，结果留作待定更改，请回主窗口单独签入。\r\n中断时请保留会话中的原始文件及审核结果，先检查备份，再明确撤销受影响文件并重新预检。";
 
         internal PartialConflictForm(PlasticClient client, string root)
         {
@@ -43,7 +44,7 @@ namespace TortoiseSCM
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             layout.Controls.Add(new Label { Text = root, Dock = DockStyle.Fill, AutoEllipsis = true, UseMnemonic = false }, 0, 0);
             var top = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            refresh.Width = 145; top.Controls.Add(refresh);
+            refresh.Width = 145; top.Controls.Add(refresh); structure.Width = 115; top.Controls.Add(structure);
             top.Controls.Add(new Label { Text = "保留当前加载范围；不自动签入。", AutoSize = true, Padding = new Padding(8, 5, 0, 0) });
             layout.Controls.Add(top, 0, 1);
             var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Size = new Size(900, 450),
@@ -68,6 +69,11 @@ namespace TortoiseSCM
             prepare.Click += async delegate { await PrepareAsync(); };
             apply.Click += async delegate { await ApplyAsync(); };
             cancelPreparation.Click += async delegate { await CancelPreparationAsync(); };
+            structure.Click += async delegate {
+                if (!structure.Enabled) return;
+                using (var dialog = new PartialStructureForm(client, root)) dialog.ShowDialog(this);
+                await RefreshAsync();
+            };
             Shown += async delegate { await RefreshAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (busy) e.Cancel = true; else lifetime.Cancel(); };
             UpdateButtons();
@@ -87,6 +93,7 @@ namespace TortoiseSCM
             var selected = SelectedConflict();
             bool safe = session == null || (session.Ready && !session.Applying);
             refresh.Enabled = !busy;
+            structure.Enabled = !busy;
             prepare.Enabled = !busy && safe && selected != null && selected.CanResolve && !selected.Resolved;
             apply.Enabled = prepare.Enabled && IsPrepared(selected);
             cancelPreparation.Enabled = !busy && session != null && safe && session.Conflicts.Count > 0 && !session.Conflicts.Any(item => item.Resolved);

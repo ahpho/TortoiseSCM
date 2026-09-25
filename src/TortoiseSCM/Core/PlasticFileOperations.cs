@@ -39,6 +39,7 @@ namespace TortoiseSCM
         {
             var command = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
             string absolute = command.Arguments[1], root = command.WorkingDirectory;
+            ThrowIfPartialStructureActive(root);
             if (SamePath(absolute, root)) throw new ArgumentException("不能删除或重命名工作区根目录。");
             if (!File.Exists(absolute) && !Directory.Exists(absolute)) throw new ArgumentException("所选文件或目录不存在。");
             if (Directory.Exists(absolute)) await Task.Run(() => RejectUnsafeDescendants(absolute, root, token), token).ConfigureAwait(false);
@@ -70,6 +71,7 @@ namespace TortoiseSCM
         {
             var command = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
             string absolute = command.Arguments[1], root = command.WorkingDirectory;
+            ThrowIfPartialStructureActive(root);
             if (SamePath(absolute, root)) throw new ArgumentException("不能忽略整个工作区。");
             var pending = await GetStatusAsync(root, token).ConfigureAwait(false);
             var selected = pending.FirstOrDefault(item => SamePath(item.Path, absolute));
