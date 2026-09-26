@@ -9,6 +9,9 @@
 - 完整 `build-tortoisescm.ps1 -Test -Workspace <producer>` 通过：980 项 CLI、226 项 Overlay、27 项历史分页及其他后端、Shell、GUI 回归，日志为 `qa/history-overlay-validation.log`。UI 强制找到真实文件进行比较，覆盖标记版本不被自动建议覆盖、实际同版本内容比较、已删除路径、越界/元数据路径拒绝和 F5 刷新。44 项包/隔离安装/卸载检查通过，日志为 `qa/history-overlay-package.log`。
 - 已目视检查重新生成的 `qa/Release/history.png`、`history-minimum.png`、`historical-file.png`、`historical-file-minimum.png`，普通及最小尺寸下列表、版本输入和底部按钮可见。这些是 WinForms 渲染证据，尚不等同于真人 Explorer 菜单点击或多显示器 DPI 验收。
 - 真实 Overlay 集成通过：私有文件、内容修改、CO 签出、AD 新增、DE 删除，逐项核对后端状态、后台进程缓存和已注册 COM handler，并核对父目录汇总；最终撤销全部测试更改、恢复字节、正常停止缓存进程，隔离工作区保持干净，无服务器提交。日志为 `qa/history-overlay-live.log`，逐项结果为 fixture 中的 `overlay-integration-results.txt`。测试时已注册 DLL 与本次构建 DLL 的 SHA-256 一致；仍未验证机器级 Overlay 槽位的实际显示。
+- `0.8.1-preview` 已由 `6214471d6` 构建包安装到当前用户，安装后真实 COM 激活通过（`qa/history-overlay-installed-shell.log`）。安装版 CLI 查询原 TestSCM 返回空待定列表、`/main` selector；历史文件 `/repeat-second/a.txt` 的 cs:679 → cs:681 比较返回真实文本差异（`qa/history-overlay-installed-diff-changed.json`）。安装路径、文件哈希及包路径记录在 `qa/history-overlay-release-record.json`。
+- 后续核对发现首轮集成测试在成功检查之后的 finally 恢复旧时间戳，导致相同内容再次被 Plastic 标为 CH。`qa/overlay-cleanup-diff.json` 证明内容无差异，Undo 前后 SHA-256 相同；已删除时间戳恢复，并将最终干净检查和成功记录移至全部清理结束之后。此为测试清理修正，产品二进制未变化。
+- 修正后以安装版 EXE 和已注册 COM 完整重跑，22 项真实 Overlay 断言通过（`qa/history-overlay-live-final.log`），包括所有清理结束后的干净检查；随后独立执行 `cm status` 也为空。原 TestSCM 保持 `/main` 且干净。
 
 日期：2026-09-25。上游基线：`acc10fc20`。运行环境：Windows x64，Plastic `11.0.16.10330`。
 

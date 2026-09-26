@@ -19,7 +19,28 @@ internal static class OverlayIntegrationTests
 
     private static int Main(string[] args)
     {
-        string controlled = null, privateFile = null, root = null; byte[] original = null; DateTime originalTime = DateTime.MinValue; Process worker = null;
+        try
+        {
+            int result = RunScenarios(args);
+            if (result != 0) return result;
+            var manifest = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(args[2], Encoding.UTF8));
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            Check(client.GetStatusAsync((string)manifest["producer"], CancellationToken.None).GetAwaiter().GetResult().Count == 0,
+                "Overlay test leaves fixture clean after all cleanup without server writes");
+            File.WriteAllLines(Path.Combine(artifacts, "overlay-integration-results.txt"), results.Concat(new[] { "PASS: " + assertions }));
+            return 0;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            if (artifacts != null) File.WriteAllLines(Path.Combine(artifacts, "overlay-integration-results.txt"), results.Concat(new[] { "FAIL: " + error }));
+            return 1;
+        }
+    }
+
+    private static int RunScenarios(string[] args)
+    {
+        string controlled = null, privateFile = null, root = null; byte[] original = null; Process worker = null;
         PlasticClient client = null;
         try
         {
@@ -31,7 +52,7 @@ internal static class OverlayIntegrationTests
             client = new PlasticClient(PlasticClientConfig.Load());
             Check(client.GetStatusAsync(root, CancellationToken.None).GetAwaiter().GetResult().Count == 0, "Overlay fixture starts clean");
             var initial = client.GetOverlayStatesAsync(root, CancellationToken.None).GetAwaiter().GetResult();
-            controlled = initial.Keys.First(path => File.Exists(path)); original = File.ReadAllBytes(controlled); originalTime = File.GetLastWriteTimeUtc(controlled);
+            controlled = initial.Keys.First(path => File.Exists(path)); original = File.ReadAllBytes(controlled);
             Check(initial.ContainsKey(root) && initial[root] == PlasticOverlayState.Normal, "Clean workspace root is explicitly normal");
             var store = new OverlayCacheStore(OverlayCacheStore.DefaultDirectory); store.Track(root);
             worker = Process.Start(new ProcessStartInfo(executable, "--cache-worker") { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
@@ -87,8 +108,6 @@ internal static class OverlayIntegrationTests
             using (var stop = Process.Start(new ProcessStartInfo(executable, "--cache-stop") { UseShellExecute = false, CreateNoWindow = true })) stop.WaitForExit(5000);
             Check(worker.WaitForExit(30000) && worker.ExitCode == 0, "Cache worker stops gracefully");
             Probe(probe, root, 0); Check(true, "Stopping the worker invalidates its workspace overlays");
-            Check(client.GetStatusAsync(root, CancellationToken.None).GetAwaiter().GetResult().Count == 0, "Overlay test leaves fixture clean without server writes");
-            File.WriteAllLines(Path.Combine(artifacts, "overlay-integration-results.txt"), results.Concat(new[] { "PASS: " + assertions }));
             return 0;
         }
         catch (Exception error)
@@ -109,7 +128,8 @@ internal static class OverlayIntegrationTests
                     {
                         UndoPending(client, root, controlled);
                         if (!File.Exists(controlled) || !File.ReadAllBytes(controlled).SequenceEqual(original)) File.WriteAllBytes(controlled, original);
-                        File.SetLastWriteTimeUtc(controlled, originalTime);
+                        // Keep native Undo's timestamp: restoring an older mtime
+                        // after Undo makes Plastic report an otherwise identical file as CH.
                     }
                 }
                 finally
