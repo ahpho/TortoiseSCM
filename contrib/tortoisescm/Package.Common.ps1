@@ -88,13 +88,13 @@ function Remove-TscmEmptyDirectories([string]$Root, [string[]]$OwnedFiles) {
 }
 
 function Get-TscmRegistryTargets([bool]$MachineOverlays) {
-    $classes = @('{B1DA45F9-4CD4-4857-A591-96B06953A0D2}', '{B1DA45F9-4CD4-4857-A591-96B06953A0D3}', '{B1DA45F9-4CD4-4857-A591-96B06953A0D4}', '{B1DA45F9-4CD4-4857-A591-96B06953A0D5}')
+    $classes = @('D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'DA') | ForEach-Object { '{B1DA45F9-4CD4-4857-A591-96B06953A0' + $_ + '}' }
     foreach ($id in $classes) { [pscustomobject]@{ hive = 'CurrentUser'; path = "Software\Classes\CLSID\$id" } }
     foreach ($kind in @('*', 'Directory', 'Directory\Background')) { [pscustomobject]@{ hive = 'CurrentUser'; path = "Software\Classes\$kind\shellex\ContextMenuHandlers\TortoiseSCM" } }
     if ($MachineOverlays) {
         [pscustomobject]@{ hive = 'CurrentUser'; path = 'Software\Microsoft\Windows\CurrentVersion\Run'; valueName = 'TortoiseSCMCache' }
         foreach ($id in $classes | Select-Object -Skip 1) { [pscustomobject]@{ hive = 'LocalMachine'; path = "Software\Classes\CLSID\$id" } }
-        foreach ($name in @('Normal', 'Modified', 'Conflict')) { [pscustomobject]@{ hive = 'LocalMachine'; path = "Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers\TortoiseSCM $name" } }
+        foreach ($name in @('Normal', 'Modified', 'Conflict', 'Added', 'Deleted', 'Ignored', 'Locked', 'Unversioned')) { [pscustomobject]@{ hive = 'LocalMachine'; path = "Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers\TortoiseSCM $name" } }
     }
 }
 

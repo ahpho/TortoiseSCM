@@ -205,6 +205,13 @@ namespace TortoiseSCM
                             var revisions = (ListView)Field(history, "revisions");
                             WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Initial bounded history page finishes");
                             Require(revisions.Items.Count <= 50, "History opens with at most fifty commits");
+                            var historyFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+                            var marked = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
+                            revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "标记为文件比较起点").PerformClick();
+                            Require((long?)Field(history, "comparisonChangeset") == marked.Changeset, "Revision context action marks the selected changeset for comparison");
+                            Require((string)typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { false }) == "cs:" + marked.Changeset &&
+                                (string)typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { true }) == marked.Comment,
+                                "Revision copy actions preserve the selected identifier and full multiline comment without touching the clipboard");
                             var older = (Button)Field(history, "loadMore");
                             if (older.Enabled)
                             {
@@ -235,9 +242,13 @@ namespace TortoiseSCM
                             filter.Text = "no-matching-commit-" + Guid.NewGuid().ToString("N");
                             Application.DoEvents();
                             Require(revisions.Items.Count == 0 && ((ListView)Field(history, "changedFiles")).Items.Count == 0 && !((Button)Field(history, "restore")).Enabled, "Empty history filter clears stale details and disables restore");
+                            Require(typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { false }) == null &&
+                                typeof(HistoryForm).GetMethod("SelectedFilePath", historyFlags).Invoke(history, new object[] { false }) == null && !((ToolStripMenuItem)Field(history, "compareMarkedFile")).Enabled,
+                                "Empty history selection cannot copy stale identifiers or compare a stale file");
                             filter.Clear();
                             WaitUntil(() => ((Button)Field(history, "restore")).Enabled, "Clearing history filter reloads details");
                             Require(revisions.Items.Count == total, "Clearing history filter restores complete loaded history");
+                            Require((long?)Field(history, "comparisonChangeset") == marked.Changeset, "Comparison mark survives history filtering and refresh in the same repository");
                             if (revisions.Items.Count > 2)
                             {
                                 revisions.Items[0].Selected = false; revisions.Items[1].Selected = true;
@@ -266,13 +277,40 @@ namespace TortoiseSCM
                             Require(snapshot.Visible && snapshot.Text != restore.Text, "Workspace history exposes pending rollback separately from snapshot switching");
                             var changed = (ListView)Field(history, "changedFiles");
                             var readable = changed.Items.Cast<ListViewItem>().FirstOrDefault(item => ((PlasticChangesetFile)item.Tag).ItemType == "F" && ((PlasticChangesetFile)item.Tag).Status != "D");
+                            // Structural-only commits are common in the integration repository.
+                            // Locate a real file-bearing commit so comparison coverage never silently skips.
+                            foreach (var candidate in revisions.Items.Cast<ListViewItem>().Take(10).ToArray())
+                            {
+                                if (readable != null) break;
+                                foreach (ListViewItem selectedRow in revisions.SelectedItems) selectedRow.Selected = false;
+                                candidate.Selected = true;
+                                WaitUntil(() => ((Button)Field(history, "restore")).Enabled, "File-bearing changeset candidate loads");
+                                readable = changed.Items.Cast<ListViewItem>().FirstOrDefault(item => ((PlasticChangesetFile)item.Tag).ItemType == "F" && ((PlasticChangesetFile)item.Tag).Status != "D");
+                            }
+                            Require(readable != null, "Integration history includes a readable file for comparison behavior coverage");
                             if (readable != null)
                             {
                                 readable.Selected = true;
                                 Require(((Button)Field(history, "historicalFile")).Enabled, "Selecting a historical file enables compare and export");
                                 var file = (PlasticChangesetFile)readable.Tag;
                                 long revision = ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset;
-                                using (var fileForm = new HistoricalFileForm(new PlasticClient(PlasticClientConfig.Load()), args[1], file.Path, revision))
+                                Require((string)typeof(HistoryForm).GetMethod("SelectedFilePath", historyFlags).Invoke(history, new object[] { false }) == file.Path,
+                                    "Changed-file copy action returns the selected repository path");
+                                Require(((ToolStripMenuItem)Field(history, "compareMarkedFile")).Enabled, "File context comparison becomes available for a marked changeset");
+                                using (var markedForm = (HistoricalFileForm)typeof(HistoryForm).GetMethod("CreateHistoricalFileDialog", historyFlags).Invoke(history, new object[] { true }))
+                                {
+                                    Prepare(markedForm);
+                                    Require(((NumericUpDown)Field(markedForm, "fromRevision")).Value == marked.Changeset && ((NumericUpDown)Field(markedForm, "toRevision")).Value == revision,
+                                        "Marked-file comparison uses the marked source and currently selected destination");
+                                    var suggestion = (System.Threading.Tasks.Task)typeof(HistoricalFileForm).GetMethod("SuggestEarlierRevisionAsync", historyFlags).Invoke(markedForm, new object[] { revision });
+                                    WaitUntil(() => suggestion.IsCompleted, "Explicit comparison does not wait for a historical suggestion");
+                                    Require(((NumericUpDown)Field(markedForm, "fromRevision")).Value == marked.Changeset, "Automatic earlier-version suggestion cannot overwrite an explicit comparison source");
+                                    markedForm.Close();
+                                }
+                                using (var pathHistory = (HistoryForm)typeof(HistoryForm).GetMethod("CreateSelectedPathHistory", historyFlags).Invoke(history, null))
+                                    Require((string)Field(pathHistory, "path") == Path.Combine(args[1], file.Path.TrimStart('/').Replace('/', '\\')) && !(bool)Field(pathHistory, "wholeWorkspace"),
+                                        "Changed-file history targets its own validated workspace path rather than the entire repository");
+                                using (var fileForm = new HistoricalFileForm(new PlasticClient(PlasticClientConfig.Load()), args[1], file.Path, revision, revision))
                                 {
                                     Prepare(fileForm);
                                     var comparison = (System.Threading.Tasks.Task)typeof(HistoricalFileForm).GetMethod("CompareAsync", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(fileForm, new object[] { false });
@@ -284,6 +322,35 @@ namespace TortoiseSCM
                                     fileForm.Close();
                                 }
                             }
+                            foreach (ListViewItem row in changed.SelectedItems) row.Selected = false;
+                            var missingPath = "/TortoiseSCM-deleted-history-" + Guid.NewGuid().ToString("N") + ".txt";
+                            var deletedRow = new ListViewItem(new[] { "D", missingPath, "", "F" }) { Tag = new PlasticChangesetFile { Status = "D", Path = missingPath, ItemType = "F" } };
+                            changed.Items.Add(deletedRow); deletedRow.Selected = true; Application.DoEvents();
+                            using (var deletedHistory = (HistoryForm)typeof(HistoryForm).GetMethod("CreateSelectedPathHistory", historyFlags).Invoke(history, null))
+                                Require(!File.Exists((string)Field(deletedHistory, "path")) && ((string)Field(deletedHistory, "path")).EndsWith(missingPath.Substring(1)),
+                                    "Deleted historical paths can open path history without requiring a current file");
+                            ((PlasticChangesetFile)deletedRow.Tag).Path = "/../outside.txt";
+                            try
+                            {
+                                typeof(HistoryForm).GetMethod("CreateSelectedPathHistory", historyFlags).Invoke(history, null);
+                                throw new Exception("Historical path traversal was accepted");
+                            }
+                            catch (TargetInvocationException ex) { Require(ex.InnerException is ArgumentException, "Historical path navigation rejects traversal before opening a dialog"); }
+                            ((PlasticChangesetFile)deletedRow.Tag).Path = "/.plastic/plastic.selector";
+                            try
+                            {
+                                typeof(HistoryForm).GetMethod("CreateSelectedPathHistory", historyFlags).Invoke(history, null);
+                                throw new Exception("Historical metadata path was accepted");
+                            }
+                            catch (TargetInvocationException ex) { Require(ex.InnerException is ArgumentException, "Historical path navigation reuses backend metadata protection"); }
+                            deletedRow.Remove();
+                            revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "清除比较标记").PerformClick();
+                            Require(Field(history, "comparisonChangeset") == null && !((ToolStripMenuItem)Field(history, "compareMarkedFile")).Enabled,
+                                "Clearing a comparison mark disables the marked-file action");
+                            object[] refreshKeys = { Message.Create(IntPtr.Zero, 0, IntPtr.Zero, IntPtr.Zero), Keys.F5 };
+                            Require((bool)typeof(HistoryForm).GetMethod("ProcessCmdKey", historyFlags).Invoke(history, refreshKeys), "History consumes the F5 refresh shortcut");
+                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "F5 history refresh finishes");
+                            Require(((Button)Field(history, "restore")).Enabled && revisions.Items.Count <= 50, "F5 refresh restores the newest page with coherent selected details");
                             Save(history, Path.Combine(artifacts, "history-minimum.png"));
                             history.Close();
                         }

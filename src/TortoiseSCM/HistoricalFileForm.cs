@@ -21,8 +21,12 @@ namespace TortoiseSCM
         private readonly FlowLayoutPanel buttons = new FlowLayoutPanel();
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private bool busy;
+        private bool revisionsEdited;
 
         public HistoricalFileForm(PlasticClient client, string workspacePath, string repositoryPath, long changeset)
+            : this(client, workspacePath, repositoryPath, changeset, null) { }
+
+        public HistoricalFileForm(PlasticClient client, string workspacePath, string repositoryPath, long changeset, long? fromChangeset)
         {
             this.client = client; this.workspacePath = workspacePath; this.repositoryPath = repositoryPath;
             DialogStyle.Apply(this);
@@ -38,7 +42,10 @@ namespace TortoiseSCM
             layout.Controls.Add(new Label { Text = repositoryPath, UseMnemonic = false, Dock = DockStyle.Fill, AutoEllipsis = true }, 0, 0);
             var revisions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             fromRevision.Maximum = toRevision.Maximum = Int64.MaxValue;
-            fromRevision.Value = toRevision.Value = changeset;
+            fromRevision.Value = fromChangeset ?? changeset; toRevision.Value = changeset;
+            revisionsEdited = fromChangeset.HasValue;
+            fromRevision.ValueChanged += delegate { revisionsEdited = true; };
+            toRevision.ValueChanged += delegate { revisionsEdited = true; };
             fromRevision.Width = toRevision.Width = 130;
             fromRevision.AccessibleName = "比较起始变更集"; toRevision.AccessibleName = "比较目标和导出变更集";
             revisions.Controls.Add(new Label { Text = "从 cs:", AutoSize = true, Padding = new Padding(0, 4, 0, 0) });
@@ -62,23 +69,24 @@ namespace TortoiseSCM
             var compare = DialogStyle.Button("比较"); compare.Click += async delegate { await CompareAsync(false); };
             buttons.Controls.Add(close); buttons.Controls.Add(export); buttons.Controls.Add(external); buttons.Controls.Add(compare);
             layout.Controls.Add(buttons, 0, 4); Controls.Add(layout);
-            Shown += async delegate { await SuggestEarlierRevisionAsync(changeset); };
+            Shown += async delegate { if (!revisionsEdited) await SuggestEarlierRevisionAsync(changeset); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (busy) e.Cancel = true; else lifetime.Cancel(); };
         }
 
         private async Task SuggestEarlierRevisionAsync(long selected)
         {
+            if (revisionsEdited) return;
             try
             {
                 string local = Path.Combine(client.DiscoverWorkspace(workspacePath).RootPath, repositoryPath.TrimStart('/').Replace('/', '\\'));
                 var history = await client.GetHistoryAsync(local, lifetime.Token);
-                if (lifetime.IsCancellationRequested || busy || fromRevision.Value != selected) return;
+                if (lifetime.IsCancellationRequested || busy || revisionsEdited || fromRevision.Value != selected) return;
                 var previous = history.Where(item => item.Changeset < selected).OrderByDescending(item => item.Changeset).FirstOrDefault();
                 if (previous != null) { fromRevision.Value = previous.Changeset; status.Text = "已选择较早的文件版本，可修改两个编号。"; }
                 else status.Text = "未找到更早的文件版本，请指定比较编号。";
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!lifetime.IsCancellationRequested && !busy) status.Text = "可手动输入变更集编号。" + ex.Message; }
+            catch (Exception ex) { if (!lifetime.IsCancellationRequested && !busy && !revisionsEdited) status.Text = "可手动输入变更集编号。" + ex.Message; }
         }
 
         private async Task CompareAsync(bool external)

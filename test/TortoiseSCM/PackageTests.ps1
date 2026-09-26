@@ -21,6 +21,20 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('TSCM-package-' + [Guid]::NewGu
 $registrationBefore = @(Get-TscmRegistrySnapshot @(Get-TscmRegistryTargets $false)) | ConvertTo-Json -Depth 30
 $testRegistryPath = 'Software\TortoiseSCM-PackageTests-' + [Guid]::NewGuid().ToString('N')
 try {
+    # Every class and machine overlay registered by the installer must be
+    # captured before mutation so a failed upgrade can restore it exactly.
+    $registrationScript = [IO.File]::ReadAllText((Join-Path $scripts 'Register-Shell.ps1'))
+    $classIds = @([regex]::Matches($registrationScript, '\{B1DA45F9-4CD4-4857-A591-96B06953A0[A-F0-9]{2}\}') | ForEach-Object Value | Select-Object -Unique)
+    $targets = @(Get-TscmRegistryTargets $true)
+    Assert ($classIds.Count -eq 9) 'Registration declares one menu and eight overlay classes'
+    foreach ($id in $classIds) {
+        Assert (@($targets | Where-Object { $_.hive -eq 'CurrentUser' -and $_.path -eq "Software\Classes\CLSID\$id" }).Count -eq 1) "Installer rollback captures user class $id"
+    }
+    $overlayNames = @([regex]::Matches($registrationScript, "Name = '(TortoiseSCM [^']+)'") | ForEach-Object { $_.Groups[1].Value })
+    foreach ($name in $overlayNames) {
+        Assert (@($targets | Where-Object { $_.hive -eq 'LocalMachine' -and $_.path -eq "Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers\$name" }).Count -eq 1) "Installer rollback captures machine overlay $name"
+    }
+    Assert (@($targets | Where-Object { $_.hive -eq 'LocalMachine' -and $_.path -like 'Software\Classes\CLSID\*' }).Count -eq 8) 'Installer rollback captures all machine overlay classes'
     $zip = & (Join-Path $scripts 'Package.ps1') -BinaryDirectory $BinaryDirectory -OutputDirectory (Join-Path $fixture 'packages') -Version '0.1.0-package-test'
     Assert (Test-Path -LiteralPath $zip) 'Portable archive is created'
     Add-Type -AssemblyName System.IO.Compression.FileSystem

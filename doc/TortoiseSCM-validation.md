@@ -1,5 +1,15 @@
 # TortoiseSCM 验证记录
 
+## 历史窗口操作与状态图标语义修正（2026-09-27）
+
+- 历史列表增加比较起点标记/清除、复制编号和说明；文件列表增加与标记版本比较、显示路径历史、复制当前/原路径，支持 F5 刷新和按列表焦点 Ctrl+C。显式比较版本及用户编辑不再被异步版本建议覆盖；打开子窗口前复核工作区和仓库身份。
+- CO 表示签出，显示 Modified，不再误报 Locked。AD/DE 只描述项目本身，父目录汇总为 Modified；PR/IG 不污染受控祖先，并清除被其覆盖的旧 Normal 子树缓存。冲突仍具有最高优先级。
+- 安装失败的注册快照补齐全部九个 CLSID 与八个机器级 Overlay 标识，避免升级中途失败时残留新增注册项。
+- 本轮测试使用隔离分支工作区 `qa/integration-20260925-151238-8b3f5c34/producer`；原 `TestSCM` 只做只读核对。比较基准功能针对同一路径文件，尚不提供完整变更集目录差异或分支图。
+- 完整 `build-tortoisescm.ps1 -Test -Workspace <producer>` 通过：980 项 CLI、226 项 Overlay、27 项历史分页及其他后端、Shell、GUI 回归，日志为 `qa/history-overlay-validation.log`。UI 强制找到真实文件进行比较，覆盖标记版本不被自动建议覆盖、实际同版本内容比较、已删除路径、越界/元数据路径拒绝和 F5 刷新。44 项包/隔离安装/卸载检查通过，日志为 `qa/history-overlay-package.log`。
+- 已目视检查重新生成的 `qa/Release/history.png`、`history-minimum.png`、`historical-file.png`、`historical-file-minimum.png`，普通及最小尺寸下列表、版本输入和底部按钮可见。这些是 WinForms 渲染证据，尚不等同于真人 Explorer 菜单点击或多显示器 DPI 验收。
+- 真实 Overlay 集成通过：私有文件、内容修改、CO 签出、AD 新增、DE 删除，逐项核对后端状态、后台进程缓存和已注册 COM handler，并核对父目录汇总；最终撤销全部测试更改、恢复字节、正常停止缓存进程，隔离工作区保持干净，无服务器提交。日志为 `qa/history-overlay-live.log`，逐项结果为 fixture 中的 `overlay-integration-results.txt`。测试时已注册 DLL 与本次构建 DLL 的 SHA-256 一致；仍未验证机器级 Overlay 槽位的实际显示。
+
 日期：2026-09-25。上游基线：`acc10fc20`。运行环境：Windows x64，Plastic `11.0.16.10330`。
 
 本轮新增：文件/目录历史恢复、工作区快照切换、递归目录历史与提交明细、提交列表右键菜单、外部 diff/merge 配置。

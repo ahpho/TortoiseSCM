@@ -14,6 +14,7 @@ namespace TortoiseSCM
     {
         private readonly PlasticClient client;
         private readonly string path;
+        private readonly string workspaceRoot;
         private readonly bool wholeWorkspace;
         private readonly ListView revisions = new ListView();
         private readonly ListView changedFiles = new ListView();
@@ -40,11 +41,14 @@ namespace TortoiseSCM
         private bool writing;
         private int generation;
         private bool filtering;
+        private long? comparisonChangeset;
+        private readonly ToolStripMenuItem compareMarkedFile = new ToolStripMenuItem();
 
         public HistoryForm(PlasticClient client, string path, string workspaceRoot)
         {
             this.client = client;
             this.path = path;
+            this.workspaceRoot = workspaceRoot;
             wholeWorkspace = path.TrimEnd('\\', '/').Equals(workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
             Text = "历史记录 - TortoiseSCM";
             Font = SystemFonts.MessageBoxFont;
@@ -78,6 +82,19 @@ namespace TortoiseSCM
                 Size = new Size(1040, 570), SplitterDistance = 270, SplitterWidth = 5, Panel1MinSize = 100, Panel2MinSize = 180 };
             ConfigureList(revisions, "提交历史", new[] { "版本", "日期", "作者", "分支", "说明" }, new[] { 70, 155, 120, 210, 440 });
             revisions.SelectedIndexChanged += async delegate { if (!filtering) await LoadDetailsAsync(); };
+            revisions.KeyDown += delegate(object sender, KeyEventArgs e) { CopyListSelection(e, false); };
+            var revisionMenu = new ContextMenuStrip();
+            revisionMenu.Items.Add("复制变更集编号", null, delegate { CopyText(SelectedRevisionText(false)); });
+            revisionMenu.Items.Add("复制提交说明", null, delegate { CopyText(SelectedRevisionText(true)); });
+            revisionMenu.Items.Add(new ToolStripSeparator());
+            revisionMenu.Items.Add("标记为文件比较起点", null, delegate { MarkComparisonChangeset(); });
+            var clearComparison = revisionMenu.Items.Add("清除比较标记", null, delegate { comparisonChangeset = null; UpdateFileAction(); });
+            revisionMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
+            {
+                e.Cancel = writing || revisions.SelectedItems.Count != 1;
+                clearComparison.Enabled = comparisonChangeset.HasValue;
+            };
+            revisions.ContextMenuStrip = revisionMenu;
             split.Panel1.Controls.Add(revisions);
             var lower = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Margin = Padding.Empty,
                 Size = new Size(1040, 295), SplitterDistance = 100, SplitterWidth = 5, Panel1MinSize = 55, Panel2MinSize = 90 };
@@ -91,9 +108,22 @@ namespace TortoiseSCM
             ConfigureList(changedFiles, "本次提交的文件", new[] { "操作", "路径", "原路径", "类型" }, new[] { 75, 570, 280, 70 });
             changedFiles.SelectedIndexChanged += delegate { UpdateFileAction(); };
             changedFiles.DoubleClick += delegate { OpenHistoricalFile(); };
+            changedFiles.KeyDown += delegate(object sender, KeyEventArgs e) { CopyListSelection(e, true); };
             var fileMenu = new ContextMenuStrip();
-            fileMenu.Items.Add("比较 / 导出历史文件…", null, delegate { OpenHistoricalFile(); });
-            fileMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { e.Cancel = !historicalFile.Enabled; };
+            var openFile = fileMenu.Items.Add("比较 / 导出历史文件…", null, delegate { OpenHistoricalFile(); });
+            compareMarkedFile.Click += delegate { OpenHistoricalFile(true); };
+            fileMenu.Items.Add(compareMarkedFile);
+            fileMenu.Items.Add("显示此路径的历史…", null, delegate { OpenSelectedPathHistory(); });
+            fileMenu.Items.Add(new ToolStripSeparator());
+            fileMenu.Items.Add("复制仓库路径", null, delegate { CopyText(SelectedFilePath(false)); });
+            var copyOldPath = fileMenu.Items.Add("复制原仓库路径", null, delegate { CopyText(SelectedFilePath(true)); });
+            fileMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
+            {
+                e.Cancel = writing || changedFiles.SelectedItems.Count != 1;
+                openFile.Enabled = historicalFile.Enabled;
+                copyOldPath.Enabled = !String.IsNullOrEmpty(SelectedFilePath(true));
+                UpdateFileAction();
+            };
             changedFiles.ContextMenuStrip = fileMenu;
             lower.Panel1.Controls.Add(description);
             lower.Panel2.Controls.Add(changedFiles);
@@ -185,6 +215,7 @@ namespace TortoiseSCM
                 // Publish the refreshed page only after success: failed or cancelled
                 // refreshes keep the visible history and its continuation cursor intact.
                 if (reset) { entries.Clear(); scannedChangesets = 0; }
+                if (historyRepository != null && historyRepository != page.Repository) comparisonChangeset = null;
                 historyRepository = page.Repository;
                 entries.AddRange(page.Items);
                 scannedChangesets += page.ScannedChangesets; hasMoreHistory = page.HasMore; beforeChangeset = page.NextBeforeChangeset;
@@ -275,14 +306,104 @@ namespace TortoiseSCM
             var file = changedFiles.SelectedItems.Count == 1 ? (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag : null;
             historicalFile.Enabled = !writing && revisions.SelectedItems.Count == 1 && file != null &&
                 !string.Equals(file.ItemType, "D", StringComparison.OrdinalIgnoreCase) && !string.Equals(file.ItemType, "dir", StringComparison.OrdinalIgnoreCase);
+            compareMarkedFile.Text = comparisonChangeset.HasValue ? "与标记 cs:" + comparisonChangeset.Value + " 比较此文件…" : "与标记变更集比较此文件…";
+            compareMarkedFile.Enabled = historicalFile.Enabled && comparisonChangeset.HasValue;
         }
 
         private void OpenHistoricalFile()
+        { OpenHistoricalFile(false); }
+
+        private void OpenHistoricalFile(bool useMarkedChangeset)
         {
-            if (!historicalFile.Enabled) return;
+            if (!historicalFile.Enabled || (useMarkedChangeset && !comparisonChangeset.HasValue)) return;
+            try { using (var dialog = CreateHistoricalFileDialog(useMarkedChangeset)) dialog.ShowDialog(this); }
+            catch (Exception ex) { status.Text = "无法打开历史文件：" + ex.Message; }
+        }
+
+        private HistoricalFileForm CreateHistoricalFileDialog(bool useMarkedChangeset)
+        {
+            ValidateHistoryContext();
             var file = (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag;
             var entry = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
-            using (var dialog = new HistoricalFileForm(client, path, file.Path, entry.Changeset)) dialog.ShowDialog(this);
+            return new HistoricalFileForm(client, path, file.Path, entry.Changeset, useMarkedChangeset ? comparisonChangeset : null);
+        }
+
+        private void MarkComparisonChangeset()
+        {
+            if (writing || revisions.SelectedItems.Count != 1) return;
+            comparisonChangeset = ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset;
+            status.Text = "已标记 cs:" + comparisonChangeset.Value + "。选择另一提交中的文件，右键比较同一路径的两个版本。";
+            UpdateFileAction();
+        }
+
+        private string SelectedRevisionText(bool comment)
+        {
+            if (revisions.SelectedItems.Count != 1) return null;
+            var entry = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
+            return comment ? entry.Comment : "cs:" + entry.Changeset;
+        }
+
+        private string SelectedFilePath(bool original)
+        {
+            if (changedFiles.SelectedItems.Count != 1) return null;
+            var file = (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag;
+            return original ? file.OldPath : file.Path;
+        }
+
+        private void CopyListSelection(KeyEventArgs e, bool file)
+        {
+            if (e.KeyCode != Keys.C || !e.Control || e.Alt || e.Shift) return;
+            CopyText(file ? SelectedFilePath(false) : SelectedRevisionText(false));
+            e.Handled = e.SuppressKeyPress = true;
+        }
+
+        private void CopyText(string text)
+        {
+            if (String.IsNullOrEmpty(text)) return;
+            try { Clipboard.SetText(text); }
+            catch (System.Runtime.InteropServices.ExternalException) { status.Text = "剪贴板暂时不可用，请稍后重试复制。"; }
+            catch (System.Threading.ThreadStateException) { status.Text = "当前线程无法访问剪贴板。"; }
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.F5)
+            {
+                if (refreshHistory.Enabled) refreshHistory.PerformClick();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private HistoryForm CreateSelectedPathHistory()
+        {
+            ValidateHistoryContext();
+            string repositoryPath = SelectedFilePath(false);
+            if (String.IsNullOrEmpty(repositoryPath) || repositoryPath[0] != '/' ||
+                repositoryPath.IndexOfAny(new[] { '\\', ':', '#', '@' }) >= 0 ||
+                repositoryPath.Substring(1).Split('/').Any(part => part.Length == 0 || part == "." || part == ".."))
+                throw new ArgumentException("历史记录中的仓库路径无效。");
+            string localPath = Path.Combine(workspaceRoot, repositoryPath.Substring(1).Replace('/', '\\'));
+            // Reuse the backend's workspace, metadata, reparse-point and nested-workspace
+            // checks; existence is deliberately not required for deleted historical paths.
+            var validated = client.Build(new PlasticCommandRequest { Command = PlasticCommand.History,
+                WorkingDirectory = workspaceRoot, Paths = new[] { localPath } });
+            return new HistoryForm(client, validated.Arguments[1], validated.WorkingDirectory);
+        }
+
+        private void ValidateHistoryContext()
+        {
+            var current = client.DiscoverWorkspace(path);
+            if (current == null || !current.RootPath.TrimEnd('\\', '/').Equals(workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
+                (historyRepository != null && current.Repository != historyRepository))
+                throw new InvalidOperationException("工作区或仓库已改变，请关闭并重新打开历史窗口。");
+        }
+
+        private void OpenSelectedPathHistory()
+        {
+            if (writing || changedFiles.SelectedItems.Count != 1) return;
+            try { using (var dialog = CreateSelectedPathHistory()) dialog.ShowDialog(this); }
+            catch (Exception ex) { status.Text = "无法打开路径历史：" + ex.Message; }
         }
 
         private async Task RestoreAsync(bool switchSnapshot)

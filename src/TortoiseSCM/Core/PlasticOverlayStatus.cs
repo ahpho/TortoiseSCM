@@ -79,6 +79,7 @@ namespace TortoiseSCM
             root = OverlayCanonicalPath(root);
             var result = new Dictionary<string, PlasticOverlayState>(StringComparer.OrdinalIgnoreCase);
             foreach (string path in controlled) if (IsWithin(path, root)) result[OverlayCanonicalPath(path)] = PlasticOverlayState.Normal;
+            var explicitStates = new Dictionary<string, PlasticOverlayState>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in pending)
             {
                 string code = (item.StatusCode ?? "").ToUpperInvariant();
@@ -89,18 +90,48 @@ namespace TortoiseSCM
                     case "DE": case "LD": state = PlasticOverlayState.Deleted; break;
                     case "IG": case "IGNORED": state = PlasticOverlayState.Ignored; break;
                     case "PR": case "PRIVATE": state = PlasticOverlayState.Unversioned; break;
-                    // Plastic's checkout state is the closest local signal for
-                    // a lock. Content changes are reported separately as CH;
-                    // keep the distinction visible in Explorer.
-                    case "CO": state = PlasticOverlayState.Locked; break;
-                    case "CH": case "MV": case "LM": state = PlasticOverlayState.Modified; break;
+                    // Checkout is a pending change, not evidence of a server lock.
+                    case "CO": case "CH": case "MV": case "LM": state = PlasticOverlayState.Modified; break;
                     default: state = PlasticOverlayState.Modified; break;
                 }
-                AddOverlayWithParents(result, root, item.Path, state);
-                if (!String.IsNullOrEmpty(item.OldPath)) AddOverlayWithParents(result, root, item.OldPath, state);
+                AddExplicitOverlay(explicitStates, root, item.Path, state);
+                AddExplicitOverlay(explicitStates, root, item.OldPath, state);
+            }
+
+            // A private/ignored replacement invalidates the old controlled inventory
+            // for the whole subtree. --cutignored may omit all of its descendants.
+            foreach (string path in result.Keys.ToArray())
+            {
+                string ancestor = path;
+                while (ancestor != null && IsWithin(ancestor, root))
+                {
+                    PlasticOverlayState state;
+                    if (explicitStates.TryGetValue(ancestor, out state) &&
+                        (state == PlasticOverlayState.Ignored || state == PlasticOverlayState.Unversioned))
+                    { result.Remove(path); break; }
+                    if (SamePath(ancestor, root)) break;
+                    ancestor = Path.GetDirectoryName(ancestor);
+                }
+            }
+            foreach (var entry in explicitStates) result[entry.Key] = entry.Value;
+            foreach (var entry in explicitStates)
+            {
+                if (entry.Value == PlasticOverlayState.Ignored || entry.Value == PlasticOverlayState.Unversioned) continue;
+                // Added/deleted describes the item itself; its existing ancestors
+                // are modified. Explicit added/deleted directories retain their state.
+                string parent = SamePath(entry.Key, root) ? null : Path.GetDirectoryName(entry.Key);
+                AddOverlayWithParents(result, root, parent, PlasticOverlayState.Modified);
             }
             foreach (string path in conflicts) AddOverlayWithParents(result, root, path, PlasticOverlayState.Conflict);
             return result;
+        }
+
+        private static void AddExplicitOverlay(IDictionary<string, PlasticOverlayState> states, string root, string path, PlasticOverlayState state)
+        {
+            if (String.IsNullOrEmpty(path) || !IsWithin(path, root)) return;
+            path = OverlayCanonicalPath(path);
+            PlasticOverlayState previous;
+            if (!states.TryGetValue(path, out previous) || OverlayRank(state) > OverlayRank(previous)) states[path] = state;
         }
 
         private static void AddOverlayWithParents(IDictionary<string, PlasticOverlayState> states, string root, string path, PlasticOverlayState state)
@@ -125,11 +156,11 @@ namespace TortoiseSCM
             switch (state)
             {
                 case PlasticOverlayState.Conflict: return 100;
-                case PlasticOverlayState.Added:
-                case PlasticOverlayState.Deleted:
+                case PlasticOverlayState.Deleted: return 90;
+                case PlasticOverlayState.Added: return 85;
                 case PlasticOverlayState.Modified: return 80;
                 case PlasticOverlayState.Locked: return 60;
-                case PlasticOverlayState.Ignored:
+                case PlasticOverlayState.Ignored: return 30;
                 case PlasticOverlayState.Unversioned: return 20;
                 default: return 0;
             }

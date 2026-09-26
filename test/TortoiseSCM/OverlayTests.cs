@@ -95,12 +95,64 @@ internal static class OverlayTests
             "Move marks both source and destination ancestors");
         Assert(states[privatePath] == PlasticOverlayState.Unversioned && states[ignored] == PlasticOverlayState.Ignored,
             "Private and ignored replacements retain distinct overlay states");
+        Assert(!states.ContainsKey(Path.Combine(ignored, "secret")), "Ignored replacement removes stale normal descendants");
         var outside = PlasticClient.BuildOverlayStates(root, new[] { unrelated }, new[] { new PlasticStatusItem { Path = unrelated, StatusCode = "CH" } }, new[] { unrelated });
         Assert(outside.Count == 0, "Paths outside root never enter snapshot");
         var deleted = PlasticClient.BuildOverlayStates(root, new string[0], new[] { new PlasticStatusItem { Path = file, StatusCode = "DE" } }, new string[0]);
-        Assert(deleted[root] == PlasticOverlayState.Deleted && deleted[folder] == PlasticOverlayState.Deleted, "Deleted child marks existing ancestors even when file absent");
+        Assert(deleted[file] == PlasticOverlayState.Deleted && deleted[root] == PlasticOverlayState.Modified && deleted[folder] == PlasticOverlayState.Modified,
+            "Deleted child marks ancestors modified even when file absent");
         var priority = PlasticClient.BuildOverlayStates(root, new[] { root, folder, file }, new[] { new PlasticStatusItem { Path = file, StatusCode = "CO" } }, new[] { root });
-        Assert(priority[root] == PlasticOverlayState.Conflict && priority[file] == PlasticOverlayState.Locked, "Unknown merge marks root conflict without inventing child conflict");
+        Assert(priority[root] == PlasticOverlayState.Conflict && priority[file] == PlasticOverlayState.Modified,
+            "Unknown merge marks root conflict and checkout never implies server lock");
+
+        foreach (string code in new[] { "IG", "IGNORED", "PR", "PRIVATE" })
+        {
+            var replacement = PlasticClient.BuildOverlayStates(root, new[] { root, folder, file },
+                new[] { new PlasticStatusItem { Path = folder, StatusCode = code, IsDirectory = true } }, new string[0]);
+            Assert(replacement[root] == PlasticOverlayState.Normal && !replacement.ContainsKey(file),
+                code + " subtree drops stale inventory without changing controlled parent");
+            Assert(replacement[folder] == (code == "IG" || code == "IGNORED" ? PlasticOverlayState.Ignored : PlasticOverlayState.Unversioned),
+                code + " directory retains its own overlay");
+        }
+
+        string addedFile = Path.Combine(folder, "added.txt"), deletedFile = Path.Combine(folder, "deleted.txt");
+        foreach (string directoryCode in new[] { "AD", "DE", "CH" })
+        {
+            var changes = new[] {
+                new PlasticStatusItem { Path = folder, StatusCode = directoryCode, IsDirectory = true },
+                new PlasticStatusItem { Path = addedFile, StatusCode = "AD" },
+                new PlasticStatusItem { Path = deletedFile, StatusCode = "DE" },
+                new PlasticStatusItem { Path = file, StatusCode = "CH" } };
+            foreach (var permutation in Permutations(changes))
+            {
+                var mixed = PlasticClient.BuildOverlayStates(root, new[] { root, folder, file }, permutation, new string[0]);
+                Assert(mixed[root] == PlasticOverlayState.Modified &&
+                    mixed[folder] == (directoryCode == "AD" ? PlasticOverlayState.Added : directoryCode == "DE" ? PlasticOverlayState.Deleted : PlasticOverlayState.Modified) &&
+                    mixed[addedFile] == PlasticOverlayState.Added && mixed[deletedFile] == PlasticOverlayState.Deleted && mixed[file] == PlasticOverlayState.Modified,
+                    directoryCode + " explicit directory state and child summaries are independent of enumeration order");
+                var conflicted = PlasticClient.BuildOverlayStates(root, new[] { root, folder, file }, permutation, new[] { file });
+                Assert(conflicted[root] == PlasticOverlayState.Conflict && conflicted[folder] == PlasticOverlayState.Conflict && conflicted[file] == PlasticOverlayState.Conflict,
+                    "Conflict outranks added/deleted directories in every order");
+            }
+        }
+        foreach (var permutation in Permutations(new[] {
+            new PlasticStatusItem { Path = folder, StatusCode = "PR" },
+            new PlasticStatusItem { Path = folder, StatusCode = "IG" },
+            new PlasticStatusItem { Path = addedFile, StatusCode = "AD" },
+            new PlasticStatusItem { Path = addedFile, StatusCode = "CH" } }))
+        {
+            var mixed = PlasticClient.BuildOverlayStates(root, new[] { root, folder, file }, permutation, new string[0]);
+            Assert(!mixed.ContainsKey(file) && mixed[addedFile] == PlasticOverlayState.Added && mixed[root] == PlasticOverlayState.Modified,
+                "Subtree replacement removes only stale inventory and preserves explicit changes in every order");
+        }
+    }
+
+    private static IEnumerable<PlasticStatusItem[]> Permutations(PlasticStatusItem[] items)
+    {
+        if (items.Length == 0) { yield return items; yield break; }
+        for (int i = 0; i < items.Length; i++)
+            foreach (var tail in Permutations(items.Where((item, index) => index != i).ToArray()))
+                yield return new[] { items[i] }.Concat(tail).ToArray();
     }
 
     private static void Storage(string temporary)
