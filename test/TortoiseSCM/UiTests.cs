@@ -1188,11 +1188,13 @@ namespace TortoiseSCM
                 typeof(ShelvesForm).GetField("getShelves", flags).SetValue(form, list); typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details);
                 Prepare(form); var shelves = (ListView)Field(form, "shelves"); var files = (ListView)Field(form, "files");
                 Require(shelves.Items.Count == 2 && files.Items.Count == 0, "Shelves list loads independently of workspace pending selection");
+                Require(shelves.ContextMenuStrip != null && shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Count() == 4,
+                    "Shelves list provides explicit apply, delete, compare and export actions in its context menu");
                 shelves.Items[0].Selected = true; Application.DoEvents();
                 Require(files.Items.Count == 1 && files.Items[0].SubItems[2].Text == "/old.txt" && ((TextBox)Field(form, "description")).Text.Contains("多行"),
                     "Selecting a shelve loads its full comment and changed path details");
                 Save(form, Path.Combine(artifacts, "shelves.png")); form.Size = form.MinimumSize; Application.DoEvents();
-                foreach (string field in new[] { "shelves", "files", "filter", "refresh", "cancel", "close" }) {
+                foreach (string field in new[] { "shelves", "files", "filter", "apply", "delete", "compare", "export", "refresh", "cancel", "close" }) {
                     var control = (Control)Field(form, field);
                     Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)) &&
                         control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Shelves " + field + " visible at minimum size");
@@ -1219,6 +1221,108 @@ namespace TortoiseSCM
                 ((Button)Field(form, "refresh")).PerformClick(); Application.DoEvents();
                 Require(shelves.Items.Count == 0 && files.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("仓库已改变"), "Shelve refresh rejects changed repository without keeping stale server records");
                 form.Close(); File.WriteAllText(selectorFile, selector);
+            }
+            using (var form = new ShelvesForm(client, root))
+            {
+                var entries = new[] { new PlasticShelve { ShelveId = 21, ObjectId = 1021, Repository = "ui-shelves@local", Owner = "作者", Date = "2026-09-28", Comment = "可操作暂存集" } };
+                bool deleted = false; int applied = 0; int removed = 0; DialogResult confirmation = DialogResult.Yes;
+                Func<string, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticShelve>>> list = (path, token) =>
+                    System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<PlasticShelve>>(deleted ? new PlasticShelve[0] : entries);
+                Func<string, long, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticChangesetFile>>> details = (path, id, token) =>
+                    System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<PlasticChangesetFile>>(new[] {
+                        new PlasticChangesetFile { Path = "/操作/file.txt", Status = "M" }
+                    });
+                Func<string, long, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> apply = (path, id, token) => {
+                    applied++; return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0, Output = "applied" });
+                };
+                Func<string, long, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> remove = (path, id, token) => {
+                    removed++; deleted = true; return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0, Output = "deleted" });
+                };
+                typeof(ShelvesForm).GetField("getShelves", flags).SetValue(form, list);
+                typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details);
+                typeof(ShelvesForm).GetField("applyShelve", flags).SetValue(form, apply);
+                typeof(ShelvesForm).GetField("deleteShelve", flags).SetValue(form, remove);
+                typeof(ShelvesForm).GetField("confirm", flags).SetValue(form, new Func<string, string, DialogResult>((message, title) => confirmation));
+                Prepare(form); var shelves = (ListView)Field(form, "shelves");
+                shelves.Items[0].Selected = true; Application.DoEvents();
+                WaitUntil(() => !(bool)Field(form, "busy"), "Shelve action fixture details finish loading");
+                Require(((Button)Field(form, "apply")).Enabled && ((Button)Field(form, "delete")).Enabled,
+                    "Shelve actions enable only after the selected details are loaded");
+                int comparisonsShown = 0;
+                typeof(ShelvesForm).GetField("showComparison", flags).SetValue(form, new Action<PlasticShelveComparison>(value => comparisonsShown++));
+                Func<string, long, CancellationToken, System.Threading.Tasks.Task<PlasticShelveComparison>> invalidComparison = (path, id, token) =>
+                    System.Threading.Tasks.Task.FromResult(new PlasticShelveComparison { Repository = "foreign@server", ShelveId = id });
+                typeof(ShelvesForm).GetField("compareShelve", flags).SetValue(form, invalidComparison);
+                var invalidTask = (System.Threading.Tasks.Task)typeof(ShelvesForm).GetMethod("CompareAsync", flags).Invoke(form, null);
+                WaitUntil(() => invalidTask.IsCompleted, "Invalid shelveset comparison completes");
+                Require(comparisonsShown == 0 && ((Label)Field(form, "status")).Text.Contains("不匹配"),
+                    "Foreign comparison results never open a preview after a handled error");
+                var pendingComparison = new System.Threading.Tasks.TaskCompletionSource<PlasticShelveComparison>();
+                typeof(ShelvesForm).GetField("compareShelve", flags).SetValue(form,
+                    new Func<string, long, CancellationToken, System.Threading.Tasks.Task<PlasticShelveComparison>>((path, id, token) => pendingComparison.Task));
+                var cancelledComparison = (System.Threading.Tasks.Task)typeof(ShelvesForm).GetMethod("CompareAsync", flags).Invoke(form, null);
+                ((Button)Field(form, "cancel")).PerformClick();
+                pendingComparison.SetResult(new PlasticShelveComparison { Repository = "ui-shelves@local", ShelveId = 21 });
+                WaitUntil(() => cancelledComparison.IsCompleted, "Cancelled comparison completes");
+                Require(comparisonsShown == 0, "Cancelled shelveset comparison never opens a stale preview");
+                confirmation = DialogResult.No;
+                var cancelledApply = (System.Threading.Tasks.Task)typeof(ShelvesForm).GetMethod("ApplyAsync", flags).Invoke(form, null);
+                WaitUntil(() => cancelledApply.IsCompleted, "Shelve apply confirmation cancellation completes");
+                Require(applied == 0, "Shelve apply never writes when confirmation is declined");
+                typeof(ShelvesForm).GetField("showPreflightError", flags).SetValue(form, new Action<string>(message => { }));
+                typeof(ShelvesForm).GetField("confirm", flags).SetValue(form, new Func<string, string, DialogResult>((message, title) => {
+                    Require(message.Contains(root) && message.Contains(selector), "Apply confirmation shows the captured workspace and selector");
+                    File.WriteAllText(selectorFile, selector.Replace("/main", "/main/changed-during-confirmation"));
+                    return DialogResult.Yes;
+                }));
+                var switchedApply = (System.Threading.Tasks.Task)typeof(ShelvesForm).GetMethod("ApplyAsync", flags).Invoke(form, null);
+                WaitUntil(() => switchedApply.IsCompleted, "Selector change during apply confirmation is handled");
+                Require(applied == 0 && ((Label)Field(form, "status")).Text.Contains("分支已改变"),
+                    "Changing branches during confirmation cannot invoke the apply backend");
+                File.WriteAllText(selectorFile, selector);
+                typeof(ShelvesForm).GetField("confirm", flags).SetValue(form, new Func<string, string, DialogResult>((message, title) => confirmation));
+                confirmation = DialogResult.Yes;
+                var pendingApply = new System.Threading.Tasks.TaskCompletionSource<PlasticCommandResult>();
+                typeof(ShelvesForm).GetField("applyShelve", flags).SetValue(form,
+                    new Func<string, long, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((path, id, token) => {
+                        Require(path == root && id == 21, "Apply uses the reviewed root and shelveset identity"); applied++; return pendingApply.Task;
+                    }));
+                var appliedTask = (System.Threading.Tasks.Task)typeof(ShelvesForm).GetMethod("ApplyAsync", flags).Invoke(form, null);
+                Require(!((Button)Field(form, "cancel")).Enabled && !((Button)Field(form, "apply")).Enabled && !((Button)Field(form, "close")).Enabled,
+                    "Native shelveset writes disable cancellation, duplicate submission and close");
+                form.Close(); Require(!form.IsDisposed, "Closing cannot abandon a shelveset write");
+                pendingApply.SetResult(new PlasticCommandResult { ExitCode = 0 });
+                WaitUntil(() => appliedTask.IsCompleted, "Shelve apply completes");
+                Require(applied == 1 && ((Label)Field(form, "status")).Text.Contains("应用成功"),
+                    "Shelve apply uses the selected id and reports confirmed success");
+                shelves = (ListView)Field(form, "shelves"); shelves.Items[0].Selected = true; Application.DoEvents();
+                WaitUntil(() => !(bool)Field(form, "busy"), "Shelve delete fixture details finish loading");
+                var deletedTask = (System.Threading.Tasks.Task)typeof(ShelvesForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                WaitUntil(() => deletedTask.IsCompleted, "Shelve delete completes");
+                Require(removed == 1 && shelves.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("删除成功"),
+                    "Shelve delete refreshes the list and reports confirmed success");
+                form.Close();
+            }
+            using (var comparison = new ShelveComparisonForm(new PlasticShelveComparison {
+                Repository = "ui-shelves@local", ShelveId = 21, ParentChangeset = 20,
+                Files = new[] { new PlasticShelveComparisonFile { Status = "M", Path = "/操作/file.txt",
+                    Diff = new PlasticDiffResult { HasChanges = true, DiffText = "-before\n+after" } } }
+            }))
+            {
+                Prepare(comparison);
+                var comparisonFiles = (ListView)Field(comparison, "files");
+                comparisonFiles.Items[0].Selected = true; Application.DoEvents();
+                Require(comparisonFiles.Items.Count == 1 && ((TextBox)Field(comparison, "preview")).Text.Contains("-before\r\n+after"),
+                    "Shelve comparison dialog renders the selected file diff preview");
+                Save(comparison, Path.Combine(artifacts, "shelves-comparison.png"));
+                comparison.Size = comparison.MinimumSize; Application.DoEvents();
+                Save(comparison, Path.Combine(artifacts, "shelves-comparison-minimum.png"));
+                Require(comparison.RectangleToScreen(comparison.ClientRectangle).Contains(comparisonFiles.RectangleToScreen(comparisonFiles.ClientRectangle)),
+                    "Shelve comparison file list remains visible at minimum size");
+                var close = (Button)comparison.CancelButton;
+                Require(comparison.RectangleToScreen(comparison.ClientRectangle).Contains(close.RectangleToScreen(close.ClientRectangle)),
+                    "Shelve comparison provides a visible close button and Escape action");
+                comparison.Close();
             }
             using (var main = new MainForm(LaunchRequest.Parse(new[] { "--path", Path.Combine(root, "目录 中文") })))
             {
@@ -1272,7 +1376,7 @@ namespace TortoiseSCM
                 Require(files.Items.Count == 2, "Live shelve contains exactly two controlled file changes");
                 Require(files.Items.Cast<ListViewItem>().All(item => !String.IsNullOrWhiteSpace(item.Text) && item.SubItems.Count >= 2), "Live shelve details expose paths and statuses");
                 Save(form, Path.Combine(artifacts, "shelves-live.png")); form.Size = form.MinimumSize; Application.DoEvents();
-                foreach (string field in new[] { "shelves", "files", "filter", "refresh", "cancel", "close" })
+                foreach (string field in new[] { "shelves", "files", "filter", "apply", "delete", "compare", "export", "refresh", "cancel", "close" })
                 {
                     var control = (Control)Field(form, field);
                     Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Live shelves " + field + " fits at minimum size");

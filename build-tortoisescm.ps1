@@ -56,6 +56,11 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Blame CLI test compilation failed.' }
     & $blameCliOutput (Join-Path $out 'TortoiseSCM.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Blame CLI tests failed.' }
+    $shelveContentOutput = Join-Path $out 'ShelveCompareExportCliTests.exe'
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$shelveContentOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShelveCompareExportCliTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Shelveset content CLI test compilation failed.' }
+    & $shelveContentOutput (Join-Path $out 'TortoiseSCM.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Shelveset content CLI tests failed.' }
     & $msbuild (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShellTests.vcxproj') /nologo /verbosity:minimal "/p:Configuration=$Configuration" /p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw 'Shell test compilation failed.' }
     & (Join-Path $out 'ShellTests.exe')
@@ -97,6 +102,7 @@ if ($Test -or $Integration) {
         if (-not $shelvesManifest -or -not (Test-Path -LiteralPath $shelvesManifest)) { throw 'Shelveset setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-shelves-cli.txt'), $shelvesManifest)
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShelvesIntegrationTests.ps1') -Manifest $shelvesManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShelveContentIntegrationTests.ps1') -Manifest $shelvesManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         $mergeIntegrationOutput = Join-Path $out 'MergeIntegrationTests.exe'
         & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$mergeIntegrationOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\MergeIntegrationTests.cs')
         if ($LASTEXITCODE -ne 0) { throw 'Merge integration test compilation failed.' }

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -19,6 +20,24 @@ namespace TortoiseSCM
         public string Date { get; set; }
         public string Comment { get; set; }
         public string Repository { get; set; }
+    }
+
+    public sealed class PlasticShelveComparisonFile
+    {
+        public string Status { get; set; }
+        public string Path { get; set; }
+        public string OldPath { get; set; }
+        public string ItemType { get; set; }
+        public PlasticDiffResult Diff { get; set; }
+    }
+
+    public sealed class PlasticShelveComparison
+    {
+        public string Repository { get; set; }
+        public string RootPath { get; set; }
+        public long ShelveId { get; set; }
+        public long ParentChangeset { get; set; }
+        public IList<PlasticShelveComparisonFile> Files { get; set; }
     }
 
     public sealed partial class PlasticClient
@@ -56,6 +75,164 @@ namespace TortoiseSCM
             var changes = ParseChangesetComparisonFiles(result.Output);
             ValidateShelveContext(context);
             return changes;
+        }
+
+        public async Task<PlasticShelveComparison> GetShelveComparisonAsync(string root, long shelveId, CancellationToken cancellationToken)
+        {
+            ValidateShelveId(shelveId);
+            var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
+            var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+            var shelve = shelves.SingleOrDefault(item => item.ShelveId == shelveId);
+            if (shelve == null)
+                throw new ArgumentException("The selected shelveset no longer exists in this repository. Refresh the shelves list.");
+            ValidateShelveContext(context);
+            var changes = await GetShelveChangesAsync(context.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
+            var result = new List<PlasticShelveComparisonFile>();
+            foreach (var change in changes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (change.ItemType == "D")
+                {
+                    result.Add(new PlasticShelveComparisonFile { Status = change.Status, Path = change.Path,
+                        OldPath = change.OldPath, ItemType = change.ItemType });
+                    continue;
+                }
+                if (change.ItemType != "F" && change.ItemType != "B")
+                    throw new ArgumentException("Shelveset comparison supports files only; directory, xlink and symlink changes require the Plastic client: " + change.Path);
+                string sourcePath = String.IsNullOrEmpty(change.OldPath) ? change.Path : change.OldPath;
+                byte[] before = new byte[0], after;
+                string revision = HistoricalSpec(context.Repository, sourcePath, shelve.ParentChangeset);
+                string temporary = NewHistoricalTemporaryDirectory();
+                string beforePath = Path.Combine(temporary, "before"), afterPath = Path.Combine(temporary, "after");
+                try
+                {
+                    if (change.Status != "A")
+                    {
+                        if (shelve.ParentChangeset <= 0)
+                            throw new InvalidDataException("The shelveset has no valid parent changeset for a non-added file: " + sourcePath);
+                        await DownloadHistoricalFileAsync(context, sourcePath, shelve.ParentChangeset, beforePath, cancellationToken).ConfigureAwait(false);
+                        before = File.ReadAllBytes(beforePath);
+                    }
+                    if (change.Status != "D")
+                    {
+                        await DownloadShelveFileAsync(context, change.Path, shelveId, afterPath, cancellationToken).ConfigureAwait(false);
+                        after = File.ReadAllBytes(afterPath);
+                    }
+                    else after = new byte[0];
+                    result.Add(new PlasticShelveComparisonFile { Status = change.Status, Path = change.Path,
+                        OldPath = change.OldPath, ItemType = change.ItemType,
+                        Diff = CompareContent(change.Path, revision, before, after, change.ItemType == "B") });
+                }
+                finally { RemoveHistoricalTemporaryDirectory(temporary, beforePath, afterPath); }
+            }
+            ValidateShelveContext(context);
+            return new PlasticShelveComparison { Repository = context.Repository, RootPath = context.RootPath,
+                ShelveId = shelveId, ParentChangeset = shelve.ParentChangeset, Files = result };
+        }
+
+        public async Task<PlasticCommandResult> ExportShelveAsync(string root, long shelveId, string outputDirectory,
+            bool overwrite, CancellationToken cancellationToken)
+        {
+            ValidateShelveId(shelveId);
+            var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
+            var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+            var shelve = shelves.SingleOrDefault(item => item.ShelveId == shelveId);
+            if (shelve == null)
+                throw new ArgumentException("The selected shelveset no longer exists in this repository. Refresh the shelves list.");
+            string output = ValidateShelveOutputDirectory(outputDirectory);
+            RejectShelveOutputWorkspace(output);
+            var changes = await GetShelveChangesAsync(context.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
+            var files = changes.Where(item => item.Status != "D" && (item.ItemType == "F" || item.ItemType == "B")).ToList();
+            if (changes.Any(item => item.ItemType != "F" && item.ItemType != "B" && item.Status != "D"))
+                throw new ArgumentException("Shelveset export supports file changes only; directory, xlink and symlink changes require the Plastic client.");
+            if (files.Any(item => item.Path.Equals("/shelveset.manifest", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("A shelveset file conflicts with the reserved export manifest name.");
+            var targets = files.Select(item => Path.GetFullPath(Path.Combine(output, item.Path.Substring(1).Replace('/', Path.DirectorySeparatorChar)))).ToList();
+            targets.Add(Path.Combine(output, "shelveset.manifest"));
+            ValidateShelveExportTargets(output, targets, overwrite);
+            // Stage beside the destination so the final directory move remains atomic
+            // and works when the system temporary directory is on another volume.
+            string temporary = Path.Combine(Path.GetDirectoryName(output), ".tortoisescm-shelve-export-" + Guid.NewGuid().ToString("N"));
+            string staged = Path.Combine(temporary, "export");
+            bool destinationTouched = false;
+            try
+            {
+                Directory.CreateDirectory(temporary);
+                Directory.CreateDirectory(staged);
+                foreach (var change in files)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string relative = change.Path.Substring(1).Replace('/', Path.DirectorySeparatorChar);
+                    string stagedPath = Path.GetFullPath(Path.Combine(staged, relative));
+                    if (!IsWithin(stagedPath, staged)) throw new InvalidDataException("The shelveset contained an unsafe repository path.");
+                    RejectReparsePath(stagedPath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(stagedPath));
+                    await DownloadShelveFileAsync(context, change.Path, shelveId, stagedPath, cancellationToken).ConfigureAwait(false);
+                }
+                string manifest = Path.Combine(staged, "shelveset.manifest");
+                using (var writer = new StreamWriter(manifest, false, new UTF8Encoding(false)))
+                {
+                    writer.WriteLine("# TortoiseSCM shelveset {0}@{1} parent cs:{2}", shelveId.ToString(CultureInfo.InvariantCulture),
+                        context.Repository, shelve.ParentChangeset.ToString(CultureInfo.InvariantCulture));
+                    writer.WriteLine("status\ttype\tpath\toldpath");
+                    foreach (var change in changes)
+                        writer.WriteLine(String.Join("\t", new[] { change.Status, change.ItemType, change.Path, change.OldPath ?? "" }));
+                }
+                ValidateShelveContext(context);
+                ValidateShelveOutputDirectory(output);
+                RejectShelveOutputWorkspace(output);
+                ValidateShelveExportTargets(output, targets, overwrite);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!Directory.Exists(output))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(output));
+                    Directory.Move(staged, output);
+                    destinationTouched = true;
+                    staged = null;
+                }
+                else
+                {
+                    foreach (string source in Directory.EnumerateFiles(staged, "*", SearchOption.AllDirectories))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string relative = source.Substring(staged.TrimEnd('\\', '/') .Length).TrimStart('\\', '/');
+                        string target = Path.Combine(output, relative);
+                        ValidateShelveOutputDirectory(output);
+                        RejectShelveOutputWorkspace(output);
+                        ValidateShelveExportTargets(output, new[] { target }, overwrite);
+                        RejectReparsePath(source);
+                        destinationTouched = true;
+                        Directory.CreateDirectory(Path.GetDirectoryName(target));
+                        MoveExportFile(source, target, overwrite);
+                    }
+                }
+                return new PlasticCommandResult { ExitCode = 0, Output = "Exported shelveset sh:" + shelveId.ToString(CultureInfo.InvariantCulture) +
+                    " to " + output + Environment.NewLine + "Files: " + files.Count.ToString(CultureInfo.InvariantCulture) };
+            }
+            catch (OperationCanceledException error)
+            {
+                if (!destinationTouched) throw;
+                throw new OperationCanceledException("Shelveset export was cancelled. Some destination files may already have been written; inspect the output before retrying.", error, cancellationToken);
+            }
+            catch (ArgumentException error)
+            {
+                if (!destinationTouched) throw;
+                return ShelveExportFailure(error, true);
+            }
+            catch (InvalidDataException error)
+            {
+                if (!destinationTouched) throw;
+                return ShelveExportFailure(error, true);
+            }
+            catch (Exception error)
+            {
+                return ShelveExportFailure(error, destinationTouched);
+            }
+            finally
+            {
+                if (staged != null && Directory.Exists(staged)) Directory.Delete(staged, true);
+                if (Directory.Exists(temporary)) Directory.Delete(temporary);
+            }
         }
 
         public Task<PlasticCommandResult> CreateShelveAsync(string root, IList<string> paths, string comment, CancellationToken cancellationToken)
@@ -155,47 +332,62 @@ namespace TortoiseSCM
 
         public async Task<PlasticCommandResult> ApplyShelveAsync(string root, long shelveId, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var workspace = DiscoverWorkspace(root);
+            if (workspace == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
+            return await ApplyShelveAsync(root, shelveId, workspace.Repository, workspace.Selector, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<PlasticCommandResult> ApplyShelveAsync(string root, long shelveId, string expectedRepository,
+            string expectedSelector, CancellationToken cancellationToken)
+        {
             ValidateShelveId(shelveId);
+            ValidateBranchRepository(expectedRepository);
+            if (expectedSelector == null) throw new ArgumentNullException("expectedSelector");
+            var captured = new PlasticWorkspace { RootPath = Path.GetFullPath(root), Repository = expectedRepository, Selector = expectedSelector };
+            ValidateShelveContext(captured);
             var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
-            var workspace = await GetWorkspaceAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+            if (!SamePath(context.RootPath, captured.RootPath)) throw new ArgumentException("Apply shelveset requires the explicit workspace root.");
+            ValidateShelveContext(captured);
+            var workspace = await GetWorkspaceAsync(captured.RootPath, cancellationToken).ConfigureAwait(false);
             if (workspace.IsPartial)
                 throw new ArgumentException("Applying a shelveset is supported only in a Standard workspace. Partial/Gluon workspaces must use the official Plastic client.");
-            ValidateShelveContext(context);
+            ValidateShelveContext(captured);
 
-            using (var structureGate = StructureGate(context.RootPath))
-            using (var mergeGate = OpenMergeGate(context.RootPath))
+            using (var structureGate = StructureGate(captured.RootPath))
+            using (var mergeGate = OpenMergeGate(captured.RootPath))
             {
-                var currentWorkspace = await GetWorkspaceAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                var currentWorkspace = await GetWorkspaceAsync(captured.RootPath, cancellationToken).ConfigureAwait(false);
                 if (currentWorkspace.IsPartial)
                     throw new ArgumentException("The workspace changed to Partial/Gluon mode during shelveset preparation; no shelveset was applied.");
-                ValidateShelveContext(context);
-                RejectShelveSessions(context.RootPath);
+                ValidateShelveContext(captured);
+                RejectShelveSessions(captured.RootPath);
                 // A normal status omits ignored entries. Include all local entries
                 // so an ignored/private file at a shelveset path cannot be silently
                 // overwritten by the native apply operation.
-                var statusResult = await ExecuteAsync(RevisionCommand(context.RootPath, new[] {
-                    "status", context.RootPath, "--all", "--ignored", "--xml", "--encoding=utf-8", "--fullpaths"
+                var statusResult = await ExecuteAsync(RevisionCommand(captured.RootPath, new[] {
+                    "status", captured.RootPath, "--all", "--ignored", "--xml", "--encoding=utf-8", "--fullpaths"
                 }), cancellationToken).ConfigureAwait(false);
                 RequireSuccess(statusResult);
-                var pending = ParseStatus(statusResult.Output, context.RootPath);
+                var pending = ParseStatus(statusResult.Output, captured.RootPath);
                 if (pending.Count != 0)
                     throw new ArgumentException("The workspace has pending changes. Applying a shelveset is refused to prevent overwriting local content; review or save those changes first.");
-                var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                var shelves = await GetShelvesAsync(captured.RootPath, cancellationToken).ConfigureAwait(false);
                 if (!shelves.Any(item => item.ShelveId == shelveId))
                     throw new ArgumentException("The selected shelveset no longer exists in this repository. Refresh the shelves list.");
-                var details = await GetShelveChangesAsync(context.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
+                var details = await GetShelveChangesAsync(captured.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
                 if (details.Count == 0)
                     throw new InvalidDataException("The selected shelveset has no changed files and cannot be applied safely.");
-                ValidateShelveContext(context);
+                ValidateShelveContext(captured);
                 cancellationToken.ThrowIfCancellationRequested();
-                var result = await ExecuteAsync(RevisionCommand(context.RootPath, new[] {
-                    "shelveset", "apply", ShelveSpec(shelveId, context.Repository), "--encoding=utf-8"
+                var result = await ExecuteAsync(RevisionCommand(captured.RootPath, new[] {
+                    "shelveset", "apply", ShelveSpec(shelveId, captured.Repository), "--encoding=utf-8"
                 }), cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded)
                     result.Error += " The shelveset may not have been applied; inspect workspace status before retrying.";
                 else
                 {
-                    try { ValidateShelveContext(context); }
+                    try { ValidateShelveContext(captured); }
                     catch (Exception error)
                     {
                         result.ExitCode = 1;
@@ -208,18 +400,32 @@ namespace TortoiseSCM
 
         public async Task<PlasticCommandResult> DeleteShelveAsync(string root, long shelveId, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var workspace = DiscoverWorkspace(root);
+            if (workspace == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
+            return await DeleteShelveAsync(root, shelveId, workspace.Repository, workspace.Selector, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<PlasticCommandResult> DeleteShelveAsync(string root, long shelveId, string expectedRepository,
+            string expectedSelector, CancellationToken cancellationToken)
+        {
             ValidateShelveId(shelveId);
+            ValidateBranchRepository(expectedRepository);
+            if (expectedSelector == null) throw new ArgumentNullException("expectedSelector");
+            var captured = new PlasticWorkspace { RootPath = Path.GetFullPath(root), Repository = expectedRepository, Selector = expectedSelector };
+            ValidateShelveContext(captured);
             var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
-            ValidateShelveContext(context);
-            using (var mergeGate = OpenMergeGate(context.RootPath))
+            if (!SamePath(context.RootPath, captured.RootPath)) throw new ArgumentException("Delete shelveset requires the explicit workspace root.");
+            ValidateShelveContext(captured);
+            using (var mergeGate = OpenMergeGate(captured.RootPath))
             {
-                var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                var shelves = await GetShelvesAsync(captured.RootPath, cancellationToken).ConfigureAwait(false);
                 if (!shelves.Any(item => item.ShelveId == shelveId))
                     throw new ArgumentException("The selected shelveset no longer exists in this repository. Refresh the shelves list.");
-                ValidateShelveContext(context);
+                ValidateShelveContext(captured);
                 cancellationToken.ThrowIfCancellationRequested();
-                var result = await ExecuteAsync(RevisionCommand(context.RootPath, new[] {
-                    "shelveset", "delete", ShelveSpec(shelveId, context.Repository)
+                var result = await ExecuteAsync(RevisionCommand(captured.RootPath, new[] {
+                    "shelveset", "delete", ShelveSpec(shelveId, captured.Repository)
                 }), cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded)
                     result.Error += " The shelveset may still exist; refresh the shelves list before retrying.";
@@ -227,8 +433,8 @@ namespace TortoiseSCM
                 {
                     try
                     {
-                        ValidateShelveContext(context);
-                        var remaining = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                        ValidateShelveContext(captured);
+                        var remaining = await GetShelvesAsync(captured.RootPath, cancellationToken).ConfigureAwait(false);
                         if (remaining.Any(item => item.ShelveId == shelveId))
                         {
                             result.ExitCode = 1;
@@ -277,12 +483,17 @@ namespace TortoiseSCM
 
         private async Task<PlasticWorkspace> ValidateShelveRootAsync(string root, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var captured = DiscoverWorkspace(root);
+            if (captured == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
             var command = await BuildReadCommandAsync(root, cancellationToken).ConfigureAwait(false);
             if (!SamePath(command.Arguments[1], command.WorkingDirectory))
                 throw new ArgumentException("Shelveset operations require the explicit workspace root.");
-            var workspace = DiscoverWorkspace(command.WorkingDirectory);
-            ValidateBranchRepository(workspace.Repository);
-            return workspace;
+            if (!SamePath(command.WorkingDirectory, captured.RootPath))
+                throw new InvalidOperationException("The selected workspace changed during shelveset preparation. Refresh before continuing.");
+            ValidateBranchRepository(captured.Repository);
+            ValidateShelveContext(captured);
+            return captured;
         }
 
         private async Task<ShelveSelection> ValidateShelveSelectionAsync(PlasticWorkspace workspace, IList<string> paths, CancellationToken cancellationToken)
@@ -338,6 +549,82 @@ namespace TortoiseSCM
 
         private static string ShelveSpec(long shelveId, string repository)
         { return "sh:" + shelveId.ToString(CultureInfo.InvariantCulture) + "@" + repository; }
+
+        private async Task DownloadShelveFileAsync(PlasticWorkspace context, string repositoryPath, long shelveId,
+            string target, CancellationToken cancellationToken)
+        {
+            ValidateRepositoryFilePath(repositoryPath);
+            RejectReparsePath(target);
+            var result = await ExecuteAsync(RevisionCommand(context.RootPath,
+                new[] { "cat", ShelveFileSpec(context.Repository, repositoryPath, shelveId), "--file=" + target }), cancellationToken).ConfigureAwait(false);
+            RequireSuccess(result);
+            if (!File.Exists(target)) throw new IOException("Plastic did not produce the requested shelveset file.");
+        }
+
+        private static string ShelveFileSpec(string repository, string path, long shelveId)
+        { return "serverpath:" + path + "#" + ShelveSpec(shelveId, repository); }
+
+        private static string ValidateShelveOutputDirectory(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path) || Path.GetPathRoot(path).Length < 3 ||
+                path.IndexOfAny(new[] { '\0', '\r', '\n' }) >= 0)
+                throw new ArgumentException("Shelveset export output must be an absolute directory path.");
+            if (path.Substring(Path.GetPathRoot(path).Length).IndexOf(':') >= 0)
+                throw new ArgumentException("Shelveset export output cannot be an alternate data stream.");
+            string output = Path.GetFullPath(path).TrimEnd('\\', '/');
+            if (output.Length == Path.GetPathRoot(output).TrimEnd('\\', '/').Length)
+                throw new ArgumentException("Shelveset export cannot target a drive root.");
+            foreach (string component in output.Substring(Path.GetPathRoot(output).Length).Split('\\', '/'))
+            {
+                if (String.IsNullOrEmpty(component) || component == "." || component == "..") continue;
+                string device = component.Split('.')[0];
+                if (component.EndsWith(".") || component.EndsWith(" ") ||
+                    new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(device, StringComparer.OrdinalIgnoreCase))
+                    throw new ArgumentException("Shelveset export output cannot contain ambiguous Windows names or reserved devices.");
+            }
+            if (output.Split('\\', '/').Any(part => part.Equals(".plastic", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("Shelveset export output cannot be workspace metadata.");
+            RejectReparsePath(output);
+            if (File.Exists(output)) throw new ArgumentException("Shelveset export output must be a directory.");
+            if (!Directory.Exists(output) && !Directory.Exists(Path.GetDirectoryName(output)))
+                throw new ArgumentException("Choose an output directory with an existing parent.");
+            return output;
+        }
+
+        private static void MoveExportFile(string source, string target, bool overwrite)
+        {
+            RejectReparsePath(target);
+            if (!overwrite) { File.Move(source, target); return; }
+            if (File.Exists(target)) File.Replace(source, target, null);
+            else File.Move(source, target);
+        }
+
+        private void RejectShelveOutputWorkspace(string output)
+        {
+            if (DiscoverWorkspace(output) != null)
+                throw new ArgumentException("Shelveset export must use a directory outside every Plastic workspace.");
+        }
+
+        private void ValidateShelveExportTargets(string output, IEnumerable<string> targets, bool overwrite)
+        {
+            foreach (string target in targets)
+            {
+                if (!IsWithin(target, output) || target.Split('\\', '/').Any(part => part.Equals(".plastic", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException("The shelveset contained an unsafe output path.");
+                RejectReparsePath(target);
+                if (DiscoverWorkspace(target) != null)
+                    throw new ArgumentException("Shelveset export cannot write into a Plastic workspace or nested workspace: " + target);
+                if (Directory.Exists(target)) throw new ArgumentException("The shelveset export target is a directory: " + target);
+                if (!overwrite && File.Exists(target)) throw new ArgumentException("Export destination exists; choose another directory or explicitly allow overwrite: " + target);
+            }
+        }
+
+        private static PlasticCommandResult ShelveExportFailure(Exception error, bool destinationTouched)
+        {
+            return new PlasticCommandResult { ExitCode = 1, Error = "Shelveset export did not finish reliably: " + error.Message +
+                (destinationTouched ? " Some destination files may already have been written; inspect the output before retrying." : " No destination file was written.") };
+        }
 
         private static void ValidateShelveId(long shelveId)
         { if (shelveId < 0) throw new ArgumentOutOfRangeException("shelveId", "Shelveset ID must be nonnegative."); }

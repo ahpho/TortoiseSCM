@@ -820,10 +820,12 @@ internal static class CliTests
         if (args.Any(arg => arg.EndsWith("fail.txt"))) { Console.Error.WriteLine("Deliberate 中文 failure"); return 7; }
         if (args[0] == "status")
         {
+            bool ignoredPending = File.Exists(Path.Combine(metadata, "fake-ignored.marker")) && args.Contains("--ignored");
+            bool statusClean = File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-clean.marker")) && !ignoredPending;
             if (File.Exists(Path.Combine(metadata, "fake-create-failure.txt")) && File.ReadAllText(Path.Combine(metadata, "fake-create-failure.txt")) == "selector")
                 File.WriteAllText(Path.Combine(metadata, "plastic.selector"), "repository \"test@server:8087\"\r\n path \"/\"\r\n smartbranch \"/main/feature 中文\"\r\n");
             Console.WriteLine(new XElement("StatusOutput", new XElement("WkConfigName", (File.Exists(Path.Combine(metadata, "fake-branch.txt")) ? File.ReadAllText(Path.Combine(metadata, "fake-branch.txt")) : "/main") + "@test@server:8087"), new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-partial.marker")) ? "-1" : "1"),
-                new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("Changes", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-clean.marker")) ? null : new XElement("Change",
+                new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("Changes", statusClean ? null : new XElement("Change",
                 new XElement("Type", File.Exists(Path.Combine(metadata, "fake-shelves.marker")) ? "CH" : "PR"), new XElement("Path", File.Exists(Path.Combine(metadata, "fake-shelves.marker")) ? Path.Combine(Environment.CurrentDirectory, "shelve 中文 & selected.txt") : File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) ? File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) : Path.Combine(Environment.CurrentDirectory, "中文 space & file.txt")),
                 new XElement("TypeVerbose", "Private"), new XElement("RevisionType", "enTextFile")))).ToString());
         }

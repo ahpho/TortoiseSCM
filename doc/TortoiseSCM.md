@@ -435,11 +435,15 @@ Explorer “TortoiseSCM → 暂存集…”及主窗口“操作 → 暂存集�
 & $exe --cli --command shelve-details --path 'D:\workspace' --shelve 12 --json | ConvertFrom-Json
 & $exe --cli --command shelve-apply --path 'D:\workspace' --shelve 12 --yes --json | ConvertFrom-Json
 & $exe --cli --command shelve-delete --path 'D:\workspace' --shelve 12 --yes --json | ConvertFrom-Json
+& $exe --cli --command shelve-diff --path 'D:\workspace' --shelve 12 --json | ConvertFrom-Json
+& $exe --cli --command shelve-export --path 'D:\workspace' --shelve 12 --output 'D:\exports\shelve-12' --yes --json | ConvertFrom-Json
 ```
 
 `--commentsfile` 可代替 `--comment`。创建支持 Standard 和 Partial 对应原生命令；失败或超时后，服务器可能已经保存，请先刷新列表确认，程序不会自动重试。
 列表返回 `data.shelves`（`shelveId` 为公开的 `sh:` 编号，`objectId` 为服务器内部对象编号），详情返回 `data.files`。
-暂存集应用和删除已提供 CLI。应用前要求仓库匹配、Standard 工作区、无待定更改且暂存集有文件；Partial/Gluon 工作区明确拒绝并提示使用官方客户端。写操作必须显式 `--yes`，失败或验证不确定时要求检查状态；当前仍无暂存集内容比较/导出，因此尚不构成完整的 Git stash/pop 等价功能。
+加载文件明细后，GUI 底部按钮和右键菜单提供应用、删除、比较、导出。写入必须确认，进行中不能关闭或重复提交。应用前要求仓库及选择器匹配、Standard 工作区、无待定更改（包括私有/忽略项）；Partial/Gluon 应用明确拒绝。GUI 确认显示目标工作区；CLI 写操作必须显式 `--yes`，失败或验证不确定时要求检查状态。应用不会自动删除暂存集，也不会自动解决冲突。
+
+比较以暂存集记录的父变更集为基线，逐文件显示文本差异或二进制内容是否变化，支持 Standard/Partial 只读访问。导出只保存暂存集中存在的更改文件，保留仓库相对路径，并写入 `shelveset.manifest`（含删除记录）；不是完整仓库快照或可直接应用的补丁。目录新增/移动、链接等尚不支持导出。输出目录必须位于 Plastic 工作区之外，父目录须存在；已有文件默认拒绝覆盖，CLI 必须额外提供 `--overwrite`，GUI 会再次说明覆盖。下载完成后才写目标；新目录整体移动，已有目录逐文件替换，中途失败可能已写出部分文件，需检查后再重试。
 
 ### 本轮五项需求对照
 

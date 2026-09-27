@@ -54,6 +54,14 @@
 
 ## 暂存集应用与删除（2026-09-28）
 
+后续完成 GUI 应用/删除确认和 GUI/CLI 内容比较、导出：
+
+- `build-tortoisescm.ps1 -Configuration Release -Test` 完整通过（Core、2068 项既有 CLI、5 项 blame CLI、Shell、WinForms UI）；新增内容 CLI 套件最终单独通过 21 项。日志为 `bin/TortoiseSCM/qa/shelve-content-final-build.log` 与 `shelve-content-cli-final.log`。
+- 比较/导出检查包括父版本文本差异、二进制字节、新增/删除/移动、删除项不下载、manifest 冲突、输出覆盖、嵌套工作区保护、下载失败不改变已有输出。Apply/Delete 捕获确认时的仓库和 selector，测试模拟其变化并确认没有发出原生写命令。
+- GUI 检查包括确认拒绝、确认期间切分支拒绝、写入期间关闭/重复提交/取消禁用、删除后刷新、取消和错误仓库比较结果不展示，以及 LF 差异文本转换为 Windows 多行预览。普通及最小尺寸图片位于 `bin/TortoiseSCM/qa/Release/shelves*.png`；最后 UI 日志为 `shelve-content-ui-final.log`。这些是程序内 WinForms 渲染与控件测试，未进行真人 Explorer 桌面点击验收。
+- 真实隔离分支 `tortoisescm-autotest-integration-20260928-011857-5cfb79d9`：既有保存/浏览 56 项通过；新增内容流程 16 项通过（包含清理检查）。为 PowerShell 5.1 的两个含中文测试脚本补上 UTF-8 BOM，确保文件名不被按系统代码页误读；Standard/Partial 比较均读取真实 `#sh:` 内容；D 盘导出逐文件哈希吻合并验证覆盖拒绝/确认；CLI apply 恢复选中文件，CLI delete 后编号消失，consumer 最终干净。可重复脚本为 `test/TortoiseSCM/ShelveContentIntegrationTests.ps1`，结构化证据为该 fixture 的 `shelve-content-results.json`，日志为 `bin/TortoiseSCM/qa/shelve-content-live.log`。
+- 原始 `TestSCM` 保持 `/main` 且无待定更改。已有目录导出按文件替换，不承诺多文件事务；结构导出、暂存集应用冲突向导尚未交付。本轮更新构建产物，未更新系统安装副本。
+
 - Core 安全门和 CLI 黑盒共 2063 项断言通过：Standard 干净工作区应用成功，Partial/Gluon、待定更改、合并/结构会话和仓库不匹配均在原生写操作前拒绝。
 - 应用命令使用仓库限定的 `sh:<id>@<repository>`，执行后重新验证工作区上下文；失败或验证不确定时返回失败并要求检查状态，不自动重试。
 - 删除命令先校验 shelveset 属于当前仓库，执行后重新查询确认编号消失；CLI 写命令必须显式 `--yes`。证据：`.omo/evidence/shelves-apply-delete-20260928.txt`。

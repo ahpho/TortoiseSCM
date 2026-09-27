@@ -1,0 +1,15 @@
+Shelveset content + GUI milestone, 2026-09-28
+Build: .\build-tortoisescm.ps1 -Configuration Release -Test, exit 0.
+Full regression: Core, 2068 CLI assertions, 5 blame CLI assertions, ShellTests, WinForms UI passed.
+Targeted final content CLI: 21 assertions, exit 0 (including binary/add/delete/move and failed download preservation).
+Targeted final UI: exit 0, LF text rendering, cancelled/foreign comparisons, confirmation selector race, disabled close/cancel/repeat during writes.
+Final Release build: exit 0.
+Native fixture: bin/TortoiseSCM/qa/integration-20260928-011857-5cfb79d9/manifest.json
+Native tests: 56 shelves create/read assertions + 16 content/apply/delete assertions, exit 0.
+Verified Unicode paths, Standard/Partial reads, actual exported hashes, overwrite refusal and explicit overwrite, clean Standard apply, Partial/dirty rejection, delete re-query, consumer clean.
+Read-only TestSCM status: no pending entries. Selector: /main (unchanged).
+Visual inspection: bin/TortoiseSCM/qa/Release/shelves.png, shelves-minimum.png, shelves-comparison.png, shelves-comparison-minimum.png.
+Images are in-process WinForms rendering; no claim of a real Explorer desktop click test.
+Logs: bin/TortoiseSCM/qa/shelve-content-final-build.log, shelve-content-cli-final.log, shelve-content-ui-final.log, shelve-content-setup.log, shelve-content-live.log.
+Limitations: no Partial apply, no shelveset conflict-resolution wizard; export is a changed-file bundle with deletion manifest, not a complete snapshot or patch. Existing directories update per file and may retain partial output on an I/O failure.
+Installed application was not replaced; current executable is bin/TortoiseSCM/Release/TortoiseSCM.exe.

@@ -8,10 +8,10 @@
 | --- | --- | --- |
 | Explorer 右键 | 原生经典右键、范围/多选、状态图标；独立 GUI 与 CLI | 本轮补分支和暂存集入口；Windows 11 现代菜单尚未实现 |
 | 检查修改、提交 | 目录范围待定列表、勾选提交、右键历史/差异/撤销；`status/checkin` | 缺少 changelist 分组、提交说明历史/模板、issue tracker 集成；没有按行暂存 |
-| 日志与恢复 | 分页历史、提交文件明细、历史比较/导出、范围回滚；对应 CLI 齐全 | 重命名前历史需查旧路径；缺少逐行追溯及完整路径身份跟踪 |
+| 日志与恢复 | 分页历史、提交文件明细、逐行追溯、历史比较/导出、范围回滚；对应 CLI 齐全 | 重命名前历史需查旧路径；尚无完整路径身份跟踪 |
 | 差异与三方合并 | 外部工具配置、历史文件/整个快照比较、冲突处理；对应 CLI | 未移植完整 TortoiseGitMerge 编辑器；Partial 冲突与分支操作仍有明确支持范围 |
 | 分支管理 | 列表/父子层级、创建、Standard 切换、分支历史、固定头提交合并；对应 CLI | 父子树不是提交/合并关系图；缺少分支重命名、删除、Partial 切换 |
-| Stash | 本轮新增 shelveset 保存、列表、文件明细、应用和删除；`shelve-create/shelves/shelve-details/shelve-apply/shelve-delete` | 应用仅允许干净 Standard 工作区并要求 `--yes`；Partial/Gluon 明确转交官方客户端；尚无内容比较/导出，不等同于完整 stash/pop |
+| Stash | shelveset 保存、列表、文件明细、应用、删除、内容比较和导出均有 GUI/CLI | 应用仅允许干净 Standard 工作区；Partial 可保存/比较/导出但不能应用；未实现应用冲突向导和自动 pop；目录/链接导出仍受限 |
 | 标签 | 无专用 GUI/CLI | 需实现 Plastic labels 的列表、创建、历史定位与生命周期 |
 | Blame | blame CLI, Annotate/Blame GUI, Explorer single-file entry | Implemented Plastic native annotate line, owner, changeset, date, branch and content; read-only, directories and binaries are rejected |
 | Repository browser | 历史提交文件明细；单文件导出 | 尚不能浏览某个快照的完整仓库目录树 |
@@ -22,9 +22,9 @@
 
 ## 推进顺序
 
-1. 完成暂存集保存、浏览、应用与删除的 CLI 后端，并通过隔离服务器验证；GUI 暂存集列表继续保持只读浏览入口。
-2. 暂存集内容比较/导出与 GUI 应用确认：先固定仓库/基础版本、预检工作区，接入内容和结构冲突；不能以保存成功推断可以安全撤销本地工作。
-3. 逐行追溯与只读仓库浏览：提供日常定位问题、选择历史文件的入口；GUI/CLI 共享后端。
+1. 已完成暂存集保存/浏览、GUI 应用和删除确认，以及内容比较/导出。保持应用前检查和失败后的显式状态核对。
+2. 后续补暂存集应用冲突向导与目录/链接导出；不能以保存成功推断可以安全撤销本地工作。
+3. 下一项优先补只读仓库浏览：按快照浏览完整目录树，提供历史文件选择和导出入口；逐行追溯已交付，GUI/CLI 共享后端。
 4. Windows 11 现代右键菜单与现有经典菜单保持命令一致，保留旧系统兼容路径。
 5. 变更集/合并关系图、标签管理，再补分支重命名/删除与 Partial 切换。图必须使用服务器真实父关系和合并边，不能用时间或分支名称猜测。
 6. Changelist、提交说明历史/模板、批量操作、补丁及发布平台完善。

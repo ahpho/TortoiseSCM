@@ -1,4 +1,4 @@
-# GPL-2.0-or-later. Real shelveset CLI checks on a fresh isolated fixture.
+﻿# GPL-2.0-or-later. Real shelveset CLI checks on a fresh isolated fixture.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$Manifest,
