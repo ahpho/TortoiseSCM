@@ -73,6 +73,7 @@ namespace TortoiseSCM
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);
                 CheckBranchCreationDialogs(artifacts);
+                CheckBranchTree(artifacts);
                 if (args.Length > 1)
                 {
                     CheckBranches(artifacts, args[1]);
@@ -812,6 +813,16 @@ namespace TortoiseSCM
                         "Branch " + name + " is visible at minimum size");
                 }
                 Save(form, Path.Combine(artifacts, "branches-minimum.png"));
+                var view = (ComboBox)Field(form, "viewMode"); var liveTree = (TreeView)Field(form, "branchTree");
+                view.SelectedIndex = 1; Application.DoEvents();
+                Require(liveTree.SelectedNode != null && Object.ReferenceEquals(liveTree.SelectedNode.Tag, branch), "Live hierarchy preserves the list selection by exact branch identity");
+                if (((Button)Field(form, "locateCurrent")).Enabled) ((Button)Field(form, "locateCurrent")).PerformClick();
+                var treeBranch = (PlasticBranch)liveTree.SelectedNode.Tag;
+                ((Button)Field(form, "head")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Live hierarchy head details finish");
+                Require(((TextBox)Field(form, "description")).Text.Contains(treeBranch.Name), "Live hierarchy head action displays the selected branch details");
+                form.Size = new Size(1080, 730); Application.DoEvents(); Save(form, Path.Combine(artifacts, "branch-hierarchy-live.png"));
+                form.Size = form.MinimumSize; Application.DoEvents(); Save(form, Path.Combine(artifacts, "branch-hierarchy-live-minimum.png"));
+                view.SelectedIndex = 0; Application.DoEvents();
                 typeof(BranchForm).GetField("partial", flags).SetValue(form, true);
                 typeof(BranchForm).GetMethod("UpdateButtons", flags).Invoke(form, null);
                 Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled && ((Button)Field(form, "head")).Enabled,
@@ -1006,6 +1017,98 @@ namespace TortoiseSCM
                 Require(entries.All(entry => entry.Branch == "/main") && ((Button)Field(history, "loadMore")).Enabled == (bool)Field(history, "hasMoreHistory"),
                     "Branch history keeps continuation available for empty matching pages");
                 history.Close();
+            }
+        }
+
+        private static void CheckBranchTree(string artifacts)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            string root = Path.GetFullPath(Path.Combine(artifacts, "tree-fixture-" + Guid.NewGuid().ToString("N")));
+            string metadata = Path.Combine(root, ".plastic"); Directory.CreateDirectory(metadata);
+            File.WriteAllText(Path.Combine(metadata, "plastic.workspace"), "ui-tree\nunused\nStandard\n");
+            File.WriteAllText(Path.Combine(metadata, "plastic.selector"), "repository \"ui-tree@local\"\n  path \"/\"\n    branch \"/main\"\n");
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            using (var form = new BranchForm(client, root))
+            {
+                // Cancel the lifetime before showing: Shown cannot start any cm
+                // process; all following hierarchy data is an in-memory fixture.
+                ((CancellationTokenSource)Field(form, "lifetime")).Cancel(); Prepare(form);
+                var entries = new System.Collections.Generic.List<PlasticBranch> {
+                    new PlasticBranch { Name = "/main", Parent = "", Repository = "ui-tree@local", HeadChangeset = 1, Comment = "Root branch" },
+                    new PlasticBranch { Name = "/main/features", Parent = "/main", Repository = "ui-tree@local", HeadChangeset = 2, Comment = "Feature group" },
+                    new PlasticBranch { Name = "/main/features/中文 & space", Parent = "/main/features", Repository = "ui-tree@local", HeadChangeset = 3, IsCurrent = true, Comment = "Exact needle match" },
+                    new PlasticBranch { Name = "/independent-name", Parent = "/main", Repository = "ui-tree@local", HeadChangeset = 4, Comment = "Native parent wins over name spelling" },
+                    new PlasticBranch { Name = "/orphan/child", Parent = "/orphan", Repository = "ui-tree@local", HeadChangeset = 5, Comment = "Missing parent metadata" }
+                };
+                typeof(BranchForm).GetField("entries", flags).SetValue(form, entries);
+                typeof(BranchForm).GetMethod("RenderBranches", flags).Invoke(form, null);
+                var list = (ListView)Field(form, "branches"); var tree = (TreeView)Field(form, "branchTree"); var mode = (ComboBox)Field(form, "viewMode");
+                var nodes = (System.Collections.Generic.Dictionary<string, TreeNode>)Field(form, "treeNodes");
+                Require(mode.SelectedIndex == 0 && list.Visible && !tree.Visible, "Branch browser defaults to the existing list view");
+                list.Items[2].Selected = true; Application.DoEvents(); mode.SelectedIndex = 1; Application.DoEvents();
+                Require(tree.SelectedNode != null && Object.ReferenceEquals(tree.SelectedNode.Tag, entries[2]) && !list.Visible && tree.Visible,
+                    "Switching to hierarchy preserves the exact selected branch object");
+                Require(Object.ReferenceEquals(nodes["/independent-name"].Parent.Tag, entries[0]), "Hierarchy attaches branches by native Parent rather than splitting names");
+                Require(nodes["/orphan/child"].Parent == null && nodes["/orphan/child"].Text.StartsWith("/orphan/child") && nodes["/orphan/child"].Text.Contains("父分支不可见") && !nodes.ContainsKey("/orphan"),
+                    "Missing parent is flagged without fabricating a branch action target");
+                Require(tree.ContextMenuStrip == list.ContextMenuStrip && ((ToolStripMenuItem)Field(form, "branchHistory")).Enabled,
+                    "List and tree share context actions on the active selected branch");
+                Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled,
+                    "Current tree selection retains redundant merge and switch guards");
+                tree.SelectedNode = nodes["/independent-name"]; Application.DoEvents();
+                using (var history = (HistoryForm)typeof(BranchForm).GetMethod("CreateBranchHistoryDialog", flags).Invoke(form, null))
+                    Require((string)Field(history, "branch") == "/independent-name", "Tree history action targets the exact selected native branch");
+                mode.SelectedIndex = 0; Application.DoEvents();
+                Require(list.SelectedItems.Count == 1 && Object.ReferenceEquals(list.SelectedItems[0].Tag, entries[3]), "Returning to list preserves hierarchy selection exactly");
+                mode.SelectedIndex = 1;
+                ((ListView)Field(form, "files")).Items.Add("stale detail"); ((TextBox)Field(form, "description")).Text = "stale comment";
+                ((TextBox)Field(form, "filter")).Text = "needle"; Application.DoEvents();
+                Require(nodes.Count == 3 && list.Items.Count == 1 && nodes["/main"].ForeColor == SystemColors.GrayText &&
+                    nodes["/main/features"].ForeColor == SystemColors.GrayText && nodes[entries[2].Name].ForeColor == SystemColors.WindowText,
+                    "Tree filtering retains dim ancestor context while list contains only identical matches");
+                Require(Object.ReferenceEquals(nodes["/main"].Tag, entries[0]) && nodes["/main"].ToolTipText.Contains("直接子分支：2"),
+                    "Filtered ancestors retain real identity and unfiltered direct-child count");
+                Require(tree.SelectedNode == null && ((ListView)Field(form, "files")).Items.Count == 0 && ((TextBox)Field(form, "description")).TextLength == 0,
+                    "Tree filtering clears stale selected branch and head details");
+                ((Button)Field(form, "locateCurrent")).PerformClick(); Application.DoEvents();
+                Require(((TextBox)Field(form, "filter")).TextLength == 0 && Object.ReferenceEquals(tree.SelectedNode.Tag, entries[2]) &&
+                    tree.SelectedNode.Parent.IsExpanded && tree.SelectedNode.Parent.Parent.IsExpanded,
+                    "Locate current clears hidden filters and expands its ancestor path");
+                typeof(BranchForm).GetField("partial", flags).SetValue(form, true); tree.SelectedNode = nodes["/independent-name"]; Application.DoEvents();
+                Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled &&
+                    ((ToolStripMenuItem)Field(form, "branchHistory")).Enabled && ((ToolStripMenuItem)Field(form, "createChild")).Enabled,
+                    "Partial hierarchy supports metadata actions while disabling workspace switch and merge");
+                Save(form, Path.Combine(artifacts, "branch-hierarchy.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "viewMode", "locateCurrent", "filter", "head", "switchBranch", "close" })
+                {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)) &&
+                        control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)),
+                        "Hierarchy " + field + " visible at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "branch-hierarchy-minimum.png"));
+                var deep = new System.Collections.Generic.List<PlasticBranch>();
+                for (int i = 0; i < 1500; i++) deep.Add(new PlasticBranch { Name = "/node" + i, Parent = i == 0 ? "" : "/node" + (i - 1), Repository = "ui-tree@local", HeadChangeset = i });
+                typeof(BranchForm).GetField("entries", flags).SetValue(form, deep); typeof(BranchForm).GetMethod("RenderBranches", flags).Invoke(form, null);
+                Require(nodes.Count == 1500 && Object.ReferenceEquals(nodes["/node1499"].Parent.Tag, deep[1498]), "Deep hierarchy renders iteratively with native parent identity");
+                var cycle = new[] {
+                    new PlasticBranch { Name = "/a", Parent = "/b", Repository = "ui-tree@local", HeadChangeset = 1, IsCurrent = true },
+                    new PlasticBranch { Name = "/b", Parent = "/a", Repository = "ui-tree@local", HeadChangeset = 2 }
+                };
+                typeof(BranchForm).GetField("entries", flags).SetValue(form, cycle); ((TextBox)Field(form, "filter")).Text = "cycle-filter";
+                Require(tree.Nodes.Count == 0 && list.Items.Count == 0 && !((Button)Field(form, "head")).Enabled && !((Button)Field(form, "locateCurrent")).Enabled &&
+                    ((Label)Field(form, "status")).Text.StartsWith("无法显示分支层级"), "Malformed hierarchy through filter event fails closed without stale branch actions");
+                cycle[0].Parent = ""; cycle[0].Repository = "invalid-repository";
+                typeof(BranchForm).GetField("entries", flags).SetValue(form, new[] { cycle[0] }); ((TextBox)Field(form, "filter")).Clear();
+                Require(tree.Nodes.Count == 0 && !((Button)Field(form, "locateCurrent")).Enabled && ((Label)Field(form, "status")).Text.StartsWith("无法显示分支层级"),
+                    "Invalid hierarchy repository is contained by the same clear-and-disable path");
+                typeof(BranchForm).GetField("entries", flags).SetValue(form, new PlasticBranch[] { null }); ((TextBox)Field(form, "filter")).Text = "null-filter";
+                Require(tree.Nodes.Count == 0 && list.Items.Count == 0 && !((Button)Field(form, "locateCurrent")).Enabled && ((Label)Field(form, "status")).Text.StartsWith("无法显示分支层级"),
+                    "Null hierarchy entry is rejected without a follow-up button-state exception");
+                ((Button)Field(form, "refresh")).PerformClick(); Application.DoEvents();
+                Require(tree.Nodes.Count == 0 && list.Items.Count == 0 && !((Button)Field(form, "head")).Enabled && !((Button)Field(form, "locateCurrent")).Enabled,
+                    "Refresh with cancelled lifetime clears both views and stale hierarchy actions");
+                form.Close();
             }
         }
 

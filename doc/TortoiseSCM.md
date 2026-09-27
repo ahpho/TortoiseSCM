@@ -194,14 +194,17 @@ Partial 目录恢复仅支持目录结构一致的历史内容；涉及增删或
 
 在主窗口“操作 → 分支…”打开分支列表，或运行 `TortoiseSCM.exe --command branches --path D:\workspace`。
 列表显示当前分支、最新变更集、作者、创建日期和说明，可筛选、刷新、取消加载；“头提交详情”读取选中分支最新一次提交的说明和修改文件，不表示分支的全部历史。分支右键菜单的“本分支历史”打开上下窗格历史窗口，仅显示该分支自身发布的提交，不包含继承自父分支的提交；仍可查看明细、比较及导出文件。
+可在列表与“层级”视图之间切换。层级使用服务器返回的父分支关系，支持展开/折叠和定位当前分支；筛选时保留可见祖先作为上下文，并区分实际匹配项。祖先节点仍是可操作的真实分支，头提交、历史、创建、切换和合并均作用于当前选中的分支。缺失父分支时显示独立根节点及提示，不虚构可操作的父分支；重复或循环关系会报错。
+该层级描述分支的父子组织关系，不表示提交之间的继承或合并边；创建时指定其他历史起点不会改变这一区别。
 选择其他分支后，“合并到当前…”解析其最新变更集并打开现有合并窗口，固定来源版本。打开窗口只读取状态，仍须预检、确认开始合并、解决冲突及单独提交。
 
-“切换工作区…”在确认后切换整个 Standard 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Partial 可浏览分支及历史，本阶段不提供分支切换或跨分支合并，以保留加载规则。分支图、删除/重命名分支尚未提供。
+“切换工作区…”在确认后切换整个 Standard 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Partial 可浏览分支及历史，本阶段不提供分支切换或跨分支合并，以保留加载规则。提交/合并关系图、删除/重命名分支尚未提供。
 
 从选中分支的右键菜单创建子分支：默认起点为打开对话框时解析的固定头提交，可指定历史变更集；填写子分支短名称和非空说明后创建。创建只修改服务器分支信息，不签入、不切换工作区、不加载文件，Standard 和 Partial 均可使用。创建成功后可单独执行“切换工作区…”。若网络故障、取消或验证失败，服务器分支可能已经创建，应先刷新列表核对，不自动删除或重试。
 
 ```powershell
 & $exe --cli --command branches --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command branch-tree --path 'D:\workspace' --filter 'task' --json | ConvertFrom-Json
 $head = & $exe --cli --command branch-head --path 'D:\workspace' --branch '/main/task' --json | ConvertFrom-Json
 & $exe --cli --command merge-preview --path 'D:\workspace' --changeset $head.data.changeset --json | ConvertFrom-Json
 # 分支切换需要显式工作区根目录和确认
@@ -213,6 +216,7 @@ $head = & $exe --cli --command branch-head --path 'D:\workspace' --branch '/main
 ```
 
 分支列表的 `data.branches` 提供 `name/parent/owner/creationDate/comment/repository/headChangeset/isCurrent`。
+`branch-tree` 只读，支持 Standard 和 Partial；`data.nodes` 是父节点在前的扁平序列，在分支字段之外包含 `depth/isMatch/parentMissing/childCount`，`data.filter` 为过滤条件。`childCount` 为未过滤数据中的直接子分支数；保留祖先的 `isMatch=false`，缺失父分支的根节点 `parentMissing=true`。`--filter` 按名称、作者、日期、说明或头提交匹配；不接受写操作确认 `--yes`。
 分支历史沿用有界扫描和游标，每次最多扫描 `--limit` 个仓库提交，再按分支与路径取交集。空页不代表结束：只要 `hasMore=true`，就可使用 `nextBeforeChangeset` 继续读取；`data.branch` 标明当前过滤条件。分支名精确匹配，不解释为查询表达式。
 `--branch` 使用完整分支名，不含 `br:` 前缀或仓库后缀；切换使用 [原生 cm switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/switch)，不创建提交。切换失败或超时后应先刷新核对状态，不自动回滚或撤销可能已完成的部分操作。
 
@@ -429,7 +433,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 自定义 diff / merge | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：分支图及删除/重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建、
+尚未提供：提交/合并关系图、分支删除/重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

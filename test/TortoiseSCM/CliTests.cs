@@ -187,6 +187,7 @@ internal static class CliTests
             RevisionTests(controlled);
             HistoryPageTests();
             BranchTests(controlled);
+            BranchTreeTests();
             CreateBranchTests();
             UnknownMergeSessionTests();
             MergeWorkflowTests();
@@ -291,6 +292,66 @@ internal static class CliTests
             if (wasPartial) File.WriteAllText(partial, "partial"); else File.Delete(partial);
             if (wasClean) File.WriteAllText(clean, "clean"); else File.Delete(clean);
         }
+    }
+
+    private static void BranchTreeTests()
+    {
+        string mode = Path.Combine(temporary, ".plastic", "fake-branch-tree.txt");
+        string calls = Path.Combine(temporary, ".plastic", "cli-cm-calls.log");
+        string[] action = { "--command", "branch-tree", "--path", temporary, "--cm", fakeCm };
+        foreach (string[] unrelated in new[] { new[] { "--yes" }, new[] { "--branch", "/main" }, new[] { "--changeset", "1" }, new[] { "--from", "1" },
+            new[] { "--item", "/file.txt" }, new[] { "--comment", "comment" }, new[] { "--recursive" }, new[] { "--external" }, new[] { "--before", "1" },
+            new[] { "--limit", "1" }, new[] { "--overwrite" }, new[] { "--destination", temporary }, new[] { "--path", Path.Combine(temporary, "file.txt") } })
+            Run(2, action.Concat(unrelated).ToArray());
+        Run(2, "--command", "branch-tree");
+        Run(2, action.Concat(new[] { "--filter" }).ToArray());
+        Run(2, action.Concat(new[] { "--filter", "a", "--filter", "b" }).ToArray());
+        foreach (string command in new[] { "branches", "status", "history-page" })
+            Run(2, "--command", command, "--path", temporary, "--filter", "unused");
+        try
+        {
+            File.WriteAllText(mode, "tree");
+            int callStart = File.ReadAllLines(calls).Length;
+            var tree = Data(Run(0, action));
+            var nodes = ((IList)tree["nodes"]).Cast<Dictionary<string, object>>().ToArray();
+            Check(tree["filter"] == null && nodes.Length == 4, "Unfiltered branch tree lists each native branch exactly once");
+            var main = nodes.Single(node => node["name"].ToString() == "/main");
+            var child = nodes.Single(node => node["name"].ToString() == "/main/feature 中文");
+            var leaf = nodes.Single(node => node["name"].ToString() == "/leaf");
+            var orphan = nodes.Single(node => node["name"].ToString() == "/orphan");
+            Check(Array.IndexOf(nodes, main) < Array.IndexOf(nodes, child) && Array.IndexOf(nodes, child) < Array.IndexOf(nodes, leaf) &&
+                Convert.ToInt32(leaf["depth"]) == 2 && leaf["parent"].ToString() == "/main/feature 中文", "Hierarchy uses native PARENT, not name segments, and emits parents first");
+            Check(Convert.ToBoolean(main["isCurrent"]) && Convert.ToInt32(main["childCount"]) == 1 && Convert.ToInt32(child["childCount"]) == 1,
+                "Branch tree preserves current state and direct child counts");
+            Check(Convert.ToBoolean(orphan["parentMissing"]) && Convert.ToInt32(orphan["depth"]) == 0, "Missing native parent is flagged without inventing a parent node");
+            var filtered = Data(Run(0, action.Concat(new[] { "--filter", "leaf 中文" }).ToArray()));
+            var matches = ((IList)filtered["nodes"]).Cast<Dictionary<string, object>>().ToArray();
+            Check(filtered["filter"].ToString() == "leaf 中文" && matches.Length == 3 &&
+                !Convert.ToBoolean(matches[0]["isMatch"]) && !Convert.ToBoolean(matches[1]["isMatch"]) && Convert.ToBoolean(matches[2]["isMatch"]),
+                "Unicode comment filtering keeps unmatched ancestors as context");
+            Check(((IList)Data(Run(0, action.Concat(new[] { "--filter", "LEAF" }).ToArray()))["nodes"]).Count == 3, "Branch filtering ignores letter case");
+            Check(((IList)Data(Run(0, action.Concat(new[] { "--filter", "does-not-exist" }).ToArray()))["nodes"]).Count == 0, "Unmatched branch filter returns an empty successful result");
+            var text = Invoke(new[] { "--cli" }.Concat(action).Concat(new[] { "--filter", "leaf 中文" }));
+            Check(text.Item1 == 0 && text.Item2.Contains("* /main") && text.Item2.Contains("[ancestor context]") && text.Item2.Contains("      /leaf") &&
+                text.Item2.Contains("[matched]") && text.Item2.Contains("not commit or merge ancestry"), "Text hierarchy shows indentation, current marker, match context and relationship semantics");
+            var missingText = Invoke(new[] { "--cli" }.Concat(action).Concat(new[] { "--filter", "orphan" }));
+            Check(missingText.Item1 == 0 && missingText.Item2.Contains("[missing parent: /missing]"), "Text tree reports missing parent explicitly");
+            var optionValue = Invoke(new[] { "--cli" }.Concat(action).Concat(new[] { "--filter", "--json" }));
+            Check(optionValue.Item1 == 0 && optionValue.Item2.StartsWith("Branch parent hierarchy") && optionValue.Item2.Contains("No matching branches.") &&
+                optionValue.Item3.Length == 0, "An option-looking filter value does not enable JSON output");
+            Check(!File.ReadAllLines(calls).Skip(callStart).Select(line => Json.Deserialize<string[]>(line)[0]).Any(command =>
+                command == "branch" || command == "switch" || command == "update" || command == "checkin"), "Branch hierarchy and filtering never invoke a native write");
+            File.WriteAllText(mode, "cycle");
+            Run(1, action);
+            File.WriteAllText(mode, "deep");
+            var deep = Run(0, action);
+            var deepNodes = ((IList)Data(deep)["nodes"]).Cast<Dictionary<string, object>>().ToArray();
+            Check(deepNodes.Length == 101 && deepNodes.Max(node => Convert.ToInt32(node["depth"])) == 100,
+                "Deep branch hierarchy keeps exact JSON depths");
+            Check(deep["output"].ToString().Length < 15000 && deep["output"].ToString().Contains("[depth 100]"),
+                "Deep tree text caps indentation and reports the exact depth instead of quadratic whitespace");
+        }
+        finally { File.Delete(mode); }
     }
 
     private static void HistoryPageTests()
@@ -695,6 +756,25 @@ internal static class CliTests
                 new XElement("COMMENT", name == "/main" ? "Main" : "Feature 中文"), new XElement("REPNAME", "test"),
                 new XElement("REPSERVER", "server:8087"), new XElement("CHANGESET", name == "/main" ? "1" : "42"))));
             string created = Path.Combine(metadata, "fake-created-branch.json");
+            string treeMode = Path.Combine(metadata, "fake-branch-tree.txt");
+            if (File.Exists(treeMode))
+            {
+                if (File.ReadAllText(treeMode) == "cycle") branchXml.Elements("BRANCH").First().Element("PARENT").Value = "/main/feature 中文";
+                else if (File.ReadAllText(treeMode) == "deep")
+                {
+                    branchXml.RemoveNodes();
+                    for (int depth = 0; depth <= 100; ++depth)
+                        branchXml.Add(new XElement("BRANCH", new XElement("NAME", depth == 0 ? "/main" : "/node-" + depth),
+                            new XElement("PARENT", depth == 0 ? "" : depth == 1 ? "/main" : "/node-" + (depth - 1)), new XElement("OWNER", "fixture-owner"),
+                            new XElement("DATE", "2026-09-27T00:00:00Z"), new XElement("COMMENT", "Deep branch"), new XElement("REPNAME", "test"),
+                            new XElement("REPSERVER", "server:8087"), new XElement("CHANGESET", "42")));
+                }
+                else
+                    foreach (var addition in new[] { new { Name = "/leaf", Parent = "/main/feature 中文", Comment = "leaf 中文" }, new { Name = "/orphan", Parent = "/missing", Comment = "unavailable parent" } })
+                        branchXml.Add(new XElement("BRANCH", new XElement("NAME", addition.Name), new XElement("PARENT", addition.Parent), new XElement("OWNER", "fixture-owner"),
+                            new XElement("DATE", "2026-09-27T00:00:00Z"), new XElement("COMMENT", addition.Comment), new XElement("REPNAME", "test"),
+                            new XElement("REPSERVER", "server:8087"), new XElement("CHANGESET", "42")));
+            }
             if (File.Exists(created))
             {
                 var record = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(created));

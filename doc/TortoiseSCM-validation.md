@@ -1,5 +1,13 @@
 # TortoiseSCM 验证记录
 
+## 原生分支层级浏览（2026-09-27）
+
+- 分支窗口新增列表/层级切换及定位当前分支，沿用原生 TreeView 与既有头提交、历史、创建、切换和合并操作。层级明确只表示服务器 `Parent` 的父子关系，不推断提交继承或合并边。视图切换按完整分支名保留真实对象，筛选清掉旧选择与详情，右键操作使用当前视图的选中分支。
+- `branch-tree --path ... [--filter ...]` 提供同样的只读层级。模型按显式父关系排序，筛选保留祖先并标记 `isMatch=false`，缺失父节点不虚构，直接子节点计数保持过滤前语义。循环、重复、混合仓库及坏数据拒绝；GUI 清空列表/树/详情并禁用旧操作。CLI 文本最多缩进 32 层，深层另标实际深度，JSON 保留精确 depth。
+- 层级模型 57 项检查通过，包含 20,000 层深链、12,000 个直接子节点、Unicode 筛选、精确父身份和输入不变；CLI 独立完整回归 1809 项通过（`qa/branch-cli/branch-tree-tests.log`），含 100 层文本输出上限。GUI 本地 122 项通过（`qa/branch-hierarchy-ui.log`），覆盖 1500 层、视图切换、祖先操作身份、当前定位、Partial 写操作边界及异常数据处理。
+- 复用隔离 fixture `qa/integration-20260927-110239-853c930c/`，没有创建或修改服务器分支。19 项公开 EXE 真实只读检查通过（`qa/branch-hierarchy-live.log`、fixture 下 `branch-hierarchy-results.json`）：逐项对照 native 分支 XML 的父节点、深度顺序、子节点数和头提交；中文子分支筛选精确保留祖先；Standard/Partial 的工作树、selector、wktree 和 fullupdate 元数据保持一致。
+- 最终完整 `build-tortoisescm.ps1 -Test -Workspace <producer>` 通过（`qa/branch-hierarchy-full-build.log`），包含 1809 项 CLI、287 项 GUI、57 项层级模型及既有后端/Shell 检查。GUI 同时验证真实当前分支定位、选中对象与头提交明细；普通/最小截图在 `qa/Release/branch-hierarchy*.png`。包/隔离安装/卸载 44 项通过（`qa/branch-hierarchy-package.log`）。界面验证使用程序内原生窗口渲染，不声称真人 Explorer 点击或多 DPI 验收。
+
 ## 子分支创建与精确分支历史（2026-09-27）
 
 - 分支列表右键新增创建子分支及本分支历史。创建对话框参考原生分支创建布局，明确父分支、固定起点、短名称和必填说明，完成后选中新分支；不自动切换、签入或加载文件。CLI 新增 `create-branch --branch ... --changeset N --comment ... --yes`，支持 Standard/Partial。

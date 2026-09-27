@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'BranchTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -85,6 +85,7 @@ if ($Test -or $Integration) {
         if (-not $branchCreationManifest -or -not (Test-Path -LiteralPath $branchCreationManifest)) { throw 'Branch creation setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-branch-create.txt'), $branchCreationManifest)
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchCreationIntegrationTests.ps1') -Manifest $branchCreationManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchHierarchyIntegrationTests.ps1') -Manifest $branchCreationManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         $mergeIntegrationOutput = Join-Path $out 'MergeIntegrationTests.exe'
         & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$mergeIntegrationOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\MergeIntegrationTests.cs')
         if ($LASTEXITCODE -ne 0) { throw 'Merge integration test compilation failed.' }
