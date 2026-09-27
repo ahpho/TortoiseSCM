@@ -31,10 +31,29 @@ namespace TortoiseSCM
         private PlasticMergePlan plan;
         private PlasticMergeSession session;
         private bool busy;
+        private readonly long? fixedSource;
+        private readonly string fixedRepository;
+        private readonly string fixedSelector;
 
         public MergeForm(PlasticClient client, string root)
+            : this(client, root, null, null) { }
+
+        public MergeForm(PlasticClient client, string root, long? sourceChangeset, string sourceBranch)
+            : this(client, root, sourceChangeset, sourceBranch, null, null) { }
+
+        internal MergeForm(PlasticClient client, string root, long? sourceChangeset, string sourceBranch,
+            string expectedRepository, string expectedSelector)
         {
             this.client = client; this.root = root;
+            fixedSource = sourceChangeset;
+            if (fixedSource.HasValue)
+            {
+                var workspace = client.DiscoverWorkspace(root);
+                if (workspace == null) throw new InvalidOperationException("工作区不存在。");
+                fixedRepository = expectedRepository ?? workspace.Repository;
+                fixedSelector = expectedSelector ?? workspace.Selector;
+                ValidateFixedContext();
+            }
             DialogStyle.Apply(this); Text = "合并 - TortoiseSCM";
             Size = new Size(940, 650); MinimumSize = new Size(820, 520);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 5 };
@@ -48,6 +67,7 @@ namespace TortoiseSCM
             var top = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             top.Controls.Add(new Label { Text = "合并来源 cs:", AutoSize = true, Padding = new Padding(0, 4, 0, 0) });
             source.Maximum = Int64.MaxValue; source.Width = 140; source.AccessibleName = "合并来源变更集";
+            if (sourceChangeset.HasValue) source.Value = sourceChangeset.Value;
             source.ValueChanged += delegate { if (session == null) { plan = null; items.Items.Clear(); UpdateButtons(); } };
             top.Controls.Add(source); top.Controls.Add(preview); top.Controls.Add(start); top.Controls.Add(resume); cancelPlan.Width = 110; top.Controls.Add(cancelPlan);
             layout.Controls.Add(top, 0, 1);
@@ -59,6 +79,8 @@ namespace TortoiseSCM
             split.Panel1.Controls.Add(items);
             details.Dock = DockStyle.Fill; details.Multiline = true; details.ReadOnly = true; details.ScrollBars = ScrollBars.Vertical;
             details.Text = "将指定变更集合并到当前分支。开始前工作区必须干净。\r\n目录结构冲突先逐项选择来源、目标或重命名，再应用结构方案。\r\n文件内容冲突需使用三方工具编辑，然后单独确认解决；完成后回到待定更改界面提交。";
+            if (sourceChangeset.HasValue)
+                details.Text = "来源分支：" + sourceBranch + "；固定来源 cs:" + sourceChangeset.Value + "。请先点击预检。\r\n" + details.Text;
             split.Panel2.Controls.Add(details); layout.Controls.Add(split, 0, 2);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; layout.Controls.Add(status, 0, 3);
             var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
@@ -90,7 +112,8 @@ namespace TortoiseSCM
         private void UpdateButtons()
         {
             var selected = SelectedConflict();
-            source.Enabled = preview.Enabled = !busy && session == null;
+            source.Enabled = !busy && session == null && !fixedSource.HasValue;
+            preview.Enabled = !busy && session == null;
             resume.Enabled = !busy;
             start.Enabled = !busy && session == null && plan != null && !plan.AlreadyConnected;
             bool planning = session != null && session.AwaitingDirectoryResolution;
@@ -122,6 +145,8 @@ namespace TortoiseSCM
         {
             await WorkAsync(async delegate {
                 session = await client.GetMergeSessionAsync(root, lifetime.Token);
+                if (session != null && fixedSource.HasValue && session.Plan.SourceChangeset != fixedSource.Value)
+                { session = null; plan = null; throw new InvalidOperationException("当前有其他来源的合并会话，请关闭窗口并从合并菜单继续处理。"); }
                 plan = session == null ? null : session.Plan;
                 if (plan != null) source.Value = plan.SourceChangeset;
                 RenderPlan();
@@ -207,9 +232,17 @@ namespace TortoiseSCM
         {
             if (busy) return;
             busy = true; UpdateButtons(); status.Text = "正在处理…";
-            try { await work(); }
+            try { ValidateFixedContext(); await work(); ValidateFixedContext(); }
             catch (Exception ex) { status.Text = "操作未完成。"; details.Text = ex.Message; }
             finally { busy = false; UpdateButtons(); }
+        }
+
+        private void ValidateFixedContext()
+        {
+            if (!fixedSource.HasValue) return;
+            var workspace = client.DiscoverWorkspace(root);
+            if (workspace == null || workspace.Repository != fixedRepository || workspace.Selector != fixedSelector)
+                throw new InvalidOperationException("合并目标工作区或分支已改变，请关闭窗口并重新选择来源分支。");
         }
     }
 }

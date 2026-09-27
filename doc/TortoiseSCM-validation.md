@@ -1,5 +1,15 @@
 # TortoiseSCM 验证记录
 
+## 分支浏览、安全切换与合并入口（2026-09-27）
+
+- 新增原生双窗格分支窗口及 `branches`、`branch-head`、`switch-branch` CLI。支持筛选、刷新/取消、当前分支和头提交文件详情；合并入口先解析固定 changeset，再进入既有预检/确认/解决/提交流程。
+- Standard 切换要求显式工作区根目录，持有结构与合并锁，前后核对 selector、仓库及干净状态；待定更改、私有/忽略项、嵌套工作区及未完成会话均拒绝。Partial 只浏览。原 TestSCM 的旧式 `br/co` selector 可正确识别 `/main`，未改动原工作区。
+- 独立 fixture `qa/integration-20260927-104438-fd4c191d/`，基线 cs:689，子分支 `feature 中文 & space` 的 cs:690。最终 EXE 的 31 项服务器检查通过（`qa/branch-final-live.log`、fixture 下 `branch-results.json`）：中文分支往返及内容、Partial/非根目录/缺少确认拒绝、本地修改/私有/忽略项保护、只读固定来源合并预检、原生未完成合并保护。测试结束干净且恢复原隔离 selector，没有发布合并。
+- 初次 live 检查与 GUI 回归共用 producer，干净切换被临时状态拒绝；随后单独运行完整 live 检查通过。后续 GUI 与写测试串行执行，避免测试互相干扰。
+- 完整 `build-tortoisescm.ps1 -Test -Workspace <producer>` 通过（`qa/branch-full-build.log`），包含 1508 项 CLI、49 项新分支后端及既有后端/Shell/GUI。交叉审查随后补齐解析来源期间目标 selector 改变的保护：从查询前保留上下文直到构造合并窗口及实际操作，拒绝同仓库目标分支悄然改变；3 项本地竞态检查通过。最终 EXE 已重新构建（`qa/branch-final-build.log`），真实 live 检查使用此最终 EXE。
+- 修复后的完整 GUI 回归通过（`qa/branches-final-ui.log`），包括新增目标竞态检查；普通及最小分支窗口在 `qa/branches-final-ui/branches*.png`。最终 EXE 的包/隔离安装/卸载 44 项通过（`qa/branch-final-package.log`）。
+- 本阶段尚未提供分支图、创建/删除/重命名分支、Partial 分支切换。界面验证使用程序内 WinForms 渲染，不声称真人 Explorer 点击或多 DPI 验收。
+
 ## 完整变更集差异浏览（2026-09-27）
 
 - 新增只读 `diff-changesets --from N --to N`，比较完整仓库两个快照；GUI 从历史列表的比较标记打开独立差异窗口，提供筛选、刷新、取消和文件操作。原生 A/C/D/M 记录保留，目录、链接和 Xlink 仅显示结构项；不累加中间提交，也不展开未修改的目录子项。

@@ -17,13 +17,16 @@ namespace TortoiseSCM
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
-            "          locks, unlock, cache-refresh, history-page\r\n" +
+            "          locks, unlock, cache-refresh, history-page, branches, branch-head, switch-branch\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
             "Paged history: history-page --path <scope> [--before <exclusive-changeset>] [--limit <1..100>]\r\n" +
             "  Default scan limit is 50; path pages may be empty with older history still available.\r\n" +
             "rollback restores selected content as pending changes; switch replaces the whole workspace revision.\r\n" +
+            "Branches: branches --path <workspace>; branch-head --path <workspace> --branch </main/name>\r\n" +
+            "  switch-branch --path <root> --branch </main/name> --yes (clean Standard workspaces only)\r\n" +
+            "  Resolve branch-head first, then pass its fixed changeset to merge-preview or merge-start.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
             "Compare file: diff-history --path <workspace> --item </repository/file> --from N --to N [--from-item </old/file>] [--external]\r\n" +
             "Compare trees: diff-changesets --path <workspace> --from N --to N\r\n" +
@@ -120,6 +123,33 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "branches")
+            {
+                var branches = client.GetBranchesAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, branches = branches.Select(branch => new {
+                    name = branch.Name, parent = branch.Parent, owner = branch.Owner, creationDate = branch.CreationDate,
+                    comment = branch.Comment, repository = branch.Repository, headChangeset = branch.HeadChangeset, isCurrent = branch.IsCurrent }).ToArray() };
+                response.output = String.Join(Environment.NewLine, branches.Select(branch => (branch.IsCurrent ? "* " : "  ") +
+                    branch.Name + "\tcs:" + branch.HeadChangeset.ToString(CultureInfo.InvariantCulture) + "\t" + branch.Owner + "\t" + branch.Comment));
+                return;
+            }
+            if (options.Command == "branch-head")
+            {
+                long changeset = client.ResolveBranchHeadAsync(options.Paths[0], options.Branch, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, branch = options.Branch, changeset = changeset };
+                response.output = "cs:" + changeset.ToString(CultureInfo.InvariantCulture);
+                return;
+            }
+            if (options.Command == "switch-branch")
+            {
+                SetResult(response, client.SwitchBranchAsync(options.Paths[0], options.Branch, CancellationToken.None).GetAwaiter().GetResult());
+                if (response.exitCode != 0) return;
+                var selectedWorkspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = new { rootPath = selectedWorkspace.RootPath, name = selectedWorkspace.Name,
+                    repository = selectedWorkspace.Repository, selector = selectedWorkspace.Selector, isPartial = selectedWorkspace.IsPartial },
+                    branch = options.Branch, operation = "switch-branch" };
+                return;
+            }
             if (options.Command == "cache-refresh")
             {
                 int count = OverlayCacheHost.RefreshAsync(config, options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
@@ -537,7 +567,7 @@ namespace TortoiseSCM
     internal sealed class CliOptions
     {
         internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile;
-        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result;
+        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result, Branch;
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout, Limit, Conflict;
         internal string Resolution, Rename;
@@ -558,7 +588,7 @@ namespace TortoiseSCM
                     case "--changeset": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
                     case "--item": case "--from-item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
-                    case "--conflict": case "--resolution": case "--rename": ++i; break;
+                    case "--conflict": case "--resolution": case "--rename": case "--branch": ++i; break;
                 }
             }
             return false;
@@ -601,6 +631,7 @@ namespace TortoiseSCM
                     case "--output": options.Output = AbsolutePath(Value(args, ref i)); break;
                     case "--item": options.Item = Value(args, ref i); break;
                     case "--from-item": options.FromItem = Value(args, ref i); break;
+                    case "--branch": options.Branch = Value(args, ref i); break;
                     case "--destination": options.Destination = AbsolutePath(Value(args, ref i)); break;
                     case "--result": options.Result = AbsolutePath(Value(args, ref i)); break;
                     case "--conflict":
@@ -638,15 +669,21 @@ namespace TortoiseSCM
             }
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
-                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page",
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-head", "switch-branch",
                 "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
+            bool branchCommand = new[] { "branches", "branch-head", "switch-branch" }.Contains(options.Command);
+            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch";
+            if (branchCommand && options.Paths.Count != 1) throw new ArgumentException("Branch commands require exactly one workspace path.");
+            if (branchTarget != (options.Branch != null)) throw new ArgumentException("--branch is required only for branch-head and switch-branch.");
+            if (branchTarget && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
+            if ((options.Command == "branches" || options.Command == "branch-head") && yes) throw new ArgumentException("Read-only branch commands do not accept --yes.");
             bool partialWorkflow = options.Command.StartsWith("partial-conflict", StringComparison.Ordinal);
             bool structureWorkflow = options.Command.StartsWith("partial-structure-", StringComparison.Ordinal);
             bool structureResolution = options.Command == "partial-structure-resolve";

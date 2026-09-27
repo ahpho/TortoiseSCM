@@ -88,7 +88,7 @@ namespace TortoiseSCM
             // through MainForm so they retain the same confirmation and
             // workspace safety checks as the in-app menus.
             string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "gluon", "settings",
-                "move", "remove", "ignore", "locks", "unlock", "merge", "export", "rollback", "recover" };
+                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "export", "rollback", "recover" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             return result;
         }

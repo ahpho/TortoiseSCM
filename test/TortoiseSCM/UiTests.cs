@@ -29,6 +29,12 @@ namespace TortoiseSCM
                 uiContext = new WindowsFormsSynchronizationContext();
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 3 && args[0] == "--branches-live")
+                {
+                    Directory.CreateDirectory(args[1]);
+                    CheckBranches(args[1], args[2]);
+                    return 0;
+                }
                 if (args.Length == 5 && args[0] == "--changeset-live")
                 {
                     Directory.CreateDirectory(args[1]);
@@ -68,6 +74,7 @@ namespace TortoiseSCM
                 CheckConflictDialogs(artifacts);
                 if (args.Length > 1)
                 {
+                    CheckBranches(artifacts, args[1]);
                     using (var merge = new MergeForm(new PlasticClient(PlasticClientConfig.Load()), args[1]))
                     {
                         Prepare(merge);
@@ -765,6 +772,109 @@ namespace TortoiseSCM
             Require(Field(form, "comparison") == null && ((Label)Field(form, "status")).Text.Contains("仓库已改变"),
                 "Tree comparison rejects a repository context change before reading another repository");
             form.Close();
+        }
+
+        private static void CheckBranches(string artifacts, string workspace)
+        {
+            CheckBranchMergeDestinationRace(artifacts);
+            Require(LaunchRequest.Parse(new[] { "--command", "branches", "--path", workspace }).Command == "branches", "Branch GUI launch is accepted");
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            using (var form = new BranchForm(client, workspace))
+            {
+                Prepare(form);
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live branch list loads");
+                var list = (ListView)Field(form, "branches");
+                Require(list.Items.Count > 0 && !((Button)Field(form, "head")).Enabled, "Branch list loads without implicitly selecting an action");
+                var current = list.Items.Cast<ListViewItem>().FirstOrDefault(row => ((PlasticBranch)row.Tag).IsCurrent);
+                if (current != null)
+                {
+                    current.Selected = true; Application.DoEvents();
+                    Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled && ((Button)Field(form, "head")).Enabled,
+                        "Current branch permits head details but not redundant merge or switch");
+                }
+                var selected = list.Items.Cast<ListViewItem>().FirstOrDefault(row => !((PlasticBranch)row.Tag).IsCurrent) ?? list.Items[0];
+                foreach (ListViewItem row in list.SelectedItems) row.Selected = false;
+                selected.Selected = true; Application.DoEvents();
+                var branch = (PlasticBranch)selected.Tag;
+                ((Button)Field(form, "head")).PerformClick();
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live branch head detail loads");
+                Require(((TextBox)Field(form, "description")).Text.Contains(branch.Name) && ((Label)Field(form, "status")).Text.StartsWith("头提交 cs:"), "Branch head displays pinned changeset details");
+                Save(form, Path.Combine(artifacts, "branches.png"));
+                form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string name in new[] { "head", "merge", "switchBranch", "refresh", "cancel", "close" })
+                {
+                    var button = (Button)Field(form, name);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(button.RectangleToScreen(button.ClientRectangle)) &&
+                        button.Parent.RectangleToScreen(button.Parent.ClientRectangle).Contains(button.RectangleToScreen(button.ClientRectangle)),
+                        "Branch " + name + " is visible at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "branches-minimum.png"));
+                typeof(BranchForm).GetField("partial", flags).SetValue(form, true);
+                typeof(BranchForm).GetMethod("UpdateButtons", flags).Invoke(form, null);
+                Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled && ((Button)Field(form, "head")).Enabled,
+                    "Partial branch browser permits detail reads but disables writes");
+                typeof(BranchForm).GetField("writing", flags).SetValue(form, true);
+                form.Close(); Require(!form.IsDisposed && !((CancellationTokenSource)Field(form, "lifetime")).IsCancellationRequested,
+                    "Branch switch cannot be cancelled by closing the window");
+                typeof(BranchForm).GetField("writing", flags).SetValue(form, false);
+                ((TextBox)Field(form, "filter")).Text = "no-match-" + Guid.NewGuid();
+                Require(list.Items.Count == 0 && !((Button)Field(form, "head")).Enabled && ((ListView)Field(form, "files")).Items.Count == 0,
+                    "Filtering removes stale selection and head details");
+                ((TextBox)Field(form, "filter")).Clear();
+                ((Button)Field(form, "refresh")).PerformClick();
+                Require(list.Items.Count == 0 && !((Button)Field(form, "head")).Enabled, "Refreshing removes stale branch actions immediately");
+                ((Button)Field(form, "cancel")).PerformClick();
+                WaitUntil(() => !(bool)Field(form, "busy"), "Branch refresh cancellation completes");
+                Require(list.Items.Count == 0 && ((Button)Field(form, "refresh")).Enabled, "Cancelled branch list remains empty and retryable");
+                typeof(BranchForm).GetField("repository", flags).SetValue(form, "changed-repository");
+                ((Button)Field(form, "refresh")).PerformClick();
+                WaitUntil(() => !(bool)Field(form, "busy"), "Changed branch repository fails promptly");
+                Require(((Label)Field(form, "status")).Text.Contains("仓库已改变") && list.Items.Count == 0, "Branch context change cannot read another repository");
+                form.Close();
+            }
+            using (var merge = new MergeForm(client, workspace, 17, "/test-source"))
+            {
+                Prepare(merge); WaitUntil(() => !(bool)Field(merge, "busy"), "Fixed branch merge session lookup completes");
+                Require(((NumericUpDown)Field(merge, "source")).Value == 17 && !((NumericUpDown)Field(merge, "source")).Enabled &&
+                    Field(merge, "plan") == null && !((Button)Field(merge, "start")).Enabled, "Branch merge fixes source and requires explicit preview before start");
+                typeof(MergeForm).GetField("fixedSelector", flags).SetValue(merge, "changed-selector");
+                ((Button)Field(merge, "preview")).PerformClick();
+                WaitUntil(() => !(bool)Field(merge, "busy"), "Changed merge destination fails promptly");
+                Require(((TextBox)Field(merge, "details")).Text.Contains("分支已改变") && Field(merge, "plan") == null,
+                    "Fixed branch merge rejects changed destination before querying or writing");
+                merge.Close();
+            }
+        }
+
+        private static void CheckBranchMergeDestinationRace(string artifacts)
+        {
+            string root = Path.GetFullPath(Path.Combine(artifacts, "branch-race-" + Guid.NewGuid().ToString("N")));
+            string metadata = Path.Combine(root, ".plastic"); Directory.CreateDirectory(metadata);
+            File.WriteAllText(Path.Combine(metadata, "plastic.workspace"), "ui-race\nunused\nStandard\n");
+            string selectorFile = Path.Combine(metadata, "plastic.selector");
+            string selectorA = "repository \"ui-race@local\"\n  path \"/\"\n    branch \"/main/a\"\n";
+            string selectorB = selectorA.Replace("/main/a", "/main/b");
+            File.WriteAllText(selectorFile, selectorA);
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            var destination = client.DiscoverWorkspace(root);
+            using (var branches = new BranchForm(client, root))
+            {
+                Func<string, string, CancellationToken, System.Threading.Tasks.Task<long>> resolve = async (path, branch, token) => {
+                    await System.Threading.Tasks.Task.Yield();
+                    File.WriteAllText(selectorFile, selectorB);
+                    return 17;
+                };
+                var task = (System.Threading.Tasks.Task<MergeForm>)typeof(BranchForm).GetMethod("CreateMergeDialogAsync", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(branches, new object[] { destination, new PlasticBranch { Name = "/source" }, CancellationToken.None, resolve });
+                WaitUntil(() => task.IsCompleted, "Simulated external switch during branch-head resolution completes");
+                Require(task.IsFaulted && task.Exception.GetBaseException() is InvalidOperationException && task.Exception.GetBaseException().Message.Contains("分支已改变"),
+                    "Branch merge rejects an external destination switch during source resolution");
+            }
+            bool rejected = false;
+            try { using (var merge = new MergeForm(client, root, 17, "/source", destination.Repository, destination.Selector)) { } }
+            catch (InvalidOperationException ex) { rejected = ex.Message.Contains("分支已改变"); }
+            Require(rejected, "Merge constructor rejects a destination change after source resolution instead of recapturing it");
         }
 
         private static void Require(bool value, string label)

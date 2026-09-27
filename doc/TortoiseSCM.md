@@ -190,6 +190,25 @@ Partial 目录恢复仅支持目录结构一致的历史内容；涉及增删或
 比较使用 [原生 cm diff 的两个变更集参数](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/diff)，不是把期间每次提交明细相加：中间新增后删除的项不会出现。C 表示修订发生变化，最终文件字节仍可能相同，以打开文件后的内容比较为准。起点可晚于目标；同一变更集返回空列表。无法安全解析的路径或输出会报错，不返回不完整列表。
 导出先下载并验证，再替换目标，服务器错误不会截断旧文件。目录、元数据和符号链接不作为文件导出。
 
+### 分支浏览、切换与合并入口
+
+在主窗口“操作 → 分支…”打开分支列表，或运行 `TortoiseSCM.exe --command branches --path D:\workspace`。
+列表显示当前分支、最新变更集、作者、创建日期和说明，可筛选、刷新、取消加载；“头提交详情”读取选中分支最新一次提交的说明和修改文件，不表示分支的全部历史。
+选择其他分支后，“合并到当前…”解析其最新变更集并打开现有合并窗口，固定来源版本。打开窗口只读取状态，仍须预检、确认开始合并、解决冲突及单独提交。
+
+“切换工作区…”在确认后切换整个 Standard 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Partial 可浏览分支及头提交详情，本阶段不提供分支切换或跨分支合并，以保留加载规则。分支图、创建/删除/重命名分支尚未提供。
+
+```powershell
+& $exe --cli --command branches --path 'D:\workspace' --json | ConvertFrom-Json
+$head = & $exe --cli --command branch-head --path 'D:\workspace' --branch '/main/task' --json | ConvertFrom-Json
+& $exe --cli --command merge-preview --path 'D:\workspace' --changeset $head.data.changeset --json | ConvertFrom-Json
+# 分支切换需要显式工作区根目录和确认
+& $exe --cli --command switch-branch --path 'D:\workspace' --branch '/main/task' --yes --json | ConvertFrom-Json
+```
+
+分支列表的 `data.branches` 提供 `name/parent/owner/creationDate/comment/repository/headChangeset/isCurrent`。
+`--branch` 使用完整分支名，不含 `br:` 前缀或仓库后缀；切换使用 [原生 cm switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/switch)，不创建提交。切换失败或超时后应先刷新核对状态，不自动回滚或撤销可能已完成的部分操作。
+
 ### 删除、移动与忽略
 
 ```powershell
@@ -403,7 +422,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 自定义 diff / merge | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
-尚未提供：分支浏览、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建、
+尚未提供：分支图及创建/删除/重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。
 部分工作区使用 `cm partial` 的对应命令，完整与部分工作区的行为不能混同；实际测试结果见交付说明。

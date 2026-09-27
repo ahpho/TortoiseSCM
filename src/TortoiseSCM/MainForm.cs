@@ -148,6 +148,7 @@ namespace TortoiseSCM
             operations.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff); });
             operations.Items.Add("所选项历史", null, async delegate { await ExecuteAsync(PlasticCommand.History); });
             operations.Items.Add("当前范围历史 / 恢复", null, async delegate { await ShowScopeHistoryAsync(); });
+            operations.Items.Add("分支…", null, async delegate { await ShowBranchesAsync(); });
             operations.Items.Add("合并变更集 / 解决冲突…", null, async delegate {
                 if (busy || !loaded) return;
                 using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -318,6 +319,7 @@ namespace TortoiseSCM
                     using (var dialog = new LocksForm(client, workspace.RootPath)) dialog.ShowDialog(this);
                     await RefreshAsync();
                 }
+                else if (launch.Command == "branches") await ShowBranchesAsync();
                 else if (launch.Command == "merge")
                 {
                     using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -336,6 +338,18 @@ namespace TortoiseSCM
                     status.Text = "请核对选择范围后点击“" + CommandName(ParseCommand(launch.Command)) + "”执行。";
             }
             catch (Exception ex) { SetBusy(false, "操作未成功"); ShowError(ex); }
+        }
+
+        private async Task ShowBranchesAsync()
+        {
+            if (busy || !loaded) return;
+            try
+            {
+                using (var dialog = new BranchForm(client, workspace.RootPath)) dialog.ShowDialog(this);
+                workspace = await client.GetWorkspaceAsync(workspace.RootPath, CancellationToken.None);
+                await RefreshAsync();
+            }
+            catch (Exception ex) { ShowError(ex); }
         }
 
         private bool InScope(string path)

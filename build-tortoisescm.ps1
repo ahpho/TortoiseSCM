@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'BranchTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -77,6 +77,10 @@ if ($Test -or $Integration) {
         if (-not $comparisonManifest -or -not (Test-Path -LiteralPath $comparisonManifest)) { throw 'Changeset comparison setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-comparison.txt'), $comparisonManifest)
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\ChangesetComparisonIntegrationTests.ps1') -Manifest $comparisonManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        $branchManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $branchManifest -or -not (Test-Path -LiteralPath $branchManifest)) { throw 'Branch setup did not produce a manifest.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-branches.txt'), $branchManifest)
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchIntegrationTests.ps1') -Manifest $branchManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         $mergeIntegrationOutput = Join-Path $out 'MergeIntegrationTests.exe'
         & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$mergeIntegrationOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\MergeIntegrationTests.cs')
         if ($LASTEXITCODE -ne 0) { throw 'Merge integration test compilation failed.' }
