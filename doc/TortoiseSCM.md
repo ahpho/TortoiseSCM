@@ -459,3 +459,14 @@ Explorer “TortoiseSCM → 暂存集…”及主窗口“操作 → 暂存集�
 参考：[Unity Gluon 签入说明](https://docs.unity.com/unity-version-control/gluon/check-in-changes)、
 [Unity Gluon 添加新项](https://docs.unity.com/en-us/unity-version-control/gluon/upload-new-items)、
 [Plastic CLI 指南](https://docs-plasticscm.azurewebsites.net/cli/plastic-scm-version-control-cli-guide)。
+
+### Annotate / Blame
+
+The Explorer `TortoiseSCM -> Annotate / Blame...` command and the GUI operations menu accept one existing controlled file. The read-only view shows line number, owner, changeset, date, branch and content; double-click or the context menu opens that file's history. Directories, missing files and Plastic binary files are rejected.
+
+```powershell
+& $exe --cli --command blame --path 'D:\workspace\src\a.cs' --json | ConvertFrom-Json
+& $exe --cli --command blame --path 'D:\workspace\src\a.cs' --ignore eol --json | ConvertFrom-Json
+```
+
+`data.lines` contains `line/owner/changeset/date/branch/content` plus revision and repository metadata. The command never changes the workspace; comments that cannot be represented unambiguously by Plastic's native format are rejected rather than assigned to the wrong line.
