@@ -52,6 +52,13 @@
 
 日期：2026-09-25。上游基线：`acc10fc20`。运行环境：Windows x64，Plastic `11.0.16.10330`。
 
+## 暂存集保存与浏览（2026-09-27）
+
+- 后端 37 项独立检查通过：列表 XML 的 `ObjectId/ShelveId` 身份、仓库限定详情、Standard/Partial 原生命令、评论/路径校验、并发上下文变化、结构项拒绝、合并会话闸门和取消/失败后的不确定结果提示。
+- 新鲜隔离 TestSCM 分支工作区的 Standard/Partial CLI 实测共 56 项通过（`bin/TortoiseSCM/qa/shelves-live-success.log`）：各保存两个明确文件，排除目录外文件、私有文件和无关依赖；本地文件哈希、selector 和待定内容保留。对两个干净 consumer 使用官方 `cm shelveset apply` 后，两个选中文件哈希逐项一致，未选文件保持原状；consumer 最终清理干净。
+- 安装版 `0.13.0-preview` CLI 对同一隔离仓库的只读列表返回 Standard/Partial shelveset 及真实 `sh:` 编号；安装后重新生成的 ShellTests 通过分支和暂存集 canonical verbs。GUI mock 与最小尺寸检查通过，真实 GUI 读回两个文件的暂存集详情也通过（`bin/TortoiseSCM/qa/shelves-gui-live/`）。
+- Partial 原生 `--applychanged` 可能把 `CH` 状态文字变成 `CO`，因此产品只承诺本地内容保留；本阶段不提供应用、删除或 GUI 恢复，恢复由官方客户端完成。原始 `TestSCM` 仍为 `/main` 且 `cm status --short --machinereadable` 为空。
+
 本轮新增：文件/目录历史恢复、工作区快照切换、递归目录历史与提交明细、提交列表右键菜单、外部 diff/merge 配置。
 功能与命令对应见 [使用说明](TortoiseSCM.md)。
 
