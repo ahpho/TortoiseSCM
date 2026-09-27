@@ -41,6 +41,12 @@ namespace TortoiseSCM
                     CheckLiveChangesetComparison(args[1], args[2], Int64.Parse(args[3]), Int64.Parse(args[4]));
                     return 0;
                 }
+                if (args.Length == 4 && args[0] == "--shelves-live")
+                {
+                    Directory.CreateDirectory(args[1]);
+                    CheckLiveShelves(args[1], args[2], Int64.Parse(args[3]));
+                    return 0;
+                }
                 string artifacts = args[0];
                 Directory.CreateDirectory(artifacts);
                 string pathfile = Path.Combine(Path.GetTempPath(), "tscm-ui-" + Guid.NewGuid() + ".paths");
@@ -74,6 +80,7 @@ namespace TortoiseSCM
                 CheckConflictDialogs(artifacts);
                 CheckBranchCreationDialogs(artifacts);
                 CheckBranchTree(artifacts);
+                CheckShelvesDialogs(artifacts);
                 if (args.Length > 1)
                 {
                     CheckBranches(artifacts, args[1]);
@@ -1109,6 +1116,167 @@ namespace TortoiseSCM
                 Require(tree.Nodes.Count == 0 && list.Items.Count == 0 && !((Button)Field(form, "head")).Enabled && !((Button)Field(form, "locateCurrent")).Enabled,
                     "Refresh with cancelled lifetime clears both views and stale hierarchy actions");
                 form.Close();
+            }
+        }
+
+        private static void CheckShelvesDialogs(string artifacts)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            string root = Path.GetFullPath(Path.Combine(artifacts, "shelves-fixture-" + Guid.NewGuid().ToString("N")));
+            string metadata = Path.Combine(root, ".plastic"); Directory.CreateDirectory(metadata);
+            File.WriteAllText(Path.Combine(metadata, "plastic.workspace"), "ui-shelves\nunused\nPartial\n");
+            string selectorFile = Path.Combine(metadata, "plastic.selector"), selector = "repository \"ui-shelves@local\"\n  path \"/\"\n    branch \"/main\"\n";
+            File.WriteAllText(selectorFile, selector);
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            string selectedPath = Path.Combine(root, "目录 中文", "file & name.txt");
+            Require(LaunchRequest.Parse(new[] { "--command", "shelves", "--path", root }).Command == "shelves", "Explorer shelves launch command is accepted");
+            using (var form = new ShelveCreateForm(client, root, "ui-shelves@local", selector, new[] { selectedPath }, ""))
+            {
+                Prepare(form); Require(!((Button)Field(form, "create")).Enabled, "Shelve save requires a nonempty comment");
+                ((TextBox)Field(form, "comment")).Text = "中文暂存\r\n第二行";
+                Require(((Button)Field(form, "create")).Enabled && ((ListView)Field(form, "files")).Items[0].Text == selectedPath,
+                    "Shelve save previews the exact selected Unicode path and multiline comment");
+                Save(form, Path.Combine(artifacts, "shelve-create.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "comment", "files", "create", "close", "status" }) {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)) &&
+                        control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Shelve create " + field + " visible at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "shelve-create-minimum.png"));
+                int calls = 0; var completion = new System.Threading.Tasks.TaskCompletionSource<PlasticCommandResult>();
+                Func<string, System.Collections.Generic.IList<string>, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> save = (path, paths, comment, token) => {
+                    calls++; Require(path == root && paths.SequenceEqual(new[] { selectedPath }) && comment.Contains("第二行"), "Shelve writes only reviewed files and exact comment"); return completion.Task;
+                };
+                typeof(ShelveCreateForm).GetField("createShelve", flags).SetValue(form, save);
+                File.WriteAllText(selectorFile, selector.Replace("/main", "/changed"));
+                var rejected = (System.Threading.Tasks.Task)typeof(ShelveCreateForm).GetMethod("SubmitAsync", flags).Invoke(form, null);
+                WaitUntil(() => rejected.IsCompleted, "Shelve changed context returns promptly");
+                Require(calls == 0 && ((Label)Field(form, "status")).Text.Contains("分支已改变"), "Shelve save rejects changed workspace before server write");
+                File.WriteAllText(selectorFile, selector);
+                var pending = (System.Threading.Tasks.Task)typeof(ShelveCreateForm).GetMethod("SubmitAsync", flags).Invoke(form, null);
+                Require(calls == 1 && !((Button)Field(form, "create")).Enabled && !((Button)Field(form, "close")).Enabled, "Shelve save disables duplicate submit and close during write");
+                form.Close(); Require(!form.IsDisposed, "Shelve write cannot be abandoned by closing the dialog");
+                completion.SetResult(new PlasticCommandResult { ExitCode = 1, Error = "uncertain result" }); WaitUntil(() => pending.IsCompleted, "Shelve failed write completes");
+                typeof(ShelveCreateForm).GetMethod("SubmitAsync", flags).Invoke(form, null);
+                Require(calls == 1 && !form.Saved && !((Button)Field(form, "create")).Enabled && ((Button)Field(form, "close")).Enabled,
+                    "Unconfirmed shelve save never retries and leaves refresh instructions"); form.Close();
+            }
+            using (var form = new ShelveCreateForm(client, root, "ui-shelves@local", selector, new[] { selectedPath }, "confirmed"))
+            {
+                Func<string, System.Collections.Generic.IList<string>, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> save =
+                    (path, paths, comment, token) => System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                typeof(ShelveCreateForm).GetField("createShelve", flags).SetValue(form, save); Prepare(form);
+                var pending = (System.Threading.Tasks.Task)typeof(ShelveCreateForm).GetMethod("SubmitAsync", flags).Invoke(form, null);
+                WaitUntil(() => pending.IsCompleted, "Shelve successful write completes");
+                Require(form.Saved && form.DialogResult == DialogResult.OK && form.IsDisposed, "Shelve success closes with a confirmed saved result");
+            }
+            using (var form = new ShelvesForm(client, root))
+            {
+                var entries = new[] {
+                    new PlasticShelve { ShelveId = 17, ObjectId = 1017, Repository = "ui-shelves@local", Owner = "作者 中文", Date = "2026-09-27", Comment = "中文暂存\r\n多行说明" },
+                    new PlasticShelve { ShelveId = 18, ObjectId = 1018, Repository = "ui-shelves@local", Owner = "other", Date = "2026-09-26", Comment = "Second" }
+                };
+                Func<string, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticShelve>>> list = (path, token) =>
+                    System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<PlasticShelve>>(entries);
+                Func<string, long, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticChangesetFile>>> details = (path, id, token) => {
+                    Require(id == 17, "Shelve details use ShelveId rather than database ObjectId");
+                    return System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<PlasticChangesetFile>>(new[] {
+                        new PlasticChangesetFile { Path = "/目录 中文/file & name.txt", Status = "M", OldPath = "/old.txt" }
+                    });
+                };
+                typeof(ShelvesForm).GetField("getShelves", flags).SetValue(form, list); typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details);
+                Prepare(form); var shelves = (ListView)Field(form, "shelves"); var files = (ListView)Field(form, "files");
+                Require(shelves.Items.Count == 2 && files.Items.Count == 0, "Shelves list loads independently of workspace pending selection");
+                shelves.Items[0].Selected = true; Application.DoEvents();
+                Require(files.Items.Count == 1 && files.Items[0].SubItems[2].Text == "/old.txt" && ((TextBox)Field(form, "description")).Text.Contains("多行"),
+                    "Selecting a shelve loads its full comment and changed path details");
+                Save(form, Path.Combine(artifacts, "shelves.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "shelves", "files", "filter", "refresh", "cancel", "close" }) {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)) &&
+                        control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Shelves " + field + " visible at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "shelves-minimum.png"));
+                ((TextBox)Field(form, "filter")).Text = "other";
+                Require(shelves.Items.Count == 1 && files.Items.Count == 0 && ((TextBox)Field(form, "description")).Text == "", "Shelve filter clears stale selection details");
+                var completion = new System.Threading.Tasks.TaskCompletionSource<System.Collections.Generic.IList<PlasticChangesetFile>>();
+                CancellationToken capturedToken = CancellationToken.None;
+                details = (path, id, token) => { capturedToken = token; return completion.Task; };
+                typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details);
+                shelves.Items[0].Selected = true; Application.DoEvents();
+                Require((bool)Field(form, "busy") && !shelves.Enabled && ((Button)Field(form, "cancel")).Enabled, "Shelve read disables selection while allowing cancellation");
+                ((Button)Field(form, "cancel")).PerformClick();
+                Require(capturedToken.IsCancellationRequested, "Shelve cancel signals the in-flight read");
+                completion.SetResult(new PlasticChangesetFile[0]); WaitUntil(() => !(bool)Field(form, "busy"), "Cancelled shelve read completes");
+                Require(files.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("已取消"), "Cancelled shelve details never render stale results");
+                ((TextBox)Field(form, "filter")).Clear();
+                var failure = new System.Threading.Tasks.TaskCompletionSource<System.Collections.Generic.IList<PlasticChangesetFile>>();
+                failure.SetException(new InvalidOperationException("simulated detail failure")); details = (path, id, token) => failure.Task;
+                typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details); shelves.Items[0].Selected = true; Application.DoEvents();
+                Require(files.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("simulated detail failure"), "Shelve detail failure clears old files and reports the error");
+                File.WriteAllText(selectorFile, selector.Replace("ui-shelves@local", "changed@local"));
+                ((Button)Field(form, "refresh")).PerformClick(); Application.DoEvents();
+                Require(shelves.Items.Count == 0 && files.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("仓库已改变"), "Shelve refresh rejects changed repository without keeping stale server records");
+                form.Close(); File.WriteAllText(selectorFile, selector);
+            }
+            using (var main = new MainForm(LaunchRequest.Parse(new[] { "--path", Path.Combine(root, "目录 中文") })))
+            {
+                typeof(MainForm).GetField("client", flags).SetValue(main, client); typeof(MainForm).GetField("workspace", flags).SetValue(main, client.DiscoverWorkspace(root));
+                var pending = (ListView)Field(main, "files");
+                pending.Items.Add(new ListViewItem("selected") { Tag = new PlasticStatusItem { Path = selectedPath, StatusCode = "CH" }, Checked = true });
+                pending.Items.Add(new ListViewItem("unselected") { Tag = new PlasticStatusItem { Path = Path.Combine(root, "目录 中文", "other.txt"), StatusCode = "CH" } });
+                using (var create = (ShelveCreateForm)typeof(MainForm).GetMethod("CreateShelveDialog", flags).Invoke(main, null))
+                    Require(((System.Collections.Generic.IList<string>)Field(create, "paths")).SequenceEqual(new[] { selectedPath }), "Main pending creates shelve only from checked files, without scope fallback");
+                var item = (PlasticStatusItem)pending.Items[0].Tag;
+                foreach (string invalid in new[] { "directory", "private", "outside" }) {
+                    item.IsDirectory = invalid == "directory"; item.StatusCode = invalid == "private" ? "PR" : "CH";
+                    item.Path = invalid == "outside" ? Path.Combine(root, "outside.txt") : selectedPath;
+                    bool rejected = false;
+                    try { typeof(MainForm).GetMethod("CreateShelveDialog", flags).Invoke(main, null); }
+                    catch (TargetInvocationException ex) { rejected = ex.InnerException is InvalidOperationException; }
+                    Require(rejected, "Main shelve selection rejects " + invalid + " rows before opening confirmation");
+                }
+                pending.Items[0].Checked = false; bool emptyRejected = false;
+                try { typeof(MainForm).GetMethod("CreateShelveDialog", flags).Invoke(main, null); }
+                catch (TargetInvocationException ex) { emptyRejected = ex.InnerException is InvalidOperationException; }
+                Require(emptyRejected, "No checked shelve paths never fall back to the whole directory");
+            }
+        }
+
+        private static void CheckLiveShelves(string artifacts, string root, long shelveId)
+        {
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            var workspace = client.DiscoverWorkspace(root);
+            Require(workspace != null, "Live shelves fixture resolves to a Plastic workspace");
+            var liveEntries = client.GetShelvesAsync(root, CancellationToken.None).GetAwaiter().GetResult();
+            var target = liveEntries.SingleOrDefault(item => item.ShelveId == shelveId);
+            Require(target != null && target.Repository == workspace.Repository, "Live shelves list contains the requested repository record");
+            using (var form = new ShelvesForm(client, root))
+            {
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                Func<string, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticShelve>>> list =
+                    (path, token) => System.Threading.Tasks.Task.FromResult(liveEntries);
+                Func<string, long, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticChangesetFile>>> details =
+                    (path, id, token) => client.GetShelveChangesAsync(path, id, token);
+                typeof(ShelvesForm).GetField("getShelves", flags).SetValue(form, list);
+                typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details);
+                Prepare(form);
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live shelves list finishes loading");
+                var shelves = (ListView)Field(form, "shelves");
+                var row = shelves.Items.Cast<ListViewItem>().SingleOrDefault(item => ((PlasticShelve)item.Tag).ShelveId == shelveId);
+                Require(row != null, "Live shelves browser renders the exact requested shelve id");
+                row.Selected = true; Application.DoEvents();
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live shelve details finish loading");
+                var files = (ListView)Field(form, "files");
+                Require(files.Items.Count == 2, "Live shelve contains exactly two controlled file changes");
+                Require(files.Items.Cast<ListViewItem>().All(item => !String.IsNullOrWhiteSpace(item.Text) && item.SubItems.Count >= 2), "Live shelve details expose paths and statuses");
+                Save(form, Path.Combine(artifacts, "shelves-live.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "shelves", "files", "filter", "refresh", "cancel", "close" })
+                {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Live shelves " + field + " fits at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "shelves-live-minimum.png"));
             }
         }
 

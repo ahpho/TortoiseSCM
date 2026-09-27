@@ -192,7 +192,7 @@ Partial 目录恢复仅支持目录结构一致的历史内容；涉及增删或
 
 ### 分支浏览、切换与合并入口
 
-在主窗口“操作 → 分支…”打开分支列表，或运行 `TortoiseSCM.exe --command branches --path D:\workspace`。
+从 Explorer “TortoiseSCM → 分支…”或主窗口“操作 → 分支…”打开分支列表，也可运行 `TortoiseSCM.exe --command branches --path D:\workspace`。
 列表显示当前分支、最新变更集、作者、创建日期和说明，可筛选、刷新、取消加载；“头提交详情”读取选中分支最新一次提交的说明和修改文件，不表示分支的全部历史。分支右键菜单的“本分支历史”打开上下窗格历史窗口，仅显示该分支自身发布的提交，不包含继承自父分支的提交；仍可查看明细、比较及导出文件。
 可在列表与“层级”视图之间切换。层级使用服务器返回的父分支关系，支持展开/折叠和定位当前分支；筛选时保留可见祖先作为上下文，并区分实际匹配项。祖先节点仍是可操作的真实分支，头提交、历史、创建、切换和合并均作用于当前选中的分支。缺失父分支时显示独立根节点及提示，不虚构可操作的父分支；重复或循环关系会报错。
 该层级描述分支的父子组织关系，不表示提交之间的继承或合并边；创建时指定其他历史起点不会改变这一区别。
@@ -422,6 +422,23 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 
 ## 当前边界
 
+### 暂存集（Shelvesets）
+
+在待定更改窗口勾选受控文件，选择“操作 → 保存勾选项为暂存集”，填写说明并确认。
+暂存集保存在服务器，保存后本地文件修改内容仍保留，也不会产生签入。Partial 工作区的原生 `--applychanged` 可能把待定状态从 `CH` 改成 `CO`，所以这里只承诺内容保留，不承诺状态文字不变。当前只接受明确勾选的文件，不接受目录递归选择、私有/忽略项或未选择的结构依赖；不要把保存成功当作已经丢弃本地工作。
+
+Explorer “TortoiseSCM → 暂存集…”及主窗口“操作 → 暂存集…”打开原生上下窗格：上方为当前仓库的暂存集，下方为选中项的更改文件，含移动前路径。列表显示整个仓库，不按入口目录筛选。支持说明/作者/编号筛选、刷新与取消加载。
+
+```powershell
+& $exe --cli --command shelve-create --path 'D:\workspace\src\a.cs' --path 'D:\workspace\src\b.cs' --comment '保存进行中的修改' --yes --json | ConvertFrom-Json
+& $exe --cli --command shelves --path 'D:\workspace' --json | ConvertFrom-Json
+& $exe --cli --command shelve-details --path 'D:\workspace' --shelve 12 --json | ConvertFrom-Json
+```
+
+`--commentsfile` 可代替 `--comment`。创建支持 Standard 和 Partial 对应原生命令；失败或超时后，服务器可能已经保存，请先刷新列表确认，程序不会自动重试。
+列表返回 `data.shelves`（`shelveId` 为公开的 `sh:` 编号，`objectId` 为服务器内部对象编号），详情返回 `data.files`。
+本阶段尚无暂存集应用、删除及内容比较/导出；恢复需使用官方客户端。后续将接入已有合并/冲突恢复机制，因此尚不构成完整的 Git stash/pop 等价功能。
+
 ### 本轮五项需求对照
 
 | 需求 | GUI | CLI | 限制 |
@@ -433,6 +450,7 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 | 自定义 diff / merge | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
+更完整的逐项差距与推进顺序见 [TortoiseGit 功能对照](TortoiseSCM-parity.md)。
 尚未提供：提交/合并关系图、分支删除/重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建、
 签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。

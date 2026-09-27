@@ -18,6 +18,7 @@ namespace TortoiseSCM
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
+            "          shelves, shelve-details, shelve-create\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -33,6 +34,11 @@ namespace TortoiseSCM
             "  A nonempty creation comment is required; --commentsfile <UTF-8-file> can replace --comment.\r\n" +
             "  Creation writes repository metadata only; it never switches the workspace and supports Partial workspaces.\r\n" +
             "  Resolve branch-head first, then pass its fixed changeset to merge-preview or merge-start.\r\n" +
+            "Shelvesets: shelves --path <workspace>; shelve-details --path <workspace> --shelve N\r\n" +
+            "  Lists and details cover the repository; --path locates the workspace, not a filter.\r\n" +
+            "  shelve-create --path <selected controlled pending file> [--path ...] --comment <text> --yes\r\n" +
+            "  --commentsfile may replace --comment. Select explicit pending files; directories are rejected.\r\n" +
+            "  Saves selected pending changes on the server and preserves local edits; no apply or delete command yet.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
             "Compare file: diff-history --path <workspace> --item </repository/file> --from N --to N [--from-item </old/file>] [--external]\r\n" +
             "Compare trees: diff-changesets --path <workspace> --from N --to N\r\n" +
@@ -62,7 +68,7 @@ namespace TortoiseSCM
             "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
             "Settings: --diff-tool <exe> --diff-args <template> --merge-tool <exe> --merge-args <template>\r\n" +
             "          --settings-file <file> (optional isolated configuration); no tool options reads settings.\r\n" +
-            "Write commands require --yes. Checkin and create-branch require a nonempty comment.\r\n" +
+            "Write commands require --yes. Checkin, create-branch and shelve-create require a nonempty comment.\r\n" +
             "Exit codes: 0 success; 1 SCM/runtime error; 2 invalid arguments; 124 timeout.\r\n" +
             "--json writes exactly one UTF-8 JSON object to stdout, including errors.\r\n" +
             "Timeout applies to each cm process. Paths must belong to one workspace.";
@@ -129,6 +135,30 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "shelves")
+            {
+                var shelves = client.GetShelvesAsync(workspace.RootPath, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, shelves = shelves.Select(ShelveData).ToArray() };
+                response.output = String.Join(Environment.NewLine, shelves.Select(item => "sh:" + item.ShelveId.ToString(CultureInfo.InvariantCulture) +
+                    "\t" + item.Owner + "\t" + item.Date + "\t" + item.Comment));
+                return;
+            }
+            if (options.Command == "shelve-details")
+            {
+                var files = client.GetShelveChangesAsync(workspace.RootPath, options.Shelve.Value, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, shelveId = options.Shelve.Value, files = files.Select(file => new {
+                    status = file.Status, path = file.Path, oldPath = file.OldPath, itemType = file.ItemType }).ToArray() };
+                response.output = "Shelveset sh:" + options.Shelve.Value.ToString(CultureInfo.InvariantCulture) + Environment.NewLine +
+                    String.Join(Environment.NewLine, files.Select(file => file.Status + "\t" + file.Path));
+                return;
+            }
+            if (options.Command == "shelve-create")
+            {
+                SetResult(response, client.CreateShelveAsync(workspace.RootPath, options.Paths, options.Comment,
+                    workspace.Repository, workspace.Selector, CancellationToken.None).GetAwaiter().GetResult());
+                response.data = new { workspace = workspaceData, operation = "shelve-create", paths = options.Paths.ToArray(), localChangesPreserved = response.exitCode == 0 };
+                return;
+            }
             if (options.Command == "branches")
             {
                 var branches = client.GetBranchesAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
@@ -498,6 +528,12 @@ namespace TortoiseSCM
                 response.error = "Plastic SCM exited with code " + result.ExitCode.ToString(CultureInfo.InvariantCulture) + ".";
         }
 
+        private static object ShelveData(PlasticShelve item)
+        {
+            return new { objectId = item.ObjectId, shelveId = item.ShelveId, parentChangeset = item.ParentChangeset, owner = item.Owner, date = item.Date,
+                comment = item.Comment, repository = item.Repository };
+        }
+
         private static object MergePlanData(PlasticMergePlan plan)
         {
             return new { workspaceRoot = plan.WorkspaceRoot, repository = plan.Repository, sourceChangeset = plan.SourceChangeset,
@@ -605,7 +641,7 @@ namespace TortoiseSCM
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout, Limit, Conflict;
         internal string Resolution, Rename;
-        internal long? Changeset, From, To, Before;
+        internal long? Changeset, From, To, Before, Shelve;
         internal Guid? LockId;
         internal bool ChangesSettings { get { return DiffTool != null || DiffArgs != null || MergeTool != null || MergeArgs != null; } }
         internal readonly List<string> Paths = new List<string>();
@@ -619,7 +655,7 @@ namespace TortoiseSCM
                 {
                     case "--json": return true;
                     case "--command": case "--path": case "--comment": case "--commentsfile": case "--cm": case "--timeout": ++i; break;
-                    case "--changeset": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
+                    case "--changeset": case "--shelve": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
                     case "--item": case "--from-item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
                     case "--conflict": case "--resolution": case "--rename": case "--branch": case "--filter": ++i; break;
@@ -693,6 +729,12 @@ namespace TortoiseSCM
                             throw new ArgumentException("--changeset must be a nonnegative integer.");
                         options.Changeset = changeset;
                         break;
+                    case "--shelve":
+                        long shelve;
+                        if (!Int64.TryParse(Value(args, ref i), NumberStyles.None, CultureInfo.InvariantCulture, out shelve))
+                            throw new ArgumentException("--shelve must be a nonnegative integer.");
+                        options.Shelve = shelve;
+                        break;
                     case "--timeout":
                         int seconds;
                         if (!Int32.TryParse(Value(args, ref i), NumberStyles.None, CultureInfo.InvariantCulture, out seconds) || seconds < 1 || seconds > 86400)
@@ -705,14 +747,17 @@ namespace TortoiseSCM
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch",
-                "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
+                "shelves", "shelve-details", "shelve-create", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "shelve-create", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
+            if ((options.Command == "shelve-details") != options.Shelve.HasValue) throw new ArgumentException("--shelve is required only for shelve-details.");
+            if ((options.Command == "shelves" || options.Command == "shelve-details") && (options.Paths.Count != 1 || yes))
+                throw new ArgumentException("Read-only shelveset commands require exactly one workspace path and do not accept --yes.");
             bool branchCommand = new[] { "branches", "branch-tree", "branch-head", "switch-branch", "create-branch" }.Contains(options.Command);
             bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "create-branch";
             if (branchCommand && options.Paths.Count != 1) throw new ArgumentException("Branch commands require exactly one workspace path.");
@@ -776,8 +821,8 @@ namespace TortoiseSCM
             if (options.Command == "merge" && (options.Base == null || options.Local == null || options.Remote == null || options.Output == null))
                 throw new ArgumentException("Merge requires --base, --local, --remote and --output.");
             if (options.Comment != null && commentsFile != null) throw new ArgumentException("Use either --comment or --commentsfile.");
-            if ((options.Comment != null || commentsFile != null) && options.Command != "checkin" && options.Command != "create-branch")
-                throw new ArgumentException("Comments are valid only for checkin and create-branch.");
+            if ((options.Comment != null || commentsFile != null) && options.Command != "checkin" && options.Command != "create-branch" && options.Command != "shelve-create")
+                throw new ArgumentException("Comments are valid only for checkin, create-branch and shelve-create.");
             if (options.Recursive && options.Command != "add" && options.Command != "checkout" && options.Command != "undo")
                 throw new ArgumentException("--recursive is supported for add, checkout and undo only.");
             if (commentsFile != null)
@@ -789,6 +834,7 @@ namespace TortoiseSCM
             }
             if (options.Command == "checkin" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("Checkin requires a nonempty comment.");
             if (options.Command == "create-branch" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("create-branch requires a nonempty --comment or --commentsfile.");
+            if (options.Command == "shelve-create" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("shelve-create requires a nonempty --comment or --commentsfile.");
             return options;
         }
 

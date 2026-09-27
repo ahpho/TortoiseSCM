@@ -46,7 +46,9 @@ constexpr Command commands[] = {
     {L"merge", L"Merge changesets...", L"\u5408\u5e76\u53d8\u66f4\u96c6..."},
     {L"export", L"Export historical version...", L"\u5bfc\u51fa\u5386\u53f2\u7248\u672c..."},
     {L"rollback", L"Rollback to historical version...", L"\u56de\u6eda\u5230\u5386\u53f2\u7248\u672c..."},
-    {L"recover", L"Recover historical version...", L"\u6062\u590d\u5386\u53f2\u7248\u672c..."}
+    {L"recover", L"Recover historical version...", L"\u6062\u590d\u5386\u53f2\u7248\u672c..."},
+    {L"branches", L"Branches...", L"分支..."},
+    {L"shelves", L"Shelvesets...", L"暂存集..."}
 };
 
 const wchar_t* Label(const Command& command)

@@ -189,6 +189,7 @@ internal static class CliTests
             BranchTests(controlled);
             BranchTreeTests();
             CreateBranchTests();
+            ShelvesTests();
             UnknownMergeSessionTests();
             MergeWorkflowTests();
             Console.WriteLine("PASS: " + assertions + " CLI assertions");
@@ -213,6 +214,69 @@ internal static class CliTests
     }
 
     private static Dictionary<string, object> Data(Dictionary<string, object> response) { return (Dictionary<string, object>)response["data"]; }
+
+    private static void ShelvesTests()
+    {
+        string marker = Path.Combine(temporary, ".plastic", "fake-shelves.marker");
+        string created = Path.Combine(temporary, ".plastic", "fake-shelve-comment.txt");
+        string failure = Path.Combine(temporary, ".plastic", "fake-shelve-failure.txt");
+        string clean = Path.Combine(temporary, "fake-clean.marker");
+        string partial = Path.Combine(temporary, "fake-partial.marker");
+        string selected = Path.Combine(temporary, "shelve 中文 & selected.txt");
+        bool wasClean = File.Exists(clean), wasPartial = File.Exists(partial);
+        try
+        {
+            File.Delete(clean); File.Delete(partial);
+            File.WriteAllText(marker, "active"); File.WriteAllText(selected, "pending bytes");
+            string[] read = { "--command", "shelves", "--path", temporary, "--cm", fakeCm };
+            string[] detail = { "--command", "shelve-details", "--path", temporary, "--shelve", "5", "--cm", fakeCm };
+            string[] create = { "--command", "shelve-create", "--path", selected, "--comment", "shelf 中文 & \"quote\"\r\nline", "--yes", "--cm", fakeCm };
+            foreach (string[] command in new[] { read, detail, create })
+                foreach (string[] extra in new[] { new[] { "--recursive" }, new[] { "--branch", "/main" }, new[] { "--changeset", "1" },
+                    new[] { "--item", "/file.txt" }, new[] { "--external" }, new[] { "--before", "2" }, new[] { "--filter", "x" }, new[] { "--from", "1" } })
+                    Run(2, command.Concat(extra).ToArray());
+            Run(2, read.Concat(new[] { "--yes" }).ToArray());
+            Run(2, read.Concat(new[] { "--shelve", "5" }).ToArray());
+            Run(2, detail.Concat(new[] { "--path", selected }).ToArray());
+            Run(2, "--command", "shelve-details", "--path", temporary);
+            foreach (string id in new[] { "-1", "bad", "9223372036854775808" })
+                Run(2, "--command", "shelve-details", "--path", temporary, "--shelve", id);
+            Run(2, "--command", "status", "--path", temporary, "--shelve", "5");
+            Run(2, "--command", "shelve-create", "--path", selected, "--comment", "x");
+            Run(2, "--command", "shelve-create", "--path", selected, "--yes");
+            Run(2, "--command", "shelve-create", "--path", selected, "--comment", "  ", "--yes");
+            Run(2, "--command", "shelve-apply", "--path", temporary, "--shelve", "5", "--yes");
+            var shelves = (IList)Data(Run(0, read))["shelves"];
+            var shelf = (Dictionary<string, object>)shelves[0];
+            Check(shelves.Count == 1 && Convert.ToInt64(shelf["shelveId"]) == 5 && Convert.ToInt64(shelf["objectId"]) == 55 &&
+                shelf["comment"].ToString() == "Saved 中文\nline" && shelf["repository"].ToString() == "test@server:8087", "Shelves metadata retains distinct ids, Unicode comments and repository");
+            var files = (IList)Data(Run(0, detail))["files"];
+            Check(files.Count == 1 && ((Dictionary<string, object>)files[0])["path"].ToString() == "/shelve 中文 & selected.txt", "Shelves details return structured changed file list");
+            var saved = Data(Run(0, create));
+            Check(Convert.ToBoolean(saved["localChangesPreserved"]) && ((IList)saved["paths"]).Count == 1 && File.ReadAllText(selected) == "pending bytes", "Shelves create reports explicit selection and preserves bytes");
+            Check(File.ReadAllText(created) == "shelf 中文 & \"quote\"\r\nline", "Shelves create transports multiline quoted comment");
+            File.Delete(created);
+            string commentsFile = Path.Combine(temporary, "shelve-comment.txt"); File.WriteAllText(commentsFile, "file comment 中文", new UTF8Encoding(false));
+            Run(0, "--command", "shelve-create", "--path", selected, "--commentsfile", commentsFile, "--yes", "--cm", fakeCm);
+            Check(File.ReadAllText(created) == "file comment 中文", "Shelves create supports UTF-8 commentsfile");
+            File.Delete(created);
+            File.WriteAllText(partial, "partial");
+            Run(0, create);
+            string[] calls = File.ReadAllLines(Path.Combine(temporary, ".plastic", "cli-cm-calls.log"));
+            Check(calls.Any(line => line.Contains("\"partial\",\"shelveset\",\"create\"") && line.Contains("--applychanged")), "Partial shelves create uses native partial operation");
+            File.Delete(partial); File.Delete(created);
+            File.WriteAllText(failure, "native");
+            Run(1, create); Check(!File.Exists(created), "Native shelveset failure does not claim successful saved metadata");
+            File.WriteAllText(failure, "malformed"); Run(1, read);
+            File.WriteAllText(failure, "timeout"); Run(124, read.Concat(new[] { "--timeout", "1" }).ToArray());
+        }
+        finally
+        {
+            File.Delete(marker); File.Delete(created); File.Delete(failure); File.Delete(selected);
+            if (wasClean) File.WriteAllText(clean, "clean"); else File.Delete(clean);
+            if (wasPartial) File.WriteAllText(partial, "partial"); else File.Delete(partial);
+        }
+    }
 
     private static void BranchTests(string controlled)
     {
@@ -735,12 +799,34 @@ internal static class CliTests
                 File.WriteAllText(Path.Combine(metadata, "plastic.selector"), "repository \"test@server:8087\"\r\n path \"/\"\r\n smartbranch \"/main/feature 中文\"\r\n");
             Console.WriteLine(new XElement("StatusOutput", new XElement("WkConfigName", (File.Exists(Path.Combine(metadata, "fake-branch.txt")) ? File.ReadAllText(Path.Combine(metadata, "fake-branch.txt")) : "/main") + "@test@server:8087"), new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-partial.marker")) ? "-1" : "1"),
                 new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("Changes", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-clean.marker")) ? null : new XElement("Change",
-                new XElement("Type", "PR"), new XElement("Path", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) ? File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) : Path.Combine(Environment.CurrentDirectory, "中文 space & file.txt")),
+                new XElement("Type", File.Exists(Path.Combine(metadata, "fake-shelves.marker")) ? "CH" : "PR"), new XElement("Path", File.Exists(Path.Combine(metadata, "fake-shelves.marker")) ? Path.Combine(Environment.CurrentDirectory, "shelve 中文 & selected.txt") : File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) ? File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) : Path.Combine(Environment.CurrentDirectory, "中文 space & file.txt")),
                 new XElement("TypeVerbose", "Private"), new XElement("RevisionType", "enTextFile")))).ToString());
         }
         else if (args[0] == "history")
             Console.WriteLine(new XElement("RevisionHistoriesResult", new XElement("RevisionHistory", new XElement("ItemName", args[1]),
                 new XElement("Revision", new XElement("ChangesetNumber", "1"), new XElement("Comment", "History 中文")))).ToString());
+        else if (args[0] == "find" && args[1] == "shelve")
+        {
+            string failure = Path.Combine(metadata, "fake-shelve-failure.txt");
+            if (File.Exists(failure) && File.ReadAllText(failure) == "timeout") { Thread.Sleep(30000); return 0; }
+            if (File.Exists(failure) && File.ReadAllText(failure) == "malformed") { Console.WriteLine("<PLASTICQUERY><SHELVE /></PLASTICQUERY>"); return 0; }
+            var xml = new XElement("PLASTICQUERY", new XElement("SHELVE", new XElement("ID", "55"), new XElement("SHELVEID", "5"),
+                new XElement("COMMENT", "Saved 中文\nline"), new XElement("DATE", "2026-09-27T00:00:00Z"), new XElement("OWNER", "fixture-owner"),
+                new XElement("PARENT", "1"), new XElement("REPOSITORY", "test"), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")));
+            string created = Path.Combine(metadata, "fake-shelve-comment.txt");
+            if (File.Exists(created)) xml.Add(new XElement("SHELVE", new XElement("ID", "56"), new XElement("SHELVEID", "6"),
+                new XElement("COMMENT", File.ReadAllText(created)), new XElement("DATE", "2026-09-27T01:00:00Z"), new XElement("OWNER", "fixture-owner"),
+                new XElement("PARENT", "1"), new XElement("REPOSITORY", "test"), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")));
+            Console.WriteLine(xml);
+        }
+        else if ((args[0] == "shelveset" && args[1] == "create") || (args[0] == "partial" && args[1] == "shelveset" && args[2] == "create"))
+        {
+            if (File.Exists(Path.Combine(metadata, "fake-shelve-failure.txt"))) { Console.Error.WriteLine("Native shelve creation failed 中文"); return 7; }
+            File.WriteAllText(Path.Combine(metadata, "fake-shelve-comment.txt"), args.Single(arg => arg.StartsWith("-c=", StringComparison.Ordinal)).Substring(3));
+            Console.WriteLine("Created shelve 6");
+        }
+        else if (args[0] == "diff" && args[1].StartsWith("sh:", StringComparison.Ordinal))
+            Console.WriteLine("C|\"/shelve 中文 & selected.txt\"|F|\"\"|\"\"");
         else if (args[0] == "find" && args[1] == "branch")
         {
             string failure = Path.Combine(metadata, "fake-branch-failure.txt");

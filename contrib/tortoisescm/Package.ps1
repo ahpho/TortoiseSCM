@@ -24,6 +24,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $stage
     [IO.Directory]::CreateDirectory((Join-Path $stage 'doc')) | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM.md') -Destination (Join-Path $stage 'doc\TortoiseSCM.md')
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM-parity.md') -Destination (Join-Path $stage 'doc\TortoiseSCM-parity.md')
     @'
 TortoiseSCM for Windows x64
 

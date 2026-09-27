@@ -149,6 +149,8 @@ namespace TortoiseSCM
             operations.Items.Add("所选项历史", null, async delegate { await ExecuteAsync(PlasticCommand.History); });
             operations.Items.Add("当前范围历史 / 恢复", null, async delegate { await ShowScopeHistoryAsync(); });
             operations.Items.Add("分支…", null, async delegate { await ShowBranchesAsync(); });
+            operations.Items.Add("暂存集…", null, delegate { ShowShelves(); });
+            operations.Items.Add("保存勾选项为暂存集…", null, async delegate { await SaveShelveAsync(); });
             operations.Items.Add("合并变更集 / 解决冲突…", null, async delegate {
                 if (busy || !loaded) return;
                 using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -320,6 +322,7 @@ namespace TortoiseSCM
                     await RefreshAsync();
                 }
                 else if (launch.Command == "branches") await ShowBranchesAsync();
+                else if (launch.Command == "shelves") ShowShelves();
                 else if (launch.Command == "merge")
                 {
                     using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -356,6 +359,41 @@ namespace TortoiseSCM
         {
             return launch.Paths.Any(p => string.Equals(path, p, StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(p.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void ShowShelves()
+        {
+            if (busy || !loaded) return;
+            try { using (var dialog = new ShelvesForm(client, workspace.RootPath)) dialog.ShowDialog(this); }
+            catch (Exception ex) { ShowError(ex); }
+        }
+
+        private ShelveCreateForm CreateShelveDialog()
+        {
+            var selected = files.CheckedItems.Cast<ListViewItem>().Select(row => (PlasticStatusItem)row.Tag).ToList();
+            if (selected.Count == 0) throw new InvalidOperationException("请先勾选需要保存的受控文件。");
+            if (selected.Any(item => !InScope(item.Path))) throw new InvalidOperationException("勾选项不在当前目录范围内，请刷新后重新选择。");
+            if (selected.Any(item => IsPrivate(item.StatusCode) || item.StatusCode == "IG"))
+                throw new InvalidOperationException("暂存集不能包含未版本控制或忽略的文件，请先添加或取消勾选这些文件。");
+            if (selected.Any(item => !new[] { "CH", "CO" }.Contains(item.StatusCode, StringComparer.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("当前暂存集仅支持内容修改（CH/CO）。新增、删除、移动等结构更改请先单独处理。");
+            if (selected.Any(item => item.IsDirectory || Directory.Exists(item.Path)))
+                throw new InvalidOperationException("当前暂存集仅支持文件。请取消勾选目录，然后逐项勾选需要保存的文件。");
+            return new ShelveCreateForm(client, workspace.RootPath, workspace.Repository, workspace.Selector,
+                selected.Select(item => item.Path).ToArray(), comment.Text);
+        }
+
+        private async Task SaveShelveAsync()
+        {
+            if (busy || !loaded) return;
+            try {
+                using (var dialog = CreateShelveDialog()) {
+                    if (dialog.ShowDialog(this) == DialogResult.OK)
+                        MessageBox.Show(this, "暂存集已保存。本地修改仍然保留，可在“操作 → 暂存集”查看。", "TortoiseSCM");
+                }
+                await RefreshAsync();
+            }
+            catch (Exception ex) { ShowError(ex); }
         }
 
         private async Task RefreshAsync()
