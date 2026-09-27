@@ -187,6 +187,7 @@ internal static class CliTests
             RevisionTests(controlled);
             HistoryPageTests();
             BranchTests(controlled);
+            CreateBranchTests();
             UnknownMergeSessionTests();
             MergeWorkflowTests();
             Console.WriteLine("PASS: " + assertions + " CLI assertions");
@@ -314,6 +315,83 @@ internal static class CliTests
         Check(text.Item1 == 0 && text.Item2.Contains("Older history remains") && text.Item2.Contains("--before 2") && text.Item2.Contains("does not follow renamed"), "Text CLI reports continuation and path-history semantics");
         var invalid = Invoke(new[] { "--cli", "--command", "history-page", "--path", temporary, "--limit", "--json" });
         Check(invalid.Item1 == 2 && invalid.Item2.Length == 0 && invalid.Item3.Contains("--limit"), "Option-looking limit value cannot enable JSON mode");
+        var branch = Data(Run(0, "--command", "history-page", "--path", temporary, "--branch", "/main/feature 中文", "--limit", "2", "--cm", fakeCm));
+        Check(branch["branch"].ToString() == "/main/feature 中文" && ((IList)branch["entries"]).Count == 0 &&
+            Convert.ToBoolean(branch["hasMore"]) && Convert.ToInt32(branch["nextBeforeChangeset"]) == 2,
+            "Branch filter preserves global scan continuation for an empty page");
+        var branchLast = Data(Run(0, "--command", "history-page", "--path", temporary, "--branch", "/main/feature 中文", "--before", "2", "--limit", "2", "--cm", fakeCm));
+        var branchEntries = (IList)branchLast["entries"];
+        Check(branchEntries.Count == 1 && Convert.ToInt32(((Dictionary<string, object>)branchEntries[0])["changeset"]) == 1 && !Convert.ToBoolean(branchLast["hasMore"]),
+            "Branch history returns exact published branch changesets without inherited ancestors");
+        var scoped = Data(Run(0, "--command", "history-page", "--path", Path.Combine(temporary, "history-folder", "file.txt"), "--branch", "/main/feature 中文", "--cm", fakeCm));
+        Check(((IList)scoped["entries"]).Count == 1 && scoped["scope"].ToString() == "/history-folder/file.txt", "Path scope and exact branch filters compose");
+        var branchText = Invoke(new[] { "--cli", "--command", "history-page", "--path", temporary, "--branch", "/main/feature 中文", "--limit", "2", "--cm", fakeCm });
+        Check(branchText.Item1 == 0 && branchText.Item2.Contains("inherited ancestor commits are excluded") && branchText.Item2.Contains("--before 2"), "Text filtered history explains empty pages and inherited history");
+        Run(2, "--command", "history-page", "--path", temporary, "--branch", "", "--cm", fakeCm);
+        Run(2, "--command", "history-page", "--path", temporary, "--branch", "/main/../other", "--cm", fakeCm);
+        Run(2, "--command", "history-page", "--path", temporary, "--branch", "/main", "--comment", "irrelevant", "--cm", fakeCm);
+    }
+
+    private static void CreateBranchTests()
+    {
+        string created = Path.Combine(temporary, ".plastic", "fake-created-branch.json");
+        string failure = Path.Combine(temporary, ".plastic", "fake-create-failure.txt");
+        string calls = Path.Combine(temporary, ".plastic", "cli-cm-calls.log");
+        string selector = Path.Combine(temporary, ".plastic", "plastic.selector");
+        string selectorBefore = File.ReadAllText(selector);
+        string[] action = { "--command", "create-branch", "--path", temporary, "--branch", "/main/new 中文", "--changeset", "1", "--comment", "Create 中文\nsecond \"line\"", "--yes", "--cm", fakeCm };
+        foreach (string[] unrelated in new[] { new[] { "--from", "1" }, new[] { "--to", "2" }, new[] { "--item", "/file.txt" }, new[] { "--recursive" },
+            new[] { "--external" }, new[] { "--before", "1" }, new[] { "--limit", "1" }, new[] { "--overwrite" }, new[] { "--destination", temporary }, new[] { "--path", Path.Combine(temporary, "file.txt") } })
+            Run(2, action.Concat(unrelated).ToArray());
+        Run(2, "--command", "create-branch", "--path", temporary, "--branch", "/main/new", "--changeset", "1", "--comment", "No confirmation");
+        Run(2, "--command", "create-branch", "--path", temporary, "--branch", "/main/new", "--changeset", "1", "--yes");
+        Run(2, "--command", "create-branch", "--path", temporary, "--branch", "/main/new", "--changeset", "1", "--comment", " \n", "--yes");
+        Run(2, "--command", "create-branch", "--path", temporary, "--branch", "/main/new", "--comment", "Missing changeset", "--yes");
+        Run(2, "--command", "create-branch", "--path", temporary, "--changeset", "1", "--comment", "Missing branch", "--yes");
+        try
+        {
+            int callStart = File.ReadAllLines(calls).Length;
+            var result = Data(Run(0, action));
+            Check(result["operation"].ToString() == "create-branch" && result["branch"].ToString() == "/main/new 中文" && Convert.ToInt32(result["changeset"]) == 1,
+                "Create branch returns the created name and fixed origin changeset");
+            string[] createCalls = File.ReadAllLines(calls).Skip(callStart).ToArray();
+            Check(createCalls.Any(line => line.StartsWith("[\"branch\",\"create\",\"br:/main/new 中文@test@server:8087\"")), "Creation uses repository-qualified branch name");
+            Check(!createCalls.Any(line => line.StartsWith("[\"switch\"")) && File.ReadAllText(selector) == selectorBefore, "Creation never switches the workspace or rewrites its selector");
+            var native = Json.Deserialize<string[]>(createCalls.Single(line => line.StartsWith("[\"branch\",\"create\"")));
+            Check(native.Contains("--changeset=cs:1@test@server:8087") && native.Contains("-c=Create 中文\nsecond \"line\""), "Creation pins the source and passes the exact multiline comment without shell parsing");
+            Run(2, action);
+            File.Delete(created);
+            Run(2, "--command", "create-branch", "--path", temporary, "--branch", "/missing/child", "--changeset", "1", "--comment", "Missing parent", "--yes", "--cm", fakeCm);
+            File.WriteAllText(failure, "source");
+            callStart = File.ReadAllLines(calls).Length;
+            Run(1, action);
+            Check(!File.ReadAllLines(calls).Skip(callStart).Any(line => line.StartsWith("[\"branch\",\"create\"")), "An invalid source changeset never reaches branch creation");
+            File.WriteAllText(failure, "native");
+            var rejected = Run(1, action);
+            Check(rejected["error"].ToString().Contains("may already exist"), "Native creation error warns against blindly retrying");
+            File.WriteAllText(failure, "postflight");
+            var uncertain = Run(1, action);
+            Check(uncertain["error"].ToString().Contains("verification failed") && File.Exists(created), "Unverified server creation reports failure without deleting the new branch");
+            File.Delete(created); File.Delete(failure);
+            File.WriteAllText(failure, "selector");
+            callStart = File.ReadAllLines(calls).Length;
+            var movedContext = Run(1, action);
+            Check(movedContext["error"].ToString().Contains("selector changed") &&
+                !File.ReadAllLines(calls).Skip(callStart).Any(line => line.StartsWith("[\"branch\",\"create\"")),
+                "A selector change during initial CLI workspace lookup cannot retarget branch creation");
+            File.Delete(failure); File.WriteAllText(selector, selectorBefore);
+            string partial = Path.Combine(temporary, "fake-partial.marker"); bool wasPartial = File.Exists(partial);
+            File.WriteAllText(partial, "partial");
+            try
+            {
+                string comments = Path.Combine(temporary, "branch-comment.txt"); File.WriteAllText(comments, "File comment 中文", new UTF8Encoding(true));
+                var partialResult = Data(Run(0, "--command", "create-branch", "--path", temporary, "--branch", "/main/from-partial", "--changeset", "1", "--commentsfile", comments, "--yes", "--cm", fakeCm));
+                Check(Convert.ToBoolean(((Dictionary<string, object>)partialResult["workspace"])["isPartial"]), "Partial workspaces can create server branch metadata");
+                Check(File.ReadAllText(selector) == selectorBefore, "Partial branch creation preserves loaded configuration");
+            }
+            finally { if (!wasPartial) File.Delete(partial); }
+        }
+        finally { File.Delete(created); File.Delete(failure); File.WriteAllText(selector, selectorBefore); }
     }
 
     private static void UnknownMergeSessionTests()
@@ -592,6 +670,8 @@ internal static class CliTests
         if (args.Any(arg => arg.EndsWith("fail.txt"))) { Console.Error.WriteLine("Deliberate 中文 failure"); return 7; }
         if (args[0] == "status")
         {
+            if (File.Exists(Path.Combine(metadata, "fake-create-failure.txt")) && File.ReadAllText(Path.Combine(metadata, "fake-create-failure.txt")) == "selector")
+                File.WriteAllText(Path.Combine(metadata, "plastic.selector"), "repository \"test@server:8087\"\r\n path \"/\"\r\n smartbranch \"/main/feature 中文\"\r\n");
             Console.WriteLine(new XElement("StatusOutput", new XElement("WkConfigName", (File.Exists(Path.Combine(metadata, "fake-branch.txt")) ? File.ReadAllText(Path.Combine(metadata, "fake-branch.txt")) : "/main") + "@test@server:8087"), new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-partial.marker")) ? "-1" : "1"),
                 new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("Changes", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-clean.marker")) ? null : new XElement("Change",
                 new XElement("Type", "PR"), new XElement("Path", File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) ? File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "fake-dirty-path.txt")) : Path.Combine(Environment.CurrentDirectory, "中文 space & file.txt")),
@@ -609,11 +689,37 @@ internal static class CliTests
                 if (File.ReadAllText(failure) == "malformed") { Console.WriteLine("<PLASTICQUERY><CHANGESET /></PLASTICQUERY>"); return 0; }
                 Console.Error.WriteLine("Branch query failed 中文"); return 7;
             }
-            Console.WriteLine(new XElement("PLASTICQUERY", new[] { "/main", "/main/feature 中文" }.Select(name => new XElement("BRANCH",
+            var branchXml = new XElement("PLASTICQUERY", new[] { "/main", "/main/feature 中文" }.Select(name => new XElement("BRANCH",
                 new XElement("NAME", name), new XElement("PARENT", name == "/main" ? "" : "/main"),
                 new XElement("OWNER", "fixture-owner"), new XElement("DATE", "2026-09-27T00:00:00Z"),
                 new XElement("COMMENT", name == "/main" ? "Main" : "Feature 中文"), new XElement("REPNAME", "test"),
-                new XElement("REPSERVER", "server:8087"), new XElement("CHANGESET", name == "/main" ? "1" : "42")))));
+                new XElement("REPSERVER", "server:8087"), new XElement("CHANGESET", name == "/main" ? "1" : "42"))));
+            string created = Path.Combine(metadata, "fake-created-branch.json");
+            if (File.Exists(created))
+            {
+                var record = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(created));
+                branchXml.Add(new XElement("BRANCH", new XElement("NAME", record["name"]), new XElement("PARENT", "/main"), new XElement("OWNER", "fixture-owner"),
+                    new XElement("DATE", "2026-09-27T00:00:00Z"), new XElement("COMMENT", record["comment"]), new XElement("REPNAME", "test"),
+                    new XElement("REPSERVER", "server:8087"), new XElement("CHANGESET", File.Exists(Path.Combine(metadata, "fake-create-failure.txt")) &&
+                        File.ReadAllText(Path.Combine(metadata, "fake-create-failure.txt")) == "postflight" ? "999" : record["changeset"])));
+            }
+            Console.WriteLine(branchXml);
+        }
+        else if (args[0] == "branch" && args[1] == "create")
+        {
+            if (File.Exists(Path.Combine(metadata, "fake-create-failure.txt")) && File.ReadAllText(Path.Combine(metadata, "fake-create-failure.txt")) == "native")
+            { Console.Error.WriteLine("Native branch creation failed 中文"); return 7; }
+            string name = args[2].Substring(3, args[2].IndexOf('@') - 3);
+            string revision = args.Single(arg => arg.StartsWith("--changeset=cs:")).Substring("--changeset=cs:".Length).Split('@')[0];
+            string comment = args.Single(arg => arg.StartsWith("-c=")).Substring(3);
+            File.WriteAllText(Path.Combine(metadata, "fake-created-branch.json"), Json.Serialize(new { name = name, changeset = revision, comment = comment }));
+            Console.WriteLine("Created branch " + name);
+        }
+        else if (args[0] == "log")
+        {
+            string revision = args[1].Substring(3).Split('@')[0];
+            if (File.Exists(Path.Combine(metadata, "fake-create-failure.txt")) && File.ReadAllText(Path.Combine(metadata, "fake-create-failure.txt")) == "source") revision = "999";
+            Console.WriteLine(new XElement("LogList", new XElement("Changeset", new XElement("ChangesetId", revision))));
         }
         else if (args[0] == "find" && args.Any(arg => arg.Contains("order by changesetid desc limit")))
         {
@@ -621,7 +727,7 @@ internal static class CliTests
             var before = Regex.Match(query, @"changesetid < (\d+)");
             int limit = Int32.Parse(Regex.Match(query, @"limit (\d+)").Groups[1].Value);
             var ids = Enumerable.Range(0, 4).Reverse().Where(id => !before.Success || id < Int64.Parse(before.Groups[1].Value)).Take(limit);
-            Console.WriteLine(new XElement("PLASTICQUERY", ids.Select(id => new XElement("CHANGESET", new XElement("CHANGESETID", id), new XElement("COMMENT", "Published 中文 " + id), new XElement("BRANCH", "/main")))));
+            Console.WriteLine(new XElement("PLASTICQUERY", ids.Select(id => new XElement("CHANGESET", new XElement("CHANGESETID", id), new XElement("COMMENT", "Published 中文 " + id), new XElement("BRANCH", id == 1 ? "/main/feature 中文" : "/main")))));
         }
         else if (args[0] == "find")
             Console.WriteLine(new XElement("PLASTICQUERY", args.Any(arg => arg.Contains("changesetid = 999")) ? null : new XElement("CHANGESET", new XElement("CHANGESETID", "1"),

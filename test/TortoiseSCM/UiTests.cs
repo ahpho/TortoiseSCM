@@ -72,6 +72,7 @@ namespace TortoiseSCM
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);
+                CheckBranchCreationDialogs(artifacts);
                 if (args.Length > 1)
                 {
                     CheckBranches(artifacts, args[1]);
@@ -792,6 +793,7 @@ namespace TortoiseSCM
                     current.Selected = true; Application.DoEvents();
                     Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled && ((Button)Field(form, "head")).Enabled,
                         "Current branch permits head details but not redundant merge or switch");
+                    CheckBranchHistory(artifacts, client, workspace, ((PlasticBranch)current.Tag).Name);
                 }
                 var selected = list.Items.Cast<ListViewItem>().FirstOrDefault(row => !((PlasticBranch)row.Tag).IsCurrent) ?? list.Items[0];
                 foreach (ListViewItem row in list.SelectedItems) row.Selected = false;
@@ -813,7 +815,9 @@ namespace TortoiseSCM
                 typeof(BranchForm).GetField("partial", flags).SetValue(form, true);
                 typeof(BranchForm).GetMethod("UpdateButtons", flags).Invoke(form, null);
                 Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled && ((Button)Field(form, "head")).Enabled,
-                    "Partial branch browser permits detail reads but disables writes");
+                    "Partial branch browser permits detail reads but disables workspace switch and merge");
+                Require(((ToolStripMenuItem)Field(form, "createChild")).Enabled && ((ToolStripMenuItem)Field(form, "branchHistory")).Enabled,
+                    "Partial branch browser permits metadata creation and exact branch history");
                 typeof(BranchForm).GetField("writing", flags).SetValue(form, true);
                 form.Close(); Require(!form.IsDisposed && !((CancellationTokenSource)Field(form, "lifetime")).IsCancellationRequested,
                     "Branch switch cannot be cancelled by closing the window");
@@ -875,6 +879,134 @@ namespace TortoiseSCM
             try { using (var merge = new MergeForm(client, root, 17, "/source", destination.Repository, destination.Selector)) { } }
             catch (InvalidOperationException ex) { rejected = ex.Message.Contains("分支已改变"); }
             Require(rejected, "Merge constructor rejects a destination change after source resolution instead of recapturing it");
+        }
+
+        private static void CheckBranchCreationDialogs(string artifacts)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            string root = Path.GetFullPath(Path.Combine(artifacts, "create-fixture-" + Guid.NewGuid().ToString("N")));
+            string metadata = Path.Combine(root, ".plastic"); Directory.CreateDirectory(metadata);
+            File.WriteAllText(Path.Combine(metadata, "plastic.workspace"), "ui-create\nunused\nPartial\n");
+            string selectorFile = Path.Combine(metadata, "plastic.selector"), selector = "repository \"ui-create@local\"\n  path \"/\"\n    branch \"/main\"\n";
+            File.WriteAllText(selectorFile, selector);
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            int calls = 0;
+            using (var form = new BranchCreateForm(client, root, "ui-create@local", selector, "/main", 17))
+            {
+                Prepare(form); Require(!((Button)Field(form, "create")).Enabled && (long)((NumericUpDown)Field(form, "revision")).Value == 17,
+                    "Child branch creation starts with the resolved head and requires an explicit name and comment");
+                ((TextBox)Field(form, "name")).Text = "feature 中文 & space";
+                Require(!((Button)Field(form, "create")).Enabled, "Child branch creation requires a comment before contacting the server");
+                ((TextBox)Field(form, "comment")).Text = "分支说明\r\n第二行";
+                Require(((Button)Field(form, "create")).Enabled && ((Label)Field(form, "fullName")).Text == "/main/feature 中文 & space",
+                    "Child branch creation preserves Unicode and spaces in a short name");
+                foreach (string invalid in new[] { ".", "..", "child/grandchild", "child@repo", "child#17", "bad\"name", "bad\\name", "bad:name", "bad?name", "O'Brien" })
+                {
+                    ((TextBox)Field(form, "name")).Text = invalid;
+                    Require(!((Button)Field(form, "create")).Enabled, "Child branch rejects invalid short name " + invalid);
+                }
+                ((TextBox)Field(form, "name")).Text = "feature 中文 & space";
+                Save(form, Path.Combine(artifacts, "branch-create.png"));
+                form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "create", "close", "comment", "revision", "name" })
+                {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)) &&
+                        control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Create branch " + field + " visible at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "branch-create-minimum.png"));
+                var completion = new System.Threading.Tasks.TaskCompletionSource<PlasticCommandResult>();
+                Func<string, string, long, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> fake = (path, branch, changeset, message, token) => {
+                    calls++; Require(branch == "/main/feature 中文 & space" && changeset == 17 && message.Contains("第二行"), "Create branch sends the reviewed branch, base and multiline comment");
+                    return completion.Task;
+                };
+                typeof(BranchCreateForm).GetField("createBranch", flags).SetValue(form, fake);
+                File.WriteAllText(selectorFile, selector.Replace("/main", "/changed"));
+                var guarded = (System.Threading.Tasks.Task)typeof(BranchCreateForm).GetMethod("SubmitAsync", flags).Invoke(form, null);
+                WaitUntil(() => guarded.IsCompleted, "Changed create context fails promptly");
+                Require(calls == 0 && ((Label)Field(form, "status")).Text.Contains("分支已改变"), "Child create refuses changed selector before issuing a server write");
+                File.WriteAllText(selectorFile, selector);
+                var submitting = (System.Threading.Tasks.Task)typeof(BranchCreateForm).GetMethod("SubmitAsync", flags).Invoke(form, null);
+                Require(calls == 1 && (bool)Field(form, "busy") && !((Button)Field(form, "close")).Enabled && !((Button)Field(form, "create")).Enabled,
+                    "Creating branch disables close, duplicate submission and editable fields");
+                form.Close(); Require(!form.IsDisposed, "Closing cannot cancel a branch mutation already sent to the server");
+                completion.SetResult(new PlasticCommandResult { ExitCode = 1, Error = "simulated uncertain result" });
+                WaitUntil(() => submitting.IsCompleted, "Mock creation failure completes");
+                Require(calls == 1 && !((Button)Field(form, "create")).Enabled && form.CreatedBranch == null && ((Button)Field(form, "close")).Enabled,
+                    "Unconfirmed create is not retried and instructs the user to refresh before another attempt");
+                form.Close();
+            }
+            using (var success = new BranchCreateForm(client, root, "ui-create@local", selector, "/main", 17))
+            {
+                Prepare(success);
+                ((TextBox)Field(success, "name")).Text = "created 中文";
+                ((TextBox)Field(success, "comment")).Text = "Confirmed mock creation";
+                int successes = 0;
+                Func<string, string, long, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> fakeSuccess = (path, branch, changeset, message, token) => {
+                    successes++; return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                };
+                typeof(BranchCreateForm).GetField("createBranch", flags).SetValue(success, fakeSuccess);
+                var completed = (System.Threading.Tasks.Task)typeof(BranchCreateForm).GetMethod("SubmitAsync", flags).Invoke(success, null);
+                WaitUntil(() => completed.IsCompleted, "Mock successful creation completes");
+                Require(successes == 1 && success.CreatedBranch == "/main/created 中文" && success.DialogResult == DialogResult.OK &&
+                    !(bool)Field(success, "busy") && success.IsDisposed, "Successful create returns exact branch and OK, then closes after clearing busy for parent refresh");
+            }
+            var original = client.DiscoverWorkspace(root);
+            using (var browser = new BranchForm(client, root))
+            {
+                Func<string, string, CancellationToken, System.Threading.Tasks.Task<long>> resolve = async (path, branch, token) => {
+                    await System.Threading.Tasks.Task.Yield(); File.WriteAllText(selectorFile, selector.Replace("/main", "/changed")); return 17;
+                };
+                var operation = (System.Threading.Tasks.Task<BranchCreateForm>)typeof(BranchForm).GetMethod("CreateChildDialogAsync", flags)
+                    .Invoke(browser, new object[] { original, new PlasticBranch { Name = "/main" }, CancellationToken.None, resolve });
+                WaitUntil(() => operation.IsCompleted, "External switch during create-head resolution completes");
+                Require(operation.IsFaulted && operation.Exception.GetBaseException().Message.Contains("分支已改变"), "Create dialog refuses changed context across asynchronous parent-head lookup");
+            }
+        }
+
+        private static void CheckBranchHistory(string artifacts, PlasticClient client, string workspace, string branch)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            using (var history = new HistoryForm(client, workspace, workspace, branch))
+            {
+                Prepare(history); WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Exact branch history loads");
+                var entries = (System.Collections.Generic.List<PlasticHistoryItem>)Field(history, "entries");
+                Require(entries.All(entry => entry.Branch == branch) && ((Label)Field(history, "historySummary")).Text.Contains("仅本分支提交，不含祖先"),
+                    "Branch history shows exact own commits and describes ancestry exclusion");
+                Require(!((Label)Field(history, "status")).Text.StartsWith("读取失败"), "Branch history read succeeds");
+                var scopeLabel = Descendants(history).OfType<Label>().Single(label => label.Name == "branchScope");
+                Require(scopeLabel.Visible && scopeLabel.Text == "范围：" + workspace, "Branch history shows its path scope separately from the branch name");
+                Save(history, Path.Combine(artifacts, "branch-history.png"));
+                history.Size = history.MinimumSize; Application.DoEvents();
+                Require(scopeLabel.Parent.RectangleToScreen(scopeLabel.Parent.ClientRectangle).Contains(scopeLabel.RectangleToScreen(scopeLabel.ClientRectangle)),
+                    "Branch history scope occupies its own visible row at minimum size");
+                foreach (string name in new[] { "loadMore", "refreshHistory", "cancelHistory", "restore", "snapshot", "close" })
+                {
+                    var control = (Control)Field(history, name);
+                    Require(history.RectangleToScreen(history.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Branch history " + name + " visible at minimum size");
+                }
+                Save(history, Path.Combine(artifacts, "branch-history-minimum.png"));
+                typeof(HistoryForm).GetField("branchRepository", flags).SetValue(history, "changed-repository");
+                ((Button)Field(history, "refreshHistory")).PerformClick(); WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Changed branch-history repository fails promptly");
+                Require(((Label)Field(history, "status")).Text.Contains("仓库已改变"), "Branch history does not follow a changed repository on refresh");
+                history.Close();
+            }
+            using (var pathHistory = new HistoryForm(client, Path.Combine(workspace, "other.txt"), workspace, branch))
+            {
+                // Check layout without showing the window or starting another server read.
+                pathHistory.CreateControl(); pathHistory.PerformLayout();
+                var scope = Descendants(pathHistory).OfType<Label>().Single(label => label.Name == "branchScope");
+                Require(scope.Text == "范围：" + Path.Combine(workspace, "other.txt") && (string)Field(pathHistory, "branch") == branch,
+                    "Branch path-history retains both the selected branch and file scope");
+            }
+            using (var history = new HistoryForm(client, workspace, workspace, "/main"))
+            {
+                Prepare(history); WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Sparse branch-history first page loads");
+                var entries = (System.Collections.Generic.List<PlasticHistoryItem>)Field(history, "entries");
+                Require(entries.All(entry => entry.Branch == "/main") && ((Button)Field(history, "loadMore")).Enabled == (bool)Field(history, "hasMoreHistory"),
+                    "Branch history keeps continuation available for empty matching pages");
+                history.Close();
+            }
         }
 
         private static void Require(bool value, string label)

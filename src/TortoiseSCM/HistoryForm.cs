@@ -16,6 +16,8 @@ namespace TortoiseSCM
         private readonly string path;
         private readonly string workspaceRoot;
         private readonly bool wholeWorkspace;
+        private readonly string branch;
+        private readonly string branchRepository;
         private readonly ListView revisions = new ListView();
         private readonly ListView changedFiles = new ListView();
         private readonly TextBox description = new TextBox();
@@ -46,10 +48,24 @@ namespace TortoiseSCM
         private readonly ToolStripMenuItem compareMarkedChangeset = new ToolStripMenuItem();
 
         public HistoryForm(PlasticClient client, string path, string workspaceRoot)
+            : this(client, path, workspaceRoot, null) { }
+
+        public HistoryForm(PlasticClient client, string path, string workspaceRoot, string branch)
+            : this(client, path, workspaceRoot, branch, null) { }
+
+        internal HistoryForm(PlasticClient client, string path, string workspaceRoot, string branch, string expectedRepository)
         {
             this.client = client;
             this.path = path;
             this.workspaceRoot = workspaceRoot;
+            this.branch = branch;
+            if (branch != null)
+            {
+                var workspace = client.DiscoverWorkspace(path);
+                if (workspace == null) throw new InvalidOperationException("工作区不存在。");
+                branchRepository = expectedRepository ?? workspace.Repository;
+                ValidateHistoryContext();
+            }
             wholeWorkspace = path.TrimEnd('\\', '/').Equals(workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
             Text = "历史记录 - TortoiseSCM";
             Font = SystemFonts.MessageBoxFont;
@@ -59,16 +75,18 @@ namespace TortoiseSCM
             AutoScaleMode = AutoScaleMode.Dpi;
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 5 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, branch == null ? 30 : 54));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = branch == null ? 1 : 2, Margin = Padding.Empty };
+            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            if (branch != null) header.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
-            header.Controls.Add(new Label { Text = "范围：" + path, Dock = DockStyle.Fill, AutoEllipsis = true,
+            header.Controls.Add(new Label { Text = branch == null ? "范围：" + path : "分支：" + branch, Dock = DockStyle.Fill, AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, Margin = new Padding(0, 0, 12, 3) }, 0, 0);
             header.Controls.Add(new Label { Text = "筛选(&F):", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 1, 0);
             filter.Dock = DockStyle.Fill;
@@ -76,6 +94,12 @@ namespace TortoiseSCM
             filter.Margin = new Padding(3, 2, 0, 4);
             filter.TextChanged += async delegate { await ApplyFilterAsync(); };
             header.Controls.Add(filter, 2, 0);
+            if (branch != null)
+            {
+                var branchScope = new Label { Name = "branchScope", Text = "范围：" + path, Dock = DockStyle.Fill, AutoEllipsis = true,
+                    TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, Margin = new Padding(0, 0, 0, 3) };
+                header.Controls.Add(branchScope, 0, 1); header.SetColumnSpan(branchScope, 3);
+            }
             layout.Controls.Add(header, 0, 0);
             // Follow IDD_LOGMESSAGE: revision list, commit message and changed paths,
             // separated by native splitters rather than framed panels or tabs.
@@ -213,8 +237,15 @@ namespace TortoiseSCM
             status.Text = wholeWorkspace ? "正在读取最多 50 个提交…" : "正在检查最多 50 个提交的路径；可随时取消…";
             try
             {
-                var page = await client.GetHistoryPageAsync(path, reset ? null : beforeChangeset, 50, cancellation.Token);
+                if (branch != null) ValidateHistoryContext();
+                var page = branch == null ? await client.GetHistoryPageAsync(path, reset ? null : beforeChangeset, 50, cancellation.Token) :
+                    await client.GetHistoryPageAsync(path, branch, reset ? null : beforeChangeset, 50, cancellation.Token);
                 if (cancellation.IsCancellationRequested) return;
+                if (branch != null)
+                {
+                    ValidateHistoryContext();
+                    if (page.Repository != branchRepository || page.Branch != branch) throw new InvalidOperationException("分支历史上下文已改变，请重新打开窗口。");
+                }
                 if (!reset && historyRepository != null && page.Repository != historyRepository) throw new InvalidOperationException("工作区仓库已改变，请刷新历史。");
                 // Publish the refreshed page only after success: failed or cancelled
                 // refreshes keep the visible history and its continuation cursor intact.
@@ -243,7 +274,8 @@ namespace TortoiseSCM
         {
             historySummary.Text = revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
                 " 个提交；" + (hasMoreHistory ? "更早历史尚未加载" : "已扫描全部历史") +
-                (wholeWorkspace ? "（筛选仅作用于已加载项）" : "（路径历史，不追溯重命名前的其他路径；筛选仅作用于已加载项）");
+                (branch != null ? "（仅本分支提交，不含祖先；空页仍可继续加载）" :
+                    (wholeWorkspace ? "（筛选仅作用于已加载项）" : "（路径历史，不追溯重命名前的其他路径；筛选仅作用于已加载项）"));
         }
 
         private async Task ApplyFilterAsync()
@@ -293,8 +325,10 @@ namespace TortoiseSCM
             detailRequest = cancellation;
             try
             {
+                if (branch != null) ValidateHistoryContext();
                 var details = await client.GetChangesetAsync(path, entry.Changeset, cancellation.Token);
                 if (cancellation.IsCancellationRequested || request != generation) return;
+                if (branch != null) ValidateHistoryContext();
                 foreach (var file in details.Files)
                     changedFiles.Items.Add(new ListViewItem(new[] { file.Status, file.Path, file.OldPath, file.ItemType }) { Tag = file });
                 status.Text = "cs:" + entry.Changeset + " · " + details.Files.Count + " 个更改项（完整提交）";
@@ -410,14 +444,15 @@ namespace TortoiseSCM
             // checks; existence is deliberately not required for deleted historical paths.
             var validated = client.Build(new PlasticCommandRequest { Command = PlasticCommand.History,
                 WorkingDirectory = workspaceRoot, Paths = new[] { localPath } });
-            return new HistoryForm(client, validated.Arguments[1], validated.WorkingDirectory);
+            return new HistoryForm(client, validated.Arguments[1], validated.WorkingDirectory, branch, branchRepository);
         }
 
         private void ValidateHistoryContext()
         {
             var current = client.DiscoverWorkspace(path);
             if (current == null || !current.RootPath.TrimEnd('\\', '/').Equals(workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
-                (historyRepository != null && current.Repository != historyRepository))
+                (historyRepository != null && current.Repository != historyRepository) ||
+                (branchRepository != null && current.Repository != branchRepository))
                 throw new InvalidOperationException("工作区或仓库已改变，请关闭并重新打开历史窗口。");
         }
 
@@ -445,6 +480,7 @@ namespace TortoiseSCM
             status.Text = "正在恢复历史版本…";
             try
             {
+                ValidateHistoryContext();
                 var result = switchSnapshot ? await client.SwitchAsync(path, entry.Changeset, lifetime.Token) :
                     await client.RollbackAsync(path, entry.Changeset, lifetime.Token);
                 status.Text = result.Succeeded ? "已完成。关闭历史窗口后可检查待定更改。" : "操作失败：" + result.Error;

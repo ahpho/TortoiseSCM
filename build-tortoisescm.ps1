@@ -81,6 +81,10 @@ if ($Test -or $Integration) {
         if (-not $branchManifest -or -not (Test-Path -LiteralPath $branchManifest)) { throw 'Branch setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-branches.txt'), $branchManifest)
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchIntegrationTests.ps1') -Manifest $branchManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        $branchCreationManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $branchCreationManifest -or -not (Test-Path -LiteralPath $branchCreationManifest)) { throw 'Branch creation setup did not produce a manifest.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-branch-create.txt'), $branchCreationManifest)
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchCreationIntegrationTests.ps1') -Manifest $branchCreationManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         $mergeIntegrationOutput = Join-Path $out 'MergeIntegrationTests.exe'
         & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$mergeIntegrationOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\MergeIntegrationTests.cs')
         if ($LASTEXITCODE -ne 0) { throw 'Merge integration test compilation failed.' }

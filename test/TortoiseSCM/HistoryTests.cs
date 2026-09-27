@@ -51,6 +51,26 @@ internal static class HistoryTests
             Check(file.Items.First().Comment == "publish rollback using old revision", "Rollback publication metadata retained independently of revision creation");
             var upper = client.GetHistoryPageAsync(Path.Combine(temporary, "FOLDER", "FILE.TXT"), 8, 7, Token).GetAwaiter().GetResult();
             Check(upper.Items.Count == file.Items.Count, "Windows path matching remains case insensitive");
+            var branchFirst = client.GetHistoryPageAsync(temporary, "/main", 8, 2, Token).GetAwaiter().GetResult();
+            Check(branchFirst.Branch == "/main" && branchFirst.Items.Select(i => i.Changeset).SequenceEqual(new long[] { 7 }) && branchFirst.ScannedChangesets == 2 && branchFirst.NextBeforeChangeset == 6,
+                "Branch history filters exact branch while retaining global scan budget and cursor");
+            var emptyBranchPage = client.GetHistoryPageAsync(temporary, "/main/topic", 8, 1, Token).GetAwaiter().GetResult();
+            Check(emptyBranchPage.Items.Count == 0 && emptyBranchPage.HasMore && emptyBranchPage.NextBeforeChangeset == 7 && emptyBranchPage.ScannedChangesets == 1, "Sparse branch empty page advances global cursor");
+            var branchNext = client.GetHistoryPageAsync(temporary, "/main/topic", emptyBranchPage.NextBeforeChangeset, 1, Token).GetAwaiter().GetResult();
+            Check(branchNext.Items.Single().Changeset == 6, "Sparse branch continuation finds next matching publication");
+            var branchClient = new PlasticClient(new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location });
+            int branchDiffBefore = DiffCount(temporary);
+            var branchPath = branchClient.GetHistoryPageAsync(Path.Combine(temporary, "folder", "file.txt"), "/main/topic", 8, 7, Token).GetAwaiter().GetResult();
+            Check(branchPath.Items.Select(i => i.Changeset).SequenceEqual(new long[] { 4, 2 }), "Branch and path filters intersect, including ancestor deletion");
+            Check(DiffCount(temporary) == branchDiffBefore + 3, "Other-branch changesets never trigger file diff calls");
+            var quotedBranch = client.GetHistoryPageAsync(temporary, "/main/quoted '中文'", 8, 7, Token).GetAwaiter().GetResult();
+            Check(quotedBranch.Items.Single().Changeset == 3, "Quoted Unicode branch names match literally");
+            Check(File.ReadAllLines(Log(temporary)).Where(line => line.StartsWith("find changeset ")).All(line => !line.Contains("quoted") && !line.Contains("branch =")), "Branch names never enter native changeset find expressions");
+            Reject(() => client.GetHistoryPageAsync(temporary, "/missing", null, 2, Token).GetAwaiter().GetResult(), "Missing history branch fails before returning incomplete result");
+            Reject(() => client.GetHistoryPageAsync(temporary, "/main@foreign", null, 2, Token).GetAwaiter().GetResult(), "Foreign repository branch spec rejected");
+            Reject(() => client.GetHistoryPageAsync(temporary, "", null, 2, Token).GetAwaiter().GetResult(), "Empty branch cannot silently remove filter");
+            Check(first.Branch == null, "Legacy history overload remains all branches");
+            Check(!client.GetHistoryPageAsync(temporary, "/main/topic", 0, 2, Token).GetAwaiter().GetResult().HasMore, "Branch zero cursor validates branch then terminates");
             cached = DiffCount(temporary);
             File.WriteAllText(selector, "repository \"another@server:8087\"");
             client.GetHistoryPageAsync(Path.Combine(temporary, "folder"), 8, 2, Token).GetAwaiter().GetResult();
@@ -120,6 +140,16 @@ internal static class HistoryTests
         Console.OutputEncoding = new UTF8Encoding(false);
         string root = Environment.CurrentDirectory;
         File.AppendAllText(Log(root), String.Join(" ", args) + "\n");
+        if (args[0] == "status")
+        {
+            Console.WriteLine(new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", 7),
+                new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("WkConfigName", "/main@test@server:8087"))); return 0;
+        }
+        if (args[0] == "find" && args[1] == "branch")
+        {
+            Console.WriteLine(new XElement("PLASTICQUERY", new[] { "/main", "/main/topic", "/main/quoted '中文'" }.Select(name => new XElement("BRANCH", new XElement("NAME", name),
+                new XElement("PARENT", name == "/main" ? "" : "/main"), new XElement("CHANGESET", 7), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087"))))); return 0;
+        }
         if (args[0] == "find")
         {
             if (File.Exists(Path.Combine(root, ".plastic", "find-slow")))
@@ -132,7 +162,7 @@ internal static class HistoryTests
             var ids = Enumerable.Range(0, top + 1).Reverse().Where(i => !before.Success || i < Int32.Parse(before.Groups[1].Value)).Take(Int32.Parse(limit.Groups[1].Value)).ToList();
             if (File.Exists(Path.Combine(root, ".plastic", "bad-page"))) ids = new List<int> { 999 };
             Console.WriteLine(new XElement("PLASTICQUERY", ids.Select(i => new XElement("CHANGESET", new XElement("CHANGESETID", i),
-                new XElement("COMMENT", i == 7 ? "publish rollback using old revision" : "commit " + i), new XElement("BRANCH", "/main"))))); return 0;
+                new XElement("COMMENT", i == 7 ? "publish rollback using old revision" : "commit " + i), new XElement("BRANCH", i == 3 ? "/main/quoted '中文'" : i % 2 == 0 ? "/main/topic" : "/main"))))); return 0;
         }
         if (args[0] == "diff")
         {

@@ -57,6 +57,82 @@ namespace TortoiseSCM
             return selected.HeadChangeset;
         }
 
+        // Server metadata only: a child branch starts at an explicitly chosen immutable
+        // changeset. Creating it never switches, updates or checks in this workspace.
+        public Task<PlasticCommandResult> CreateBranchAsync(string path, string branch, long changeset, string comment, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            // Capture before any asynchronous discovery: callers must not silently
+            // target a different repository selected while the read task is queued.
+            var workspace = DiscoverWorkspace(path);
+            if (workspace == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
+            return CreateBranchAsync(path, branch, changeset, comment, workspace.Repository, workspace.Selector, token);
+        }
+
+        public async Task<PlasticCommandResult> CreateBranchAsync(string path, string branch, long changeset, string comment,
+            string expectedRepository, string expectedSelector, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            ValidateBranchName(branch); ValidateChangeset(changeset);
+            if (branch.IndexOfAny(new[] { ':', '?', '\'' }) >= 0)
+                throw new ArgumentException("New branch names cannot contain a colon, question mark or apostrophe.");
+            if (String.IsNullOrWhiteSpace(comment) || comment.Any(c => Char.IsControl(c) && c != '\r' && c != '\n' && c != '\t'))
+                throw new ArgumentException("Provide a nonempty branch comment without control characters. This prevents an external comment editor from opening.");
+            int separator = branch.LastIndexOf('/');
+            if (separator <= 0) throw new ArgumentException("Create branch requires a child of an existing branch, such as /main/task.");
+            string parent = branch.Substring(0, separator);
+            ValidateBranchRepository(expectedRepository);
+            if (expectedSelector == null) throw new ArgumentNullException("expectedSelector");
+            var original = DiscoverWorkspace(path);
+            if (original == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
+            var workspace = new PlasticWorkspace { RootPath = original.RootPath, Repository = expectedRepository, Selector = expectedSelector };
+            ValidateBranchWorkspaceUnchanged(workspace);
+            var command = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
+            ValidateBranchWorkspaceUnchanged(workspace);
+            string root = command.WorkingDirectory;
+            if (!SamePath(root, workspace.RootPath)) throw new InvalidOperationException("The workspace root changed during branch creation preparation.");
+            using (var structureGate = StructureGate(root)) using (var mergeGate = OpenMergeGate(root))
+            {
+                ValidateBranchWorkspaceUnchanged(workspace);
+                var branches = await GetBranchesAsync(root, token).ConfigureAwait(false);
+                if (branches.Any(item => item.Name == branch)) throw new ArgumentException("That branch already exists. Refresh and choose a different name.");
+                if (!branches.Any(item => item.Name == parent)) throw new ArgumentException("The new branch's parent does not exist. Refresh and choose an existing parent.");
+                string source = "cs:" + changeset.ToString(CultureInfo.InvariantCulture) + "@" + workspace.Repository;
+                var logged = await ExecuteAsync(RevisionCommand(root, new[] { "log", source, "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
+                RequireSuccess(logged);
+                var log = SafeXml.Load(logged.Output);
+                long number;
+                if (log.Root == null || log.Root.Name != "LogList" || log.Root.Elements().Count() != 1 ||
+                    log.Root.Elements("Changeset").Count() != 1 || !Int64.TryParse((string)log.Root.Element("Changeset").Element("ChangesetId"), out number) || number != changeset)
+                    throw new InvalidDataException("The source does not identify the requested changeset in the captured repository.");
+                ValidateBranchWorkspaceUnchanged(workspace);
+                token.ThrowIfCancellationRequested();
+                const string advisory = " The server branch may already exist. Refresh branches before retrying; no automatic branch deletion or workspace switch was performed.";
+                try
+                {
+                    var result = await ExecuteAsync(RevisionCommand(root, new[] { "branch", "create", "br:" + branch + "@" + workspace.Repository,
+                        "--changeset=" + source, "-c=" + comment }), token).ConfigureAwait(false);
+                    if (!result.Succeeded) result.Error += advisory;
+                    else
+                    {
+                        try
+                        {
+                            ValidateBranchWorkspaceUnchanged(workspace);
+                            var created = (await GetBranchesAsync(root, token).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch);
+                            if (created == null || created.Parent != parent || created.HeadChangeset != changeset)
+                                throw new InvalidOperationException("The new branch's parent or initial head could not be verified.");
+                            ValidateBranchWorkspaceUnchanged(workspace);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception error) { result.ExitCode = 1; result.Error += "Branch creation verification failed: " + error.Message + advisory; }
+                    }
+                    return result;
+                }
+                catch (OperationCanceledException error) { throw new OperationCanceledException("Branch creation or verification was cancelled." + advisory, error, token); }
+                catch (Exception error) { throw new InvalidOperationException("Branch creation did not finish reliably." + advisory, error); }
+            }
+        }
+
         public async Task<PlasticCommandResult> SwitchBranchAsync(string root, string branch, CancellationToken token)
         {
             ValidateBranchName(branch);

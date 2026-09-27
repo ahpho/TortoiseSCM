@@ -17,15 +17,19 @@ namespace TortoiseSCM
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
-            "          locks, unlock, cache-refresh, history-page, branches, branch-head, switch-branch\r\n" +
+            "          locks, unlock, cache-refresh, history-page, branches, branch-head, switch-branch, create-branch\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
-            "Paged history: history-page --path <scope> [--before <exclusive-changeset>] [--limit <1..100>]\r\n" +
+            "Paged history: history-page --path <scope> [--branch </main/name>] [--before <exclusive-changeset>] [--limit <1..100>]\r\n" +
             "  Default scan limit is 50; path pages may be empty with older history still available.\r\n" +
+            "  Branch filters scan global pages and match exact published branch names, excluding inherited ancestor commits.\r\n" +
             "rollback restores selected content as pending changes; switch replaces the whole workspace revision.\r\n" +
             "Branches: branches --path <workspace>; branch-head --path <workspace> --branch </main/name>\r\n" +
             "  switch-branch --path <root> --branch </main/name> --yes (clean Standard workspaces only)\r\n" +
+            "  create-branch --path <workspace> --branch </main/new> --changeset N --comment <text> --yes\r\n" +
+            "  A nonempty creation comment is required; --commentsfile <UTF-8-file> can replace --comment.\r\n" +
+            "  Creation writes repository metadata only; it never switches the workspace and supports Partial workspaces.\r\n" +
             "  Resolve branch-head first, then pass its fixed changeset to merge-preview or merge-start.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
             "Compare file: diff-history --path <workspace> --item </repository/file> --from N --to N [--from-item </old/file>] [--external]\r\n" +
@@ -56,7 +60,7 @@ namespace TortoiseSCM
             "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
             "Settings: --diff-tool <exe> --diff-args <template> --merge-tool <exe> --merge-args <template>\r\n" +
             "          --settings-file <file> (optional isolated configuration); no tool options reads settings.\r\n" +
-            "Write commands require --yes. Checkin requires a nonempty comment.\r\n" +
+            "Write commands require --yes. Checkin and create-branch require a nonempty comment.\r\n" +
             "Exit codes: 0 success; 1 SCM/runtime error; 2 invalid arguments; 124 timeout.\r\n" +
             "--json writes exactly one UTF-8 JSON object to stdout, including errors.\r\n" +
             "Timeout applies to each cm process. Paths must belong to one workspace.";
@@ -148,6 +152,14 @@ namespace TortoiseSCM
                 response.data = new { workspace = new { rootPath = selectedWorkspace.RootPath, name = selectedWorkspace.Name,
                     repository = selectedWorkspace.Repository, selector = selectedWorkspace.Selector, isPartial = selectedWorkspace.IsPartial },
                     branch = options.Branch, operation = "switch-branch" };
+                return;
+            }
+            if (options.Command == "create-branch")
+            {
+                SetResult(response, client.CreateBranchAsync(options.Paths[0], options.Branch, options.Changeset.Value, options.Comment,
+                    workspace.Repository, workspace.Selector, CancellationToken.None).GetAwaiter().GetResult());
+                if (response.exitCode != 0) return;
+                response.data = new { workspace = workspaceData, branch = options.Branch, changeset = options.Changeset.Value, operation = "create-branch" };
                 return;
             }
             if (options.Command == "cache-refresh")
@@ -383,8 +395,8 @@ namespace TortoiseSCM
             }
             if (options.Command == "history-page")
             {
-                var page = client.GetHistoryPageAsync(options.Paths[0], options.Before, options.Limit ?? 50, CancellationToken.None).GetAwaiter().GetResult();
-                response.data = new { workspace = workspaceData, repository = page.Repository, scope = page.Scope,
+                var page = client.GetHistoryPageAsync(options.Paths[0], options.Branch, options.Before, options.Limit ?? 50, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, repository = page.Repository, scope = page.Scope, branch = page.Branch,
                     scannedChangesets = page.ScannedChangesets, hasMore = page.HasMore, nextBeforeChangeset = page.NextBeforeChangeset,
                     entries = page.Items.Select(entry => new { path = entry.Path, revisionSpec = entry.RevisionSpec, changeset = entry.Changeset,
                         creationDate = entry.CreationDate, owner = entry.Owner, branch = entry.Branch, comment = entry.Comment, repository = entry.Repository }).ToArray() };
@@ -393,6 +405,7 @@ namespace TortoiseSCM
                 response.output += Environment.NewLine + "Scanned " + page.ScannedChangesets + " changesets; " + page.Items.Count + " matched. " +
                     (page.HasMore ? "Older history remains; continue with --before " + page.NextBeforeChangeset.Value.ToString(CultureInfo.InvariantCulture) + "." : "No older history remains.");
                 if (page.Scope != "/") response.output += Environment.NewLine + "Path publication history includes rollback commits; it does not follow renamed items through their older paths.";
+                if (options.Branch != null) response.output += Environment.NewLine + "Branch " + options.Branch + ": exact published branch matches only; inherited ancestor commits are excluded.";
                 return;
             }
             if (options.Command == "history")
@@ -669,20 +682,21 @@ namespace TortoiseSCM
             }
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
-                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-head", "switch-branch",
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-head", "switch-branch", "create-branch",
                 "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
-            bool branchCommand = new[] { "branches", "branch-head", "switch-branch" }.Contains(options.Command);
-            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch";
+            bool branchCommand = new[] { "branches", "branch-head", "switch-branch", "create-branch" }.Contains(options.Command);
+            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "create-branch";
             if (branchCommand && options.Paths.Count != 1) throw new ArgumentException("Branch commands require exactly one workspace path.");
-            if (branchTarget != (options.Branch != null)) throw new ArgumentException("--branch is required only for branch-head and switch-branch.");
-            if (branchTarget && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
+            if ((branchTarget && options.Branch == null) || (!branchTarget && options.Command != "history-page" && options.Branch != null))
+                throw new ArgumentException("--branch is required for branch-head, switch-branch and create-branch, and optional for history-page.");
+            if (options.Branch != null && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
             if ((options.Command == "branches" || options.Command == "branch-head") && yes) throw new ArgumentException("Read-only branch commands do not accept --yes.");
             bool partialWorkflow = options.Command.StartsWith("partial-conflict", StringComparison.Ordinal);
             bool structureWorkflow = options.Command.StartsWith("partial-structure-", StringComparison.Ordinal);
@@ -714,7 +728,7 @@ namespace TortoiseSCM
             if ((options.Command == "locks" || options.Command == "unlock") && options.Paths.Count != 1) throw new ArgumentException("Lock operations require exactly one workspace root.");
             bool mergeWorkflow = options.Command.StartsWith("merge-", StringComparison.Ordinal);
             bool conflictFile = partialFile || options.Command == "partial-structure-prepare" || options.Command == "partial-directory-prepare" || options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
-            bool needsChangeset = new[] { "changeset", "rollback", "switch", "export", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
+            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "export", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
             if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("This command " + (needsChangeset ? "requires" : "does not accept") + " --changeset.");
             if (needsChangeset && options.Paths.Count != 1) throw new ArgumentException("Select exactly one file or directory scope for this command.");
             if (mergeWorkflow && options.Paths.Count != 1) throw new ArgumentException("Workspace merge operations require exactly one explicit workspace root.");
@@ -739,8 +753,8 @@ namespace TortoiseSCM
             if (options.Command == "merge" && (options.Base == null || options.Local == null || options.Remote == null || options.Output == null))
                 throw new ArgumentException("Merge requires --base, --local, --remote and --output.");
             if (options.Comment != null && commentsFile != null) throw new ArgumentException("Use either --comment or --commentsfile.");
-            if ((options.Comment != null || commentsFile != null) && options.Command != "checkin")
-                throw new ArgumentException("Comments are valid only for checkin.");
+            if ((options.Comment != null || commentsFile != null) && options.Command != "checkin" && options.Command != "create-branch")
+                throw new ArgumentException("Comments are valid only for checkin and create-branch.");
             if (options.Recursive && options.Command != "add" && options.Command != "checkout" && options.Command != "undo")
                 throw new ArgumentException("--recursive is supported for add, checkout and undo only.");
             if (commentsFile != null)
@@ -751,6 +765,7 @@ namespace TortoiseSCM
                 catch (DecoderFallbackException) { throw new ArgumentException("The comments file must be UTF-8."); }
             }
             if (options.Command == "checkin" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("Checkin requires a nonempty comment.");
+            if (options.Command == "create-branch" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("create-branch requires a nonempty --comment or --commentsfile.");
             return options;
         }
 

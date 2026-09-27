@@ -13,6 +13,7 @@ namespace TortoiseSCM
     {
         public string Repository { get; set; }
         public string Scope { get; set; }
+        public string Branch { get; set; }
         public IList<PlasticHistoryItem> Items { get; set; }
         public int ScannedChangesets { get; set; }
         public bool HasMore { get; set; }
@@ -30,17 +31,27 @@ namespace TortoiseSCM
         // creation history: publishing an old revision through rollback still appears.
         // Each request scans at most scanLimit changesets, even when none match the path.
         // Cursor pagination is stable when newer commits arrive; refresh starts at head.
-        public async Task<PlasticHistoryPage> GetHistoryPageAsync(string path, long? beforeChangeset, int scanLimit, CancellationToken cancellationToken)
+        public Task<PlasticHistoryPage> GetHistoryPageAsync(string path, long? beforeChangeset, int scanLimit, CancellationToken cancellationToken)
+        { return GetHistoryPageAsync(path, null, beforeChangeset, scanLimit, cancellationToken); }
+
+        public async Task<PlasticHistoryPage> GetHistoryPageAsync(string path, string branch, long? beforeChangeset, int scanLimit, CancellationToken cancellationToken)
         {
             if (scanLimit < 1 || scanLimit > 100) throw new ArgumentOutOfRangeException("scanLimit", "Scan between 1 and 100 changesets per page.");
             if (beforeChangeset.HasValue && beforeChangeset.Value < 0) throw new ArgumentOutOfRangeException("beforeChangeset");
+            if (branch != null) ValidateBranchName(branch);
             var validated = await BuildReadCommandAsync(path, cancellationToken).ConfigureAwait(false);
             string root = validated.WorkingDirectory;
             string absolute = validated.Arguments[1];
             var workspace = DiscoverWorkspace(root);
             if (String.IsNullOrWhiteSpace(workspace.Repository)) throw new InvalidDataException("Workspace selector does not identify a repository.");
+            if (branch != null)
+            {
+                if (!(await GetBranchesAsync(root, cancellationToken).ConfigureAwait(false)).Any(item => item.Name == branch))
+                    throw new ArgumentException("The selected history branch no longer exists. Refresh the branch list.");
+                ValidateHistoryRepository(root, workspace.Repository);
+            }
             string scope = SamePath(absolute, root) ? "/" : "/" + absolute.Substring(root.TrimEnd('\\', '/').Length).TrimStart('\\', '/').Replace('\\', '/');
-            var page = new PlasticHistoryPage { Repository = workspace.Repository, Scope = scope, Items = new List<PlasticHistoryItem>() };
+            var page = new PlasticHistoryPage { Repository = workspace.Repository, Scope = scope, Branch = branch, Items = new List<PlasticHistoryItem>() };
             if (beforeChangeset == 0) return page;
             string query = (beforeChangeset.HasValue ? "where changesetid < " + beforeChangeset.Value.ToString(CultureInfo.InvariantCulture) + " " : "") +
                 "order by changesetid desc limit " + (scanLimit + 1).ToString(CultureInfo.InvariantCulture);
@@ -53,13 +64,16 @@ namespace TortoiseSCM
             foreach (var item in candidates.Take(scanLimit))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                page.ScannedChangesets++;
+                // Keep the global scan/cursor bounded even when this branch is sparse.
+                // Branch names never enter a find expression, including quoted names.
+                if (branch != null && !String.Equals(item.Branch, branch, StringComparison.Ordinal)) continue;
                 bool matches = scope == "/";
                 if (!matches)
                 {
                     var files = await HistoryFilesCachedAsync(root, workspace.Repository, item.Changeset, cancellationToken).ConfigureAwait(false);
                     matches = files.Any(file => HistoryPathMatches(file, scope));
                 }
-                page.ScannedChangesets++;
                 if (matches) { item.Path = absolute; item.Repository = workspace.Repository; page.Items.Add(item); }
             }
             ValidateHistoryRepository(root, workspace.Repository);

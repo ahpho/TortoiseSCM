@@ -1,5 +1,15 @@
 # TortoiseSCM 验证记录
 
+## 子分支创建与精确分支历史（2026-09-27）
+
+- 分支列表右键新增创建子分支及本分支历史。创建对话框参考原生分支创建布局，明确父分支、固定起点、短名称和必填说明，完成后选中新分支；不自动切换、签入或加载文件。CLI 新增 `create-branch --branch ... --changeset N --comment ... --yes`，支持 Standard/Partial。
+- `history-page --branch` 及历史窗口精确筛选分支自身发布的提交，并与路径范围取交集；不混入继承自祖先的提交。保持每页全仓扫描预算和游标，其他分支不做文件差异查询，空页仍可继续。历史文件右键打开路径历史时保留分支过滤。
+- 创建前后固定仓库和 selector；审查补齐首次异步工作区发现前的上下文捕获，以及 GUI 到后端的显式预期上下文传递，防止窗口打开后外部切换仓库而在另一仓库创建分支。网络失败、取消或后置验证失败时明确提示服务器分支可能已经存在，不自动删除或重复提交。
+- 原生首次实测发现分支短名禁止单引号、冒号和问号，已在 GUI/后端创建前拒绝；中文、空格及 `&` 可用。通用读取的合成引号名称测试仍保留，用于验证分支过滤不拼接查询表达式。创建说明要求非空，避免本机 `PLASTICEDITOR` 在空说明时打开外部编辑器。
+- 独立 fixture `qa/integration-20260927-110239-853c930c/`：历史基线 cs:691、较新父分支 cs:692，公开 EXE 创建子分支后验证旧版本树；子分支提交 cs:693/694，父分支无关提交 cs:695。最终候选 EXE 的 30 项真实检查通过（`qa/branch-creation-final-live.log`、fixture 下 `branch-creation-results.json`），覆盖多行中文说明、重复/非法名称、缺少确认、脏工作树保留、Partial 加载元数据保留、自身提交/空页游标/不存在于当前树的目录过滤。测试结束干净并恢复隔离父分支。
+- 完整 `build-tortoisescm.ps1 -Test -Workspace <producer>` 通过（`qa/branch-creation-full-build.log`），含最终 Core 的 83 项分支、39 项历史分页以及其他后端/Shell/GUI；当时 CLI 为 1662 项。其后 CLI 也显式传入首次捕获的上下文，并增加首次 status 期间 selector 改变的拒绝检查；分支历史标题补齐独立的路径范围行。真实子分支的 16 项 UI 定向检查通过（`qa/branch-creation-live-ui.log`），普通/最小截图可见 cs:693/694 与选中提交的文件明细；创建窗口包含成功/失败 mock、不可重复提交及异步上下文检查。
+- 最终程序重新构建（`qa/branch-creation-shipping-build.log`）后通过 1668 项 CLI（`qa/branch-creation-shipping-cli.log`）、260 项完整 GUI（`qa/branch-creation-shipping-ui.log`），以及包/隔离安装/卸载 44 项（`qa/branch-creation-package.log`）。创建与历史窗口均使用原生 WinForms 控件并检查普通/最小尺寸；不声称真人 Explorer 点击、多 DPI 或分支图验收。
+
 ## 分支浏览、安全切换与合并入口（2026-09-27）
 
 - 新增原生双窗格分支窗口及 `branches`、`branch-head`、`switch-branch` CLI。支持筛选、刷新/取消、当前分支和头提交文件详情；合并入口先解析固定 changeset，再进入既有预检/确认/解决/提交流程。

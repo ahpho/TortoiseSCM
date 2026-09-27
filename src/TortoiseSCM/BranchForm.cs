@@ -27,6 +27,8 @@ namespace TortoiseSCM
         private readonly Button merge = DialogStyle.Button("合并到当前…");
         private readonly Button switchBranch = DialogStyle.Button("切换工作区…");
         private readonly Button close = DialogStyle.Button("关闭");
+        private readonly ToolStripMenuItem createChild = new ToolStripMenuItem("创建子分支…");
+        private readonly ToolStripMenuItem branchHistory = new ToolStripMenuItem("显示本分支历史…");
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private CancellationTokenSource request;
         private IList<PlasticBranch> entries = new List<PlasticBranch>();
@@ -64,6 +66,11 @@ namespace TortoiseSCM
             branches.AccessibleName = "仓库分支列表";
             branches.SelectedIndexChanged += delegate { files.Items.Clear(); description.Clear(); UpdateButtons(); };
             branches.DoubleClick += async delegate { await ShowHeadAsync(); };
+            var menu = new ContextMenuStrip(); menu.Items.Add(branchHistory); menu.Items.Add(createChild);
+            branchHistory.Click += delegate { OpenBranchHistory(); };
+            createChild.Click += async delegate { await OpenCreateAsync(); };
+            menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { UpdateButtons(); e.Cancel = busy || SelectedBranch() == null; };
+            branches.ContextMenuStrip = menu;
             split.Panel1.Controls.Add(branches);
             var detail = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
             detail.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 66)); detail.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -104,6 +111,7 @@ namespace TortoiseSCM
             refresh.Enabled = filter.Enabled = branches.Enabled = !busy;
             cancel.Enabled = busy && !writing; close.Enabled = !writing;
             head.Enabled = !busy && selected != null;
+            branchHistory.Enabled = createChild.Enabled = !busy && selected != null;
             merge.Enabled = switchBranch.Enabled = !busy && !partial && selected != null && !selected.IsCurrent;
         }
 
@@ -137,7 +145,7 @@ namespace TortoiseSCM
                 if (result.Any(branch => branch.Repository != repository)) throw new InvalidOperationException("分支仓库不匹配。");
                 partial = workspace.IsPartial; entries = result;
                 loaded = true;
-                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：仅浏览，不能切换或合并）" : "（Standard）");
+                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：可浏览及创建分支，不能切换或合并）" : "（Standard）");
             }, false);
             if (!lifetime.IsCancellationRequested && loaded) RenderBranches();
         }
@@ -154,7 +162,7 @@ namespace TortoiseSCM
                     if (text.Length > 0 && !values.Any(value => (value ?? "").IndexOf(text, StringComparison.CurrentCultureIgnoreCase) >= 0)) continue;
                     branches.Items.Add(new ListViewItem(values) { Tag = entry });
                 }
-                status.Text = branches.Items.Count + " / " + entries.Count + " 个分支。选择分支后可查看头提交详情。";
+                status.Text = branches.Items.Count + " / " + entries.Count + " 个分支。右键可显示本分支历史或创建子分支。";
             }
             finally { branches.EndUpdate(); UpdateButtons(); }
         }
@@ -203,6 +211,52 @@ namespace TortoiseSCM
             // The constructor checks the same expected values again, covering a
             // selector change between the preceding check and dialog construction.
             return new MergeForm(client, root, changeset, selected.Name, expectedRepository, expectedSelector);
+        }
+
+        private HistoryForm CreateBranchHistoryDialog()
+        {
+            ValidateContext(); var selected = SelectedBranch();
+            if (busy || selected == null) throw new InvalidOperationException("请先选择分支。");
+            return new HistoryForm(client, root, root, selected.Name, repository);
+        }
+
+        private void OpenBranchHistory()
+        {
+            if (!branchHistory.Enabled) return;
+            try { using (var dialog = CreateBranchHistoryDialog()) dialog.ShowDialog(this); }
+            catch (Exception ex) { status.Text = "无法打开分支历史：" + ex.Message; }
+        }
+
+        private async Task OpenCreateAsync()
+        {
+            if (!createChild.Enabled) return;
+            var selected = SelectedBranch(); BranchCreateForm dialog = null;
+            await WorkAsync(async token => {
+                var workspace = await client.GetWorkspaceAsync(root, token); ValidateContext();
+                dialog = await CreateChildDialogAsync(workspace, selected, token, client.ResolveBranchHeadAsync);
+            }, false);
+            if (dialog == null) return;
+            string created = null;
+            using (dialog) {
+                if (lifetime.IsCancellationRequested) return;
+                if (dialog.ShowDialog(this) == DialogResult.OK) created = dialog.CreatedBranch;
+            }
+            if (created == null) return;
+            filter.Clear(); await LoadAsync();
+            foreach (ListViewItem row in branches.Items)
+                if (((PlasticBranch)row.Tag).Name == created) { row.Selected = true; row.EnsureVisible(); break; }
+        }
+
+        private async Task<BranchCreateForm> CreateChildDialogAsync(PlasticWorkspace destination, PlasticBranch selected,
+            CancellationToken token, Func<string, string, CancellationToken, Task<long>> resolveHead)
+        {
+            string expectedRepository = destination.Repository, expectedSelector = destination.Selector;
+            ValidateContext();
+            long changeset = await resolveHead(root, selected.Name, token);
+            token.ThrowIfCancellationRequested(); ValidateContext();
+            // Constructor compares the pre-resolution context again rather than
+            // capturing whatever workspace happens to be current after the await.
+            return new BranchCreateForm(client, root, expectedRepository, expectedSelector, selected.Name, changeset);
         }
 
         private async Task SwitchAsync()
