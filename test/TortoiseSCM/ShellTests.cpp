@@ -160,8 +160,8 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     Selection file({(first / L"child/file.txt").native()});
     require(SUCCEEDED(initialize->Initialize(nullptr, &file, nullptr)), "registered file initialization");
     HMENU menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 21, "registered file menu exposes all single-item commands");
-    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 21, "registered submenu structure");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 22, "registered file menu exposes all single-item commands");
+    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 22, "registered submenu structure");
     require(GetMenuItemID(GetSubMenu(menu, 0), 0) == 400 && GetMenuItemID(GetSubMenu(menu, 0), 9) == 409, "registered menu command IDs");
     wchar_t verb[80]{};
     require(SUCCEEDED(context->GetCommandString(6, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
@@ -170,6 +170,8 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
         wcscmp(verb, L"tortoisescm.branches") == 0, "registered branches canonical verb");
     require(SUCCEEDED(context->GetCommandString(20, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.shelves") == 0, "registered shelves canonical verb");
+    require(SUCCEEDED(context->GetCommandString(21, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+        wcscmp(verb, L"tortoisescm.blame") == 0, "registered blame canonical verb");
     char ansiVerb[80]{};
     require(SUCCEEDED(context->GetCommandString(7, GCS_VERBA, nullptr, ansiVerb, ARRAYSIZE(ansiVerb))) &&
         strcmp(ansiVerb, "tortoisescm.history") == 0, "registered ANSI canonical verb");
@@ -261,13 +263,14 @@ int wmain(int argc, wchar_t** argv) {
     Selection one({(first / L"child/file.txt").native()});
     require(SUCCEEDED(shell->Initialize(nullptr, &one, nullptr)), "single file init");
     auto menu = CreatePopupMenu();
-    require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 21, "single file exposes all commands");
+    require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 22, "single file exposes all commands");
     wchar_t verb[80]{};
     require(SUCCEEDED(shell->GetCommandString(6, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.diff") == 0, "diff canonical verb");
     require(SUCCEEDED(shell->GetCommandString(10, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.move") == 0, "move canonical verb");
     require(SUCCEEDED(shell->GetCommandString(18, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.recover") == 0, "recover canonical verb");
     require(SUCCEEDED(shell->GetCommandString(19, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.branches") == 0, "branches canonical verb");
     require(SUCCEEDED(shell->GetCommandString(20, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.shelves") == 0, "shelves canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(21, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.blame") == 0, "blame canonical verb");
     DestroyMenu(menu);
     Selection multi({(first / L"child/file.txt").native(), (first / L"child/second.txt").native()});
     shell->Initialize(nullptr, &multi, nullptr); menu = CreatePopupMenu();
@@ -276,7 +279,8 @@ int wmain(int argc, wchar_t** argv) {
     require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL))==0, "cross workspace excluded"); DestroyMenu(menu);
     PIDLIST_ABSOLUTE pidl{}; SHParseDisplayName(first.c_str(),nullptr,&pidl,0,nullptr);
     shell->Initialize(pidl,nullptr,nullptr); CoTaskMemFree(pidl); menu=CreatePopupMenu();
-    require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL))==20, "directory background menu"); DestroyMenu(menu);
+    const auto directoryCount = HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL));
+    require(directoryCount==20, "directory background menu"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_DEFAULTONLY))==0, "default-only query ignored"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,102,CMF_NORMAL))==3, "command id limit respected"); DestroyMenu(menu);
     require(DllCanUnloadNow()==S_FALSE,"COM objects keep DLL loaded"); shell->Release();

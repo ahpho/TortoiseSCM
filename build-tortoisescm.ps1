@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'ShelvesTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -49,6 +49,13 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'CLI test compilation failed.' }
     & $cliOutput (Join-Path $out 'TortoiseSCM.exe')
     if ($LASTEXITCODE -ne 0) { throw 'CLI black-box tests failed.' }
+    $blameCliOutput = Join-Path $out 'BlameCliTests.exe'
+    $blameCliSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+    $blameCliSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BlameCliTests.cs'
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Web.Extensions.dll "/out:$blameCliOutput" $blameCliSources
+    if ($LASTEXITCODE -ne 0) { throw 'Blame CLI test compilation failed.' }
+    & $blameCliOutput (Join-Path $out 'TortoiseSCM.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Blame CLI tests failed.' }
     & $msbuild (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShellTests.vcxproj') /nologo /verbosity:minimal "/p:Configuration=$Configuration" /p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw 'Shell test compilation failed.' }
     & (Join-Path $out 'ShellTests.exe')

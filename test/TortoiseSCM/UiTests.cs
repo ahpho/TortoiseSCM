@@ -81,6 +81,7 @@ namespace TortoiseSCM
                 CheckBranchCreationDialogs(artifacts);
                 CheckBranchTree(artifacts);
                 CheckShelvesDialogs(artifacts);
+                CheckBlameDialog(artifacts);
                 if (args.Length > 1)
                 {
                     CheckBranches(artifacts, args[1]);
@@ -1277,6 +1278,21 @@ namespace TortoiseSCM
                     Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Live shelves " + field + " fits at minimum size");
                 }
                 Save(form, Path.Combine(artifacts, "shelves-live-minimum.png"));
+            }
+        }
+
+        private static void CheckBlameDialog(string artifacts)
+        {
+            string path = Path.Combine(artifacts, "blame-fixture.txt");
+            using (var form = new BlameForm(new PlasticClient(PlasticClientConfig.Load()), path, artifacts))
+            {
+                var list = (ListView)Field(form, "lines");
+                Require(list.Columns.Count == 6 && list.Columns[0].Text == "Line" && list.Columns[5].Text == "Content",
+                    "Blame dialog uses Tortoise-style line metadata columns");
+                Require(((Button)Field(form, "refresh")).Enabled && !((Button)Field(form, "cancel")).Enabled,
+                    "Blame dialog starts idle with refresh enabled");
+                form.Size = form.MinimumSize; form.CreateControl(); Application.DoEvents();
+                Save(form, Path.Combine(artifacts, "blame-minimum.png"));
             }
         }
 

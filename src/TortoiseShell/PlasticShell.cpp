@@ -48,7 +48,8 @@ constexpr Command commands[] = {
     {L"rollback", L"Rollback to historical version...", L"\u56de\u6eda\u5230\u5386\u53f2\u7248\u672c..."},
     {L"recover", L"Recover historical version...", L"\u6062\u590d\u5386\u53f2\u7248\u672c..."},
     {L"branches", L"Branches...", L"分支..."},
-    {L"shelves", L"Shelvesets...", L"暂存集..."}
+    {L"shelves", L"Shelvesets...", L"暂存集..."},
+    {L"blame", L"Annotate / Blame...", L"Annotate / Blame..."}
 };
 
 const wchar_t* Label(const Command& command)
@@ -251,7 +252,7 @@ public:
                 // This keeps move/remove/ignore and history actions safe for
                 // Explorer multi-selection while retaining the full GUI flow.
                 const bool singlePathOnly = index == 6 || index == 7 || index >= 10;
-                if ((index == 6 && (paths.size() != 1 || (GetFileAttributesW(paths.front().c_str()) & FILE_ATTRIBUTE_DIRECTORY))) ||
+                if (((index == 6 || wcscmp(commands[index].name, L"blame") == 0) && (paths.size() != 1 || (GetFileAttributesW(paths.front().c_str()) & FILE_ATTRIBUTE_DIRECTORY))) ||
                     (singlePathOnly && paths.size() != 1)) continue;
                 if (visibleCommands.size() > last - first) break;
                 if (!AppendMenuW(submenu, MF_STRING, first + visibleCommands.size(), Label(commands[index]))) { DestroyMenu(submenu); return E_FAIL; }

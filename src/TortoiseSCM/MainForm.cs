@@ -109,6 +109,7 @@ namespace TortoiseSCM
             files.ItemChecked += OnItemChecked;
             files.DoubleClick += async delegate { await ExecuteAsync(PlasticCommand.Diff); };
             var menu = new ContextMenuStrip();
+            menu.Items.Add("Annotate / Blame", null, async delegate { await ShowBlameAsync(HighlightedPaths()); });
             menu.Items.Add("显示历史 / 恢复版本", null, async delegate { await ExecuteAsync(PlasticCommand.History, HighlightedPaths()); });
             menu.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff, HighlightedPaths()); });
             menu.Items.Add("丢弃所选行的修改…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo, HighlightedPaths()); });
@@ -145,6 +146,7 @@ namespace TortoiseSCM
             operations.Items.Add("删除受控项…", null, async delegate { await ExecuteFileOperationAsync("remove", null); });
             operations.Items.Add("加入忽略列表…", null, async delegate { await ExecuteFileOperationAsync("ignore", null); });
             operations.Items.Add(new ToolStripSeparator());
+            operations.Items.Add("Annotate / Blame", null, async delegate { await ShowBlameAsync(null); });
             operations.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff); });
             operations.Items.Add("所选项历史", null, async delegate { await ExecuteAsync(PlasticCommand.History); });
             operations.Items.Add("当前范围历史 / 恢复", null, async delegate { await ShowScopeHistoryAsync(); });
@@ -308,6 +310,7 @@ namespace TortoiseSCM
                 SetBusy(false, "");
                 await RefreshAsync();
                 if (launch.Command == "history") await ExecuteAsync(PlasticCommand.History);
+                else if (launch.Command == "blame") await ShowBlameAsync(launch.Paths);
                 else if (launch.Command == "diff") await ExecuteAsync(PlasticCommand.Diff);
                 else if (launch.Command == "gluon") await ExecuteAsync(PlasticCommand.Gluon);
                 else if (launch.Command == "checkin") comment.Focus();
@@ -462,6 +465,17 @@ namespace TortoiseSCM
             if (busy || !loaded) return;
             if (launch.Paths.Count != 1) { MessageBox.Show(this, "请以一个文件或目录作为历史范围。", "TortoiseSCM"); return; }
             await ExecuteAsync(PlasticCommand.History, new List<string>(launch.Paths));
+        }
+
+        private async Task ShowBlameAsync(List<string> explicitPaths)
+        {
+            if (busy || !loaded) return;
+            var paths = explicitPaths ?? SelectedPaths(true, true);
+            if (paths.Count != 1 || Directory.Exists(paths[0]))
+            { MessageBox.Show(this, "Annotate requires exactly one file.", "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            try { using (var dialog = new BlameForm(client, paths[0], workspace.RootPath)) dialog.ShowDialog(this); }
+            catch (Exception ex) { ShowError(ex); }
+            await Task.CompletedTask;
         }
 
         private Task ExecuteAsync(PlasticCommand command) { return ExecuteAsync(command, null); }

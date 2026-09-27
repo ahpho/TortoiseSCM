@@ -62,6 +62,13 @@
 本轮新增：文件/目录历史恢复、工作区快照切换、递归目录历史与提交明细、提交列表右键菜单、外部 diff/merge 配置。
 功能与命令对应见 [使用说明](TortoiseSCM.md)。
 
+## Annotate / Blame（2026-09-28）
+
+- Core parser: 13 assertions; rejects malformed rows, foreign repositories, directories and invalid ignore modes.
+- CLI black-box: 5 assertions; JSON includes structured line ownership and Unicode content.
+- Real read-only check: original `TestSCM` file returned 74 lines including empty lines; workspace remained `/main` and clean.
+- GUI: native WinForms dialog has line, author, changeset, date, branch and content columns; Explorer exposes the command for a single file and suppresses it for directories.
+
 ## 已执行
 
 ```powershell

@@ -13,7 +13,7 @@
 | 分支管理 | 列表/父子层级、创建、Standard 切换、分支历史、固定头提交合并；对应 CLI | 父子树不是提交/合并关系图；缺少分支重命名、删除、Partial 切换 |
 | Stash | 本轮新增 shelveset 保存、列表和文件明细；`shelve-create/shelves/shelve-details` | 服务端暂存集保存后保留本地修改；尚无应用、删除、内容比较/导出，不等同于完整 stash/pop |
 | 标签 | 无专用 GUI/CLI | 需实现 Plastic labels 的列表、创建、历史定位与生命周期 |
-| Blame | 无专用 GUI/CLI | 需原生 annotate 数据及行号、作者、变更集跳转 |
+| Blame | blame CLI, Annotate/Blame GUI, Explorer single-file entry | Implemented Plastic native annotate line, owner, changeset, date, branch and content; read-only, directories and binaries are rejected |
 | Repository browser | 历史提交文件明细；单文件导出 | 尚不能浏览某个快照的完整仓库目录树 |
 | Clone / Create repository | 选择已有 Plastic 工作区 | 缺少服务器/仓库浏览、新建工作区/仓库向导 |
 | 批量文件操作、拖放 | 多路径提交/撤销/添加；单路径移动、删除、忽略 | 缺少拖放移动、批量删除/忽略及整批预检 |

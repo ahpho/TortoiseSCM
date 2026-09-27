@@ -87,7 +87,7 @@ namespace TortoiseSCM
             // Explorer extension.  File operations are deliberately routed
             // through MainForm so they retain the same confirmation and
             // workspace safety checks as the in-app menus.
-            string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "gluon", "settings",
+            string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "blame", "gluon", "settings",
                 "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "export", "rollback", "recover" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             return result;

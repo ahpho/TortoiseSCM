@@ -18,7 +18,7 @@ namespace TortoiseSCM
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
-            "          shelves, shelve-details, shelve-create\r\n" +
+            "          shelves, shelve-details, shelve-create, blame\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -39,6 +39,8 @@ namespace TortoiseSCM
             "  shelve-create --path <selected controlled pending file> [--path ...] --comment <text> --yes\r\n" +
             "  --commentsfile may replace --comment. Select explicit pending files; directories are rejected.\r\n" +
             "  Saves selected pending changes on the server and preserves local edits; no apply or delete command yet.\r\n" +
+            "Blame: blame --path <one existing controlled file> [--ignore none|eol|whitespaces|eol&whitespaces]\r\n" +
+            "  Read-only line ownership; --ignore is passed to cm annotate and binary files are rejected by Plastic.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
             "Compare file: diff-history --path <workspace> --item </repository/file> --from N --to N [--from-item </old/file>] [--external]\r\n" +
             "Compare trees: diff-changesets --path <workspace> --from N --to N\r\n" +
@@ -135,6 +137,18 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "blame")
+            {
+                var lines = client.GetBlameAsync(options.Paths[0], new PlasticBlameOptions { Ignore = options.Ignore },
+                    CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, path = options.Paths[0], ignore = options.Ignore,
+                    lines = lines.Select(line => new { line = line.Line, owner = line.Owner, changeset = line.Changeset,
+                        date = line.Date, branch = line.Branch, content = line.Content, revision = line.Revision,
+                        comment = line.Comment, isMergeRevision = line.IsMergeRevision, repository = line.Repository }).ToArray() };
+                response.output = String.Join(Environment.NewLine, lines.Select(line => line.Line.ToString(CultureInfo.InvariantCulture) + "\t" +
+                    line.Owner + "\tcs:" + line.Changeset.ToString(CultureInfo.InvariantCulture) + "\t" + line.Content));
+                return;
+            }
             if (options.Command == "shelves")
             {
                 var shelves = client.GetShelvesAsync(workspace.RootPath, CancellationToken.None).GetAwaiter().GetResult();
@@ -637,7 +651,7 @@ namespace TortoiseSCM
     internal sealed class CliOptions
     {
         internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile;
-        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result, Branch, Filter;
+        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result, Branch, Filter, Ignore;
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout, Limit, Conflict;
         internal string Resolution, Rename;
@@ -658,7 +672,7 @@ namespace TortoiseSCM
                     case "--changeset": case "--shelve": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
                     case "--item": case "--from-item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
-                    case "--conflict": case "--resolution": case "--rename": case "--branch": case "--filter": ++i; break;
+                    case "--conflict": case "--resolution": case "--rename": case "--branch": case "--filter": case "--ignore": ++i; break;
                 }
             }
             return false;
@@ -703,6 +717,7 @@ namespace TortoiseSCM
                     case "--from-item": options.FromItem = Value(args, ref i); break;
                     case "--branch": options.Branch = Value(args, ref i); break;
                     case "--filter": options.Filter = Value(args, ref i); break;
+                    case "--ignore": options.Ignore = Value(args, ref i); break;
                     case "--destination": options.Destination = AbsolutePath(Value(args, ref i)); break;
                     case "--result": options.Result = AbsolutePath(Value(args, ref i)); break;
                     case "--conflict":
@@ -747,7 +762,7 @@ namespace TortoiseSCM
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch",
-                "shelves", "shelve-details", "shelve-create", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
+                "shelves", "shelve-details", "shelve-create", "blame", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
@@ -765,7 +780,10 @@ namespace TortoiseSCM
                 throw new ArgumentException("--branch is required for branch-head, switch-branch and create-branch, and optional for history-page.");
             if (options.Branch != null && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
             if (options.Filter != null && options.Command != "branch-tree") throw new ArgumentException("--filter is supported only for branch-tree.");
+            if (options.Ignore != null && options.Command != "blame") throw new ArgumentException("--ignore is supported only for blame.");
             if ((options.Command == "branches" || options.Command == "branch-tree" || options.Command == "branch-head") && yes) throw new ArgumentException("Read-only branch commands do not accept --yes.");
+            if (options.Command == "blame" && (options.Paths.Count != 1 || yes))
+                throw new ArgumentException("Blame requires exactly one file path and does not accept --yes.");
             bool partialWorkflow = options.Command.StartsWith("partial-conflict", StringComparison.Ordinal);
             bool structureWorkflow = options.Command.StartsWith("partial-structure-", StringComparison.Ordinal);
             bool structureResolution = options.Command == "partial-structure-resolve";
