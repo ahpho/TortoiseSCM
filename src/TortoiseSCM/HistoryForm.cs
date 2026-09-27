@@ -43,6 +43,7 @@ namespace TortoiseSCM
         private bool filtering;
         private long? comparisonChangeset;
         private readonly ToolStripMenuItem compareMarkedFile = new ToolStripMenuItem();
+        private readonly ToolStripMenuItem compareMarkedChangeset = new ToolStripMenuItem();
 
         public HistoryForm(PlasticClient client, string path, string workspaceRoot)
         {
@@ -87,12 +88,15 @@ namespace TortoiseSCM
             revisionMenu.Items.Add("复制变更集编号", null, delegate { CopyText(SelectedRevisionText(false)); });
             revisionMenu.Items.Add("复制提交说明", null, delegate { CopyText(SelectedRevisionText(true)); });
             revisionMenu.Items.Add(new ToolStripSeparator());
-            revisionMenu.Items.Add("标记为文件比较起点", null, delegate { MarkComparisonChangeset(); });
+            revisionMenu.Items.Add("标记为比较起点", null, delegate { MarkComparisonChangeset(); });
+            compareMarkedChangeset.Click += delegate { OpenChangesetComparison(); };
+            revisionMenu.Items.Add(compareMarkedChangeset);
             var clearComparison = revisionMenu.Items.Add("清除比较标记", null, delegate { comparisonChangeset = null; UpdateFileAction(); });
             revisionMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
             {
                 e.Cancel = writing || revisions.SelectedItems.Count != 1;
                 clearComparison.Enabled = comparisonChangeset.HasValue;
+                UpdateFileAction();
             };
             revisions.ContextMenuStrip = revisionMenu;
             split.Panel1.Controls.Add(revisions);
@@ -308,6 +312,8 @@ namespace TortoiseSCM
                 !string.Equals(file.ItemType, "D", StringComparison.OrdinalIgnoreCase) && !string.Equals(file.ItemType, "dir", StringComparison.OrdinalIgnoreCase);
             compareMarkedFile.Text = comparisonChangeset.HasValue ? "与标记 cs:" + comparisonChangeset.Value + " 比较此文件…" : "与标记变更集比较此文件…";
             compareMarkedFile.Enabled = historicalFile.Enabled && comparisonChangeset.HasValue;
+            compareMarkedChangeset.Text = comparisonChangeset.HasValue ? "与标记 cs:" + comparisonChangeset.Value + " 比较整个仓库…" : "与标记变更集比较整个仓库…";
+            compareMarkedChangeset.Enabled = !writing && revisions.SelectedItems.Count == 1 && comparisonChangeset.HasValue;
         }
 
         private void OpenHistoricalFile()
@@ -332,8 +338,24 @@ namespace TortoiseSCM
         {
             if (writing || revisions.SelectedItems.Count != 1) return;
             comparisonChangeset = ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset;
-            status.Text = "已标记 cs:" + comparisonChangeset.Value + "。选择另一提交中的文件，右键比较同一路径的两个版本。";
+            status.Text = "已标记 cs:" + comparisonChangeset.Value + "。选择另一提交，右键比较整个仓库；也可选择文件比较同一路径。";
             UpdateFileAction();
+        }
+
+        private ChangesetComparisonForm CreateChangesetComparison()
+        {
+            ValidateHistoryContext();
+            if (writing || !comparisonChangeset.HasValue || revisions.SelectedItems.Count != 1)
+                throw new InvalidOperationException("请先标记比较起点并选择目标提交。");
+            return new ChangesetComparisonForm(client, workspaceRoot, historyRepository, comparisonChangeset.Value,
+                ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset);
+        }
+
+        private void OpenChangesetComparison()
+        {
+            if (!compareMarkedChangeset.Enabled) return;
+            try { using (var dialog = CreateChangesetComparison()) dialog.ShowDialog(this); }
+            catch (Exception ex) { status.Text = "无法打开变更集比较：" + ex.Message; }
         }
 
         private string SelectedRevisionText(bool comment)

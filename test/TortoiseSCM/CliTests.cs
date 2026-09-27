@@ -182,6 +182,7 @@ internal static class CliTests
             File.WriteAllText(Path.Combine(temporary, "fake-partial.marker"), "partial");
             ToolTests(controlled);
             HistoricalFileTests();
+            ChangesetComparisonTests();
             LockTests();
             RevisionTests(controlled);
             HistoryPageTests();
@@ -357,6 +358,66 @@ internal static class CliTests
         Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--diff-tool", fakeCm, "--diff-args", "--tool-diff \"{base}\" \"{local}\"");
         var external = Data(Run(0, "--command", "diff-history", "--path", temporary, "--item", "/deleted 中文.txt", "--from", "1", "--to", "1", "--external", "--cm", fakeCm, "--settings-file", settings));
         Check((bool)external["external"], "External historical comparison supports identical endpoints");
+        var moved = Data(Run(0, "--command", "diff-history", "--path", temporary, "--from-item", "/old name.txt", "--item", "/new name.txt", "--from", "1", "--to", "2", "--cm", fakeCm));
+        Check(moved["fromItem"].ToString() == "/old name.txt" && moved["item"].ToString() == "/new name.txt" &&
+            moved["diffText"].ToString().Contains("--- /old name.txt (cs:1)") && moved["diffText"].ToString().Contains("+++ /new name.txt (cs:2)"),
+            "Cross-path historical comparison uses old and new path headers");
+        var movedExternal = Data(Run(0, "--command", "diff-history", "--path", temporary, "--from-item", "/old name.txt", "--item", "/new name.txt", "--from", "1", "--to", "2", "--external", "--cm", fakeCm, "--settings-file", settings));
+        Check((bool)movedExternal["external"] && movedExternal["fromItem"].ToString() == "/old name.txt", "External historical comparison preserves separate endpoint paths");
+        string[] crossPath = { "--command", "diff-history", "--path", temporary, "--item", "/new name.txt", "--from", "1", "--to", "2", "--cm", fakeCm };
+        foreach (string invalidPath in new[] { "", " ", "/../outside", "/missing.txt", "/new name.txt" })
+            Run(2, crossPath.Concat(new[] { "--from-item", invalidPath }).ToArray());
+        Run(2, crossPath.Concat(new[] { "--from-item", "/old name.txt", "--from-item", "/old name.txt" }).ToArray());
+        Run(2, "--command", "status", "--path", temporary, "--from-item", "/old name.txt");
+        var optionValue = Invoke(new[] { "--cli", "--command", "diff-history", "--path", temporary, "--item", "/new name.txt", "--from", "1", "--to", "2", "--from-item", "--json", "--cm", fakeCm });
+        Check(optionValue.Item1 == 2 && optionValue.Item2.Length == 0 && optionValue.Item3.Length > 0, "Option-looking from-item value cannot enable JSON mode");
+    }
+
+    private static void ChangesetComparisonTests()
+    {
+        string callsPath = Path.Combine(temporary, ".plastic", "cli-cm-calls.log");
+        int initialCalls = File.ReadAllLines(callsPath).Length;
+        Directory.CreateDirectory(Path.Combine(temporary, "history-folder"));
+        string[] command = { "--command", "diff-changesets", "--path", temporary, "--from", "1", "--to", "2", "--cm", fakeCm };
+        var comparison = Data(Run(0, command));
+        var files = ((IList)comparison["files"]).Cast<Dictionary<string, object>>().ToList();
+        Check(comparison["repository"].ToString() == "test@server:8087" && Convert.ToInt64(comparison["from"]) == 1 && Convert.ToInt64(comparison["to"]) == 2,
+            "Changeset comparison exposes repository and exact endpoints");
+        Check(files.Count == 4 && files.Any(file => file["path"].ToString() == "/new name.txt" && file["oldPath"].ToString() == "/old name.txt" && file["status"].ToString() == "M"),
+            "Changeset comparison returns structured net changes including rename endpoints");
+        Check(files.Any(file => file["status"].ToString() == "A" && file["itemType"].ToString() == "D") && files.Any(file => file["status"].ToString() == "D") && files.Any(file => file["status"].ToString() == "C"),
+            "Changeset comparison retains added directories, deleted files and changed files");
+        var calls = File.ReadAllLines(Path.Combine(temporary, ".plastic", "cli-cm-calls.log")).Select(line => Json.Deserialize<string[]>(line)).ToList();
+        Check(calls.Any(call => call.Length > 2 && call[0] == "diff" && call[1] == "cs:1@test@server:8087" && call[2] == "cs:2@test@server:8087" && call.Contains("--repositorypaths")),
+            "Changeset comparison asks cm for both endpoint trees directly");
+        var equal = Data(Run(0, "--command", "diff-changesets", "--path", temporary, "--from", "1", "--to", "1", "--cm", fakeCm));
+        Check(((IList)equal["files"]).Count == 0, "Identical snapshots have zero net changes");
+        var reverse = Data(Run(0, "--command", "diff-changesets", "--path", temporary, "--from", "2", "--to", "1", "--cm", fakeCm));
+        Check(((IList)reverse["files"]).Cast<Dictionary<string, object>>().Any(file => file["path"].ToString() == "/old name.txt" && file["oldPath"].ToString() == "/new name.txt"),
+            "Reversed snapshots preserve requested comparison direction");
+        var nested = Data(Run(0, "--command", "diff-changesets", "--path", Path.Combine(temporary, "history-folder"), "--from", "1", "--to", "2", "--cm", fakeCm));
+        Check(((IList)nested["files"]).Count == 4, "Workspace locator does not silently filter repository comparison");
+        var text = Invoke(new[] { "--cli" }.Concat(command));
+        Check(text.Item1 == 0 && text.Item2.Contains("cs:1 -> cs:2") && text.Item2.Contains("4 net changes") && text.Item2.Contains("/old name.txt -> /new name.txt"), "Text comparison reports direction, net count and rename");
+        Run(2, "--command", "diff-changesets", "--path", temporary, "--from", "1");
+        Run(2, "--command", "diff-changesets", "--from", "1", "--to", "2");
+        Run(2, "--command", "diff-changesets", "--path", temporary, "--from", "-1", "--to", "2");
+        Run(2, "--command", "diff-changesets", "--path", temporary, "--from", "0", "--to", "9223372036854775808");
+        foreach (string[] unrelated in new[] {
+            new[] { "--path", Path.Combine(temporary, "history-folder") }, new[] { "--item", "/file.txt" }, new[] { "--from-item", "/file.txt" },
+            new[] { "--changeset", "1" }, new[] { "--from", "1" }, new[] { "--external" }, new[] { "--yes" }, new[] { "--recursive" },
+            new[] { "--overwrite" }, new[] { "--comment", "unused" }, new[] { "--output", Path.Combine(temporary, "unused.txt") },
+            new[] { "--before", "1" }, new[] { "--limit", "1" }, new[] { "--diff-tool", fakeCm }, new[] { "--destination", temporary },
+            new[] { "--result", temporary }, new[] { "--base", temporary }, new[] { "--resolution", "src" }, new[] { "--conflict", "1" },
+            new[] { "--rename", "other" }, new[] { "--lock-id", "77bdbba7-82e8-407b-8132-76d772be21c5" } })
+            Run(2, command.Concat(unrelated).ToArray());
+        Run(1, "--command", "diff-changesets", "--path", temporary, "--from", "999", "--to", "2", "--cm", fakeCm);
+        Run(1, "--command", "diff-changesets", "--path", temporary, "--from", "1", "--to", "999", "--cm", fakeCm);
+        Run(1, "--command", "diff-changesets", "--path", temporary, "--from", "1", "--to", "777", "--cm", fakeCm);
+        Run(1, "--command", "diff-changesets", "--path", temporary, "--from", "1", "--to", "778", "--cm", fakeCm);
+        Run(124, "--command", "diff-changesets", "--path", temporary, "--from", "1", "--to", "779", "--cm", fakeCm, "--timeout", "1");
+        Check(File.ReadAllLines(callsPath).Skip(initialCalls).Select(line => Json.Deserialize<string[]>(line)).All(call => call[0] == "status" || call[0] == "diff"),
+            "Snapshot comparisons execute only read-only cm commands, including failed requests");
     }
 
     private static void LockTests()
@@ -490,8 +551,21 @@ internal static class CliTests
             Console.WriteLine("CONTRIBUTOR|SRC|2|cs:2@test@server:8087|source\nCONTRIBUTOR|DST|1|cs:1@test@server:8087|local\nCONTRIBUTOR|BASE|0|cs:0@test@server:8087|base");
             if (!File.Exists(Path.Combine(Environment.CurrentDirectory, ".plastic", "fake-merge-resolved.marker"))) Console.WriteLine("FILE_CONFLICT|/merge-conflict.txt|0|2|1|42");
         }
-        else if (args[0] == "ls") Console.WriteLine(new XElement("LsResults", new XElement("LsItems", args[1] == "/missing.txt" ? null : new XElement("LsItem",
+        else if (args[0] == "ls") Console.WriteLine(new XElement("LsResults", new XElement("LsItems", args[1] == "/missing.txt" ||
+            (args[1] == "/old name.txt" && !args.Any(arg => arg.StartsWith("--tree=cs:1@"))) ||
+            (args[1] == "/new name.txt" && !args.Any(arg => arg.StartsWith("--tree=cs:2@"))) ? null : new XElement("LsItem",
             new XElement("Name", Path.GetFileName(args[1])), new XElement("CurrentPath", args[1]), new XElement("ItemId", "42"), new XElement("Type", "txt")))).ToString());
+        else if (args[0] == "diff" && args.Length > 2 && args[1].StartsWith("cs:") && args[2].StartsWith("cs:"))
+        {
+            if (args.Take(3).Any(arg => arg.StartsWith("cs:999@") || arg.StartsWith("cs:777@"))) { Console.Error.WriteLine("Comparison endpoint unavailable"); return 7; }
+            if (args[2].StartsWith("cs:778@")) { Console.WriteLine("unexpected server output"); return 0; }
+            if (args[2].StartsWith("cs:779@")) { Thread.Sleep(30000); return 0; }
+            if (args[1] == args[2]) return 0;
+            Console.WriteLine("C|\"/history-folder/file.txt\"|F|\"\"|\"\"");
+            Console.WriteLine("D|\"/deleted file.txt\"|F|\"\"|\"\"");
+            Console.WriteLine("A|\"/new folder\"|D|\"\"|\"\"");
+            Console.WriteLine(args[1].StartsWith("cs:1@") ? "M|\"/old name.txt\"|F|\"/old name.txt\"|\"/new name.txt\"" : "M|\"/new name.txt\"|F|\"/new name.txt\"|\"/old name.txt\"");
+        }
         else if (args[0] == "diff") Console.WriteLine("C|\"/history-folder/file.txt\"|F|\"\"|\"\"");
         else if (args[0] == "fileinfo")
             Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><Type>txt</Type></FileInfo></FileInfos>");

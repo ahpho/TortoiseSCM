@@ -15,7 +15,7 @@ namespace TortoiseSCM
     {
         internal const string Help = "TortoiseSCM --cli --command <command> --path <absolute-path> [--path ...]\r\n" +
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
-            "          changeset, rollback, switch, export, diff-history, remove, move, ignore, settings, merge\r\n" +
+            "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
@@ -25,7 +25,9 @@ namespace TortoiseSCM
             "  Default scan limit is 50; path pages may be empty with older history still available.\r\n" +
             "rollback restores selected content as pending changes; switch replaces the whole workspace revision.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
-            "Compare: diff-history --path <workspace> --item </repository/file> --from N --to N [--external]\r\n" +
+            "Compare file: diff-history --path <workspace> --item </repository/file> --from N --to N [--from-item </old/file>] [--external]\r\n" +
+            "Compare trees: diff-changesets --path <workspace> --from N --to N\r\n" +
+            "  Reports the whole repository's net snapshot differences; --path locates the workspace, not a filter.\r\n" +
             "Files: remove|ignore --path <file> --yes; move --path <source> --destination <absolute-path> --yes\r\n" +
             "Tools: diff --external; merge --base <file> --local <file> --remote <file> --output <file> --yes\r\n" +
             "Workspace merge: merge-preview|merge-start --path <root> --changeset <source> [--yes]\r\n" +
@@ -292,18 +294,30 @@ namespace TortoiseSCM
             }
             if (options.Command == "diff-history")
             {
+                string fromItem = options.FromItem ?? options.Item;
                 if (options.External)
                 {
-                    SetResult(response, client.OpenRevisionDiffToolAsync(options.Paths[0], options.Item, options.From.Value, options.To.Value, CancellationToken.None).GetAwaiter().GetResult());
-                    response.data = new { workspace = workspaceData, item = options.Item, from = options.From.Value, to = options.To.Value, external = true };
+                    SetResult(response, client.OpenRevisionDiffToolAsync(options.Paths[0], fromItem, options.Item, options.From.Value, options.To.Value, CancellationToken.None).GetAwaiter().GetResult());
+                    response.data = new { workspace = workspaceData, item = options.Item, fromItem = fromItem, from = options.From.Value, to = options.To.Value, external = true };
                 }
                 else
                 {
-                    var diff = client.GetRevisionDiffAsync(options.Paths[0], options.Item, options.From.Value, options.To.Value, CancellationToken.None).GetAwaiter().GetResult();
+                    var diff = client.GetRevisionDiffAsync(options.Paths[0], fromItem, options.Item, options.From.Value, options.To.Value, CancellationToken.None).GetAwaiter().GetResult();
                     response.output = diff.DiffText;
-                    response.data = new { workspace = workspaceData, item = options.Item, from = options.From.Value, to = options.To.Value,
+                    response.data = new { workspace = workspaceData, item = options.Item, fromItem = fromItem, from = options.From.Value, to = options.To.Value,
                         path = diff.Path, baseRevision = diff.BaseRevision, diffText = diff.DiffText, isBinary = diff.IsBinary, hasChanges = diff.HasChanges };
                 }
+                return;
+            }
+            if (options.Command == "diff-changesets")
+            {
+                var comparison = client.GetChangesetComparisonAsync(options.Paths[0], options.From.Value, options.To.Value, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, repository = comparison.Repository, from = comparison.FromChangeset, to = comparison.ToChangeset,
+                    files = comparison.Files.Select(file => new { status = file.Status, path = file.Path, oldPath = file.OldPath, itemType = file.ItemType }).ToArray() };
+                response.output = "Repository " + comparison.Repository + " | cs:" + comparison.FromChangeset.ToString(CultureInfo.InvariantCulture) +
+                    " -> cs:" + comparison.ToChangeset.ToString(CultureInfo.InvariantCulture) + " | " + comparison.Files.Count.ToString(CultureInfo.InvariantCulture) + " net changes\r\n" +
+                    String.Join(Environment.NewLine, comparison.Files.Select(file => file.Status + "\t" + file.ItemType + "\t" +
+                        (String.IsNullOrEmpty(file.OldPath) ? "" : file.OldPath + " -> ") + file.Path));
                 return;
             }
             if (options.Command == "workspace")
@@ -523,7 +537,7 @@ namespace TortoiseSCM
     internal sealed class CliOptions
     {
         internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile;
-        internal string Base, Local, Remote, Output, Item, Destination, Result;
+        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result;
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout, Limit, Conflict;
         internal string Resolution, Rename;
@@ -543,7 +557,7 @@ namespace TortoiseSCM
                     case "--command": case "--path": case "--comment": case "--commentsfile": case "--cm": case "--timeout": ++i; break;
                     case "--changeset": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
-                    case "--item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
+                    case "--item": case "--from-item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
                     case "--conflict": case "--resolution": case "--rename": ++i; break;
                 }
             }
@@ -586,6 +600,7 @@ namespace TortoiseSCM
                     case "--remote": options.Remote = AbsolutePath(Value(args, ref i)); break;
                     case "--output": options.Output = AbsolutePath(Value(args, ref i)); break;
                     case "--item": options.Item = Value(args, ref i); break;
+                    case "--from-item": options.FromItem = Value(args, ref i); break;
                     case "--destination": options.Destination = AbsolutePath(Value(args, ref i)); break;
                     case "--result": options.Result = AbsolutePath(Value(args, ref i)); break;
                     case "--conflict":
@@ -622,7 +637,7 @@ namespace TortoiseSCM
                 }
             }
             if (options.Help) return options;
-            if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "remove", "move", "ignore",
+            if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page",
                 "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
@@ -672,8 +687,13 @@ namespace TortoiseSCM
             bool historyFile = options.Command == "export" || options.Command == "diff-history";
             if (historyFile && (options.Paths.Count != 1 || String.IsNullOrWhiteSpace(options.Item))) throw new ArgumentException("Historical file operations require one --path and a repository --item path.");
             if (options.Item != null && !historyFile && !conflictFile) throw new ArgumentException("--item is valid only for historical file or merge conflict operations.");
-            if (options.Command == "diff-history" && (!options.From.HasValue || !options.To.HasValue)) throw new ArgumentException("diff-history requires --from and --to changeset numbers.");
-            if (options.Command != "diff-history" && (options.From.HasValue || options.To.HasValue)) throw new ArgumentException("--from and --to are valid only for diff-history.");
+            bool comparison = options.Command == "diff-history" || options.Command == "diff-changesets";
+            if (comparison && (!options.From.HasValue || !options.To.HasValue)) throw new ArgumentException("Comparison requires --from and --to changeset numbers.");
+            if (!comparison && (options.From.HasValue || options.To.HasValue)) throw new ArgumentException("--from and --to are valid only for diff-history and diff-changesets.");
+            if (options.Command == "diff-changesets" && options.Paths.Count != 1) throw new ArgumentException("diff-changesets requires exactly one workspace path.");
+            if (options.Command == "diff-changesets" && yes) throw new ArgumentException("diff-changesets is read-only and does not accept --yes.");
+            if (options.FromItem != null && (options.Command != "diff-history" || String.IsNullOrWhiteSpace(options.FromItem)))
+                throw new ArgumentException("--from-item is an optional nonempty repository path for diff-history only.");
             if (options.Overwrite && options.Command != "export") throw new ArgumentException("--overwrite is valid only for export.");
             if (options.Command == "export" && options.Output == null) throw new ArgumentException("export requires --output.");
             if (options.Output != null && options.Command != "export" && options.Command != "merge") throw new ArgumentException("--output is valid only for export and merge.");

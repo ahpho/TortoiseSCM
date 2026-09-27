@@ -82,42 +82,60 @@ namespace TortoiseSCM
             }
         }
 
-        public async Task<PlasticDiffResult> GetRevisionDiffAsync(string workspacePath, string repositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
-        {
-            ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
-            var before = await GetHistoricalFileAsync(workspacePath, repositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
-            var after = await GetHistoricalFileAsync(workspacePath, repositoryPath, toChangeset, cancellationToken).ConfigureAwait(false);
-            return await Task.Run(() =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var diff = CompareContent(repositoryPath, before.RevisionSpec, before.Content, after.Content, false);
-                if (!diff.IsBinary && diff.HasChanges)
-                    diff.DiffText = diff.DiffText.Replace("--- " + repositoryPath + " (base)\n+++ " + repositoryPath + " (working)\n",
-                        "--- " + repositoryPath + " (cs:" + fromChangeset.ToString(CultureInfo.InvariantCulture) + ")\n+++ " + repositoryPath + " (cs:" + toChangeset.ToString(CultureInfo.InvariantCulture) + ")\n");
-                return diff;
-            }, cancellationToken).ConfigureAwait(false);
-        }
+        public Task<PlasticDiffResult> GetRevisionDiffAsync(string workspacePath, string repositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
+        { return GetRevisionDiffAsync(workspacePath, repositoryPath, repositoryPath, fromChangeset, toChangeset, cancellationToken); }
 
-        public async Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string repositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
+        public async Task<PlasticDiffResult> GetRevisionDiffAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
         {
             ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
-            var context = await HistoricalContextAsync(workspacePath, repositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
-            // Validate both endpoints even for the native viewer, which otherwise owns errors
-            // in its GUI. Missing historical paths remain explicit errors, never empty bytes.
-            await ValidateHistoricalFileAsync(context, repositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
-            await ValidateHistoricalFileAsync(context, repositoryPath, toChangeset, cancellationToken).ConfigureAwait(false);
-            if (String.IsNullOrWhiteSpace(config.DiffToolPath))
-                return await ExecuteAsync(new PlasticProcessCommand { FileName = config.CmPath, WorkingDirectory = context.RootPath, Interactive = true,
-                    Arguments = new List<string> { "diff", HistoricalSpec(context.Repository, repositoryPath, fromChangeset),
-                        HistoricalSpec(context.Repository, repositoryPath, toChangeset) } }, cancellationToken).ConfigureAwait(false);
-            PlasticToolArguments.ValidateConfiguration(config.DiffToolPath, config.DiffToolArguments, false);
+            ValidateRepositoryFilePath(fromRepositoryPath); ValidateRepositoryFilePath(toRepositoryPath);
+            var context = await HistoricalContextAsync(workspacePath, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
             string temporary = NewHistoricalTemporaryDirectory();
-            string before = Path.Combine(temporary, "from-" + fromChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(repositoryPath));
-            string after = Path.Combine(temporary, "to-" + toChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(repositoryPath));
+            string beforePath = Path.Combine(temporary, "from"), afterPath = Path.Combine(temporary, "to");
             try
             {
-                await DownloadHistoricalFileAsync(context, repositoryPath, fromChangeset, before, cancellationToken).ConfigureAwait(false);
-                await DownloadHistoricalFileAsync(context, repositoryPath, toChangeset, after, cancellationToken).ConfigureAwait(false);
+                await DownloadHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, beforePath, cancellationToken).ConfigureAwait(false);
+                await DownloadHistoricalFileAsync(context, toRepositoryPath, toChangeset, afterPath, cancellationToken).ConfigureAwait(false);
+                ValidateHistoryRepository(context.RootPath, context.Repository);
+                return await Task.Run(() =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var diff = CompareContent(toRepositoryPath, HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset), File.ReadAllBytes(beforePath), File.ReadAllBytes(afterPath), false);
+                    if (!diff.IsBinary && diff.HasChanges)
+                        diff.DiffText = diff.DiffText.Replace("--- " + toRepositoryPath + " (base)\n+++ " + toRepositoryPath + " (working)\n",
+                            "--- " + fromRepositoryPath + " (cs:" + fromChangeset.ToString(CultureInfo.InvariantCulture) + ")\n+++ " + toRepositoryPath + " (cs:" + toChangeset.ToString(CultureInfo.InvariantCulture) + ")\n");
+                    return diff;
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally { RemoveHistoricalTemporaryDirectory(temporary, beforePath, afterPath); }
+        }
+
+        public Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string repositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
+        { return OpenRevisionDiffToolAsync(workspacePath, repositoryPath, repositoryPath, fromChangeset, toChangeset, cancellationToken); }
+
+        public async Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
+        {
+            ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
+            ValidateRepositoryFilePath(fromRepositoryPath); ValidateRepositoryFilePath(toRepositoryPath);
+            var context = await HistoricalContextAsync(workspacePath, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
+            // Validate both endpoints even for the native viewer, which otherwise owns errors
+            // in its GUI. Missing historical paths remain explicit errors, never empty bytes.
+            await ValidateHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
+            await ValidateHistoricalFileAsync(context, toRepositoryPath, toChangeset, cancellationToken).ConfigureAwait(false);
+            ValidateHistoryRepository(context.RootPath, context.Repository);
+            if (String.IsNullOrWhiteSpace(config.DiffToolPath))
+                return await ExecuteAsync(new PlasticProcessCommand { FileName = config.CmPath, WorkingDirectory = context.RootPath, Interactive = true,
+                    Arguments = new List<string> { "diff", HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset),
+                        HistoricalSpec(context.Repository, toRepositoryPath, toChangeset) } }, cancellationToken).ConfigureAwait(false);
+            PlasticToolArguments.ValidateConfiguration(config.DiffToolPath, config.DiffToolArguments, false);
+            string temporary = NewHistoricalTemporaryDirectory();
+            string before = Path.Combine(temporary, "from-" + fromChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(fromRepositoryPath));
+            string after = Path.Combine(temporary, "to-" + toChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(toRepositoryPath));
+            try
+            {
+                await DownloadHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, before, cancellationToken).ConfigureAwait(false);
+                await DownloadHistoricalFileAsync(context, toRepositoryPath, toChangeset, after, cancellationToken).ConfigureAwait(false);
+                ValidateHistoryRepository(context.RootPath, context.Repository);
                 File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
                 File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.DiffToolPath, WorkingDirectory = temporary,
@@ -146,6 +164,9 @@ namespace TortoiseSCM
             var items = document.Descendants("LsItem").Where(item => String.Equals((string)item.Element("CurrentPath"), repositoryPath, StringComparison.Ordinal)).ToList();
             if (items.Count != 1) throw new ArgumentException("The file does not exist at cs:" + changeset.ToString(CultureInfo.InvariantCulture) + ": " + repositoryPath);
             var file = items[0];
+            string repository = (string)file.Element("Repository");
+            if (!String.IsNullOrEmpty(repository) && repository != context.Repository && repository != "rep:" + context.Repository)
+                throw new ArgumentException("Historical file belongs to another repository; cross-repository links cannot be compared or exported.");
             string type = (string)file.Element("Type") ?? "";
             if ((string)file.Element("Name") == "." || type.Equals("dir", StringComparison.OrdinalIgnoreCase) || type.Equals("directory", StringComparison.OrdinalIgnoreCase) || type == "目录")
                 throw new ArgumentException("Select one historical file; directories cannot be exported or compared as files.");

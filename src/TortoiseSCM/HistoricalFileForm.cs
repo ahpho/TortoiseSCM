@@ -14,6 +14,16 @@ namespace TortoiseSCM
         private readonly PlasticClient client;
         private readonly string workspacePath;
         private readonly string repositoryPath;
+        private readonly string fromRepositoryPath;
+        private string expectedRepository;
+        private string expectedRoot;
+        private bool fixedPair;
+        private bool sourceExists = true;
+        private bool targetExists = true;
+        private readonly Button compare = DialogStyle.Button("比较");
+        private readonly Button external = DialogStyle.Button("外部工具比较");
+        private readonly Button export = DialogStyle.Button("导出目标版本…");
+        private readonly Button exportSource = DialogStyle.Button("导出起点版本…");
         private readonly NumericUpDown fromRevision = new NumericUpDown();
         private readonly NumericUpDown toRevision = new NumericUpDown();
         private readonly TextBox preview = new TextBox();
@@ -29,6 +39,10 @@ namespace TortoiseSCM
         public HistoricalFileForm(PlasticClient client, string workspacePath, string repositoryPath, long changeset, long? fromChangeset)
         {
             this.client = client; this.workspacePath = workspacePath; this.repositoryPath = repositoryPath;
+            this.fromRepositoryPath = repositoryPath;
+            var workspace = client.DiscoverWorkspace(workspacePath);
+            if (workspace == null) throw new InvalidOperationException("找不到 Plastic 工作区。");
+            expectedRepository = workspace.Repository; expectedRoot = workspace.RootPath;
             DialogStyle.Apply(this);
             Text = "历史文件 - TortoiseSCM";
             Size = new Size(920, 650); MinimumSize = new Size(750, 470);
@@ -56,21 +70,34 @@ namespace TortoiseSCM
             preview.Multiline = true; preview.ReadOnly = true; preview.WordWrap = false;
             preview.ScrollBars = ScrollBars.Both; preview.Dock = DockStyle.Fill;
             preview.Font = new Font("Consolas", 10F);
-            preview.Text = "选择两个变更集以比较同一路径的历史内容。\r\n导出使用右侧“到 cs”版本；重命名前的文件请从旧路径的历史记录打开。";
+            preview.Text = "选择两个变更集以比较同一路径的历史内容，并可分别导出起点和目标版本。\r\n跨重命名比较请从历史窗口的“比较整个仓库”列表打开移动项。";
             layout.Controls.Add(preview, 0, 2);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true;
             layout.Controls.Add(status, 0, 3);
             buttons.Dock = DockStyle.Fill; buttons.FlowDirection = FlowDirection.RightToLeft; buttons.WrapContents = false;
             var close = DialogStyle.Button("关闭"); close.Click += delegate { Close(); }; CancelButton = close;
-            var export = DialogStyle.Button("导出版本…"); export.Width = 105;
-            export.Click += async delegate { await ExportAsync(); };
-            var external = DialogStyle.Button("外部工具比较"); external.Width = 115;
+            export.Width = exportSource.Width = 115;
+            export.Click += async delegate { await ExportAsync(false); };
+            exportSource.Click += async delegate { await ExportAsync(true); };
+            external.Width = 115;
             external.Click += async delegate { await CompareAsync(true); };
-            var compare = DialogStyle.Button("比较"); compare.Click += async delegate { await CompareAsync(false); };
-            buttons.Controls.Add(close); buttons.Controls.Add(export); buttons.Controls.Add(external); buttons.Controls.Add(compare);
+            compare.Click += async delegate { await CompareAsync(false); };
+            buttons.Controls.Add(close); buttons.Controls.Add(export); buttons.Controls.Add(exportSource); buttons.Controls.Add(external); buttons.Controls.Add(compare);
             layout.Controls.Add(buttons, 0, 4); Controls.Add(layout);
             Shown += async delegate { if (!revisionsEdited) await SuggestEarlierRevisionAsync(changeset); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (busy) e.Cancel = true; else lifetime.Cancel(); };
+        }
+
+        public HistoricalFileForm(PlasticClient client, string workspacePath, PlasticChangesetComparison comparison, PlasticChangesetFile file)
+            : this(client, workspacePath, file.Path, comparison.ToChangeset, comparison.FromChangeset)
+        {
+            fromRepositoryPath = String.IsNullOrEmpty(file.OldPath) ? file.Path : file.OldPath;
+            expectedRepository = comparison.Repository; expectedRoot = comparison.RootPath;
+            fixedPair = true; sourceExists = file.Status != "A"; targetExists = file.Status != "D";
+            preview.Text = sourceExists && targetExists ?
+                "起点：" + fromRepositoryPath + " @ cs:" + comparison.FromChangeset + "\r\n目标：" + repositoryPath + " @ cs:" + comparison.ToChangeset + "\r\n选择比较或分别导出两个版本。" :
+                sourceExists ? "此文件在目标版本中已删除。可导出起点版本的内容。" : "此文件为新增项。可导出目标版本的内容。";
+            SetBusy(false);
         }
 
         private async Task SuggestEarlierRevisionAsync(long selected)
@@ -91,20 +118,23 @@ namespace TortoiseSCM
 
         private async Task CompareAsync(bool external)
         {
-            if (busy) return;
+            if (busy || !sourceExists || !targetExists) return;
             SetBusy(true); status.Text = "正在读取历史内容…";
             try
             {
+                ValidateContext();
                 if (external)
                 {
-                    var result = await client.OpenRevisionDiffToolAsync(workspacePath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
+                    var result = await client.OpenRevisionDiffToolAsync(workspacePath, fromRepositoryPath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
                     status.Text = result.Succeeded ? "差异工具操作完成。" : "比较失败：" + result.Error;
                     if (!result.Succeeded) preview.Text = result.Output + "\r\n" + result.Error;
                 }
                 else
                 {
-                    var diff = await client.GetRevisionDiffAsync(workspacePath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
-                    preview.Text = diff.HasChanges ? diff.DiffText : "两个版本的文件内容相同。";
+                    var diff = await client.GetRevisionDiffAsync(workspacePath, fromRepositoryPath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
+                    ValidateContext();
+                    // Native EDIT controls require CRLF to render unified-diff lines.
+                    preview.Text = diff.HasChanges ? diff.DiffText.Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\r\n") : "两个版本的文件内容相同。";
                     status.Text = diff.IsBinary ? "二进制文件；可使用外部工具或分别导出。" : "比较完成。";
                 }
             }
@@ -112,16 +142,19 @@ namespace TortoiseSCM
             finally { SetBusy(false); }
         }
 
-        private async Task ExportAsync()
+        private async Task ExportAsync(bool source)
         {
-            if (busy) return;
-            using (var picker = new SaveFileDialog { FileName = Path.GetFileName(repositoryPath), OverwritePrompt = true, Title = "导出 cs:" + toRevision.Value })
+            if (busy || (source ? !sourceExists : !targetExists)) return;
+            string exportPath = source ? fromRepositoryPath : repositoryPath;
+            long revision = (long)(source ? fromRevision.Value : toRevision.Value);
+            using (var picker = new SaveFileDialog { FileName = Path.GetFileName(exportPath), OverwritePrompt = true, Title = "导出 cs:" + revision })
             {
                 if (picker.ShowDialog(this) != DialogResult.OK) return;
                 SetBusy(true); status.Text = "正在导出…";
                 try
                 {
-                    var result = await client.ExportRevisionAsync(workspacePath, repositoryPath, (long)toRevision.Value, picker.FileName, true, lifetime.Token);
+                    ValidateContext();
+                    var result = await client.ExportRevisionAsync(workspacePath, exportPath, revision, picker.FileName, true, lifetime.Token);
                     status.Text = result.Succeeded ? "已导出：" + picker.FileName : "导出失败：" + result.Error;
                 }
                 catch (Exception ex) { status.Text = "导出失败。"; preview.Text = ex.Message; }
@@ -130,6 +163,18 @@ namespace TortoiseSCM
         }
 
         private void SetBusy(bool value)
-        { busy = value; buttons.Enabled = fromRevision.Enabled = toRevision.Enabled = !value; }
+        {
+            busy = value; buttons.Enabled = !value; fromRevision.Enabled = toRevision.Enabled = !value && !fixedPair;
+            compare.Enabled = external.Enabled = !value && sourceExists && targetExists;
+            export.Enabled = !value && targetExists; exportSource.Enabled = !value && sourceExists;
+        }
+
+        private void ValidateContext()
+        {
+            var current = client.DiscoverWorkspace(workspacePath);
+            if (current == null || current.Repository != expectedRepository ||
+                !current.RootPath.TrimEnd('\\', '/').Equals(expectedRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("工作区或仓库已改变，请关闭并重新打开比较窗口。");
+        }
     }
 }

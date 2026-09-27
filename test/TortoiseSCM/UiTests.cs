@@ -15,10 +15,26 @@ namespace TortoiseSCM
         [STAThread]
         private static int Main(string[] args)
         {
+            var previousContext = SynchronizationContext.Current;
+            bool previousAutoInstall = WindowsFormsSynchronizationContext.AutoInstall;
+            WindowsFormsSynchronizationContext uiContext = null;
             try
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                // This harness pumps with DoEvents instead of Application.Run. Automatic
+                // context installation is otherwise undone as child windows close, and
+                // async event continuations can escape to the thread pool.
+                WindowsFormsSynchronizationContext.AutoInstall = false;
+                uiContext = new WindowsFormsSynchronizationContext();
+                SynchronizationContext.SetSynchronizationContext(uiContext);
+                Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 5 && args[0] == "--changeset-live")
+                {
+                    Directory.CreateDirectory(args[1]);
+                    CheckLiveChangesetComparison(args[1], args[2], Int64.Parse(args[3]), Int64.Parse(args[4]));
+                    return 0;
+                }
                 string artifacts = args[0];
                 Directory.CreateDirectory(artifacts);
                 string pathfile = Path.Combine(Path.GetTempPath(), "tscm-ui-" + Guid.NewGuid() + ".paths");
@@ -207,8 +223,15 @@ namespace TortoiseSCM
                             Require(revisions.Items.Count <= 50, "History opens with at most fifty commits");
                             var historyFlags = BindingFlags.Instance | BindingFlags.NonPublic;
                             var marked = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
-                            revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "标记为文件比较起点").PerformClick();
+                            revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "标记为比较起点").PerformClick();
                             Require((long?)Field(history, "comparisonChangeset") == marked.Changeset, "Revision context action marks the selected changeset for comparison");
+                            Require(((ToolStripMenuItem)Field(history, "compareMarkedChangeset")).Enabled, "Marked revision enables full repository comparison");
+                            using (var comparisonForm = (ChangesetComparisonForm)typeof(HistoryForm).GetMethod("CreateChangesetComparison", historyFlags).Invoke(history, null))
+                            {
+                                Require((long)Field(comparisonForm, "fromChangeset") == marked.Changeset && (long)Field(comparisonForm, "toChangeset") == marked.Changeset,
+                                    "History hands the marked and selected changesets to the repository comparison");
+                                CheckChangesetComparison(comparisonForm, args[1], artifacts, marked.Changeset);
+                            }
                             Require((string)typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { false }) == "cs:" + marked.Changeset &&
                                 (string)typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { true }) == marked.Comment,
                                 "Revision copy actions preserve the selected identifier and full multiline comment without touching the clipboard");
@@ -345,7 +368,7 @@ namespace TortoiseSCM
                             catch (TargetInvocationException ex) { Require(ex.InnerException is ArgumentException, "Historical path navigation reuses backend metadata protection"); }
                             deletedRow.Remove();
                             revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "清除比较标记").PerformClick();
-                            Require(Field(history, "comparisonChangeset") == null && !((ToolStripMenuItem)Field(history, "compareMarkedFile")).Enabled,
+                            Require(Field(history, "comparisonChangeset") == null && !((ToolStripMenuItem)Field(history, "compareMarkedFile")).Enabled && !((ToolStripMenuItem)Field(history, "compareMarkedChangeset")).Enabled,
                                 "Clearing a comparison mark disables the marked-file action");
                             object[] refreshKeys = { Message.Create(IntPtr.Zero, 0, IntPtr.Zero, IntPtr.Zero), Keys.F5 };
                             Require((bool)typeof(HistoryForm).GetMethod("ProcessCmdKey", historyFlags).Invoke(history, refreshKeys), "History consumes the F5 refresh shortcut");
@@ -361,6 +384,12 @@ namespace TortoiseSCM
                 return 0;
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+                if (uiContext != null) uiContext.Dispose();
+                WindowsFormsSynchronizationContext.AutoInstall = previousAutoInstall;
+            }
         }
         private static void CheckConflictDialogs(string artifacts)
         {
@@ -594,6 +623,150 @@ namespace TortoiseSCM
                 partial.Close();
             }
         }
+        private static void CheckLiveChangesetComparison(string artifacts, string workspacePath, long from, long to)
+        {
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            var workspace = client.DiscoverWorkspace(workspacePath);
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            using (var form = new ChangesetComparisonForm(client, workspacePath, workspace.Repository, from, to))
+            {
+                Prepare(form);
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live cross-changeset comparison completes");
+                var comparison = (PlasticChangesetComparison)Field(form, "comparison");
+                Require(comparison != null && comparison.Files.Count > 0, "Live complete repository comparison displays actual changed paths");
+                Require(new[] { "A", "D", "C", "M" }.All(code => comparison.Files.Any(file => file.Status == code)),
+                    "Live changeset comparison includes added, deleted, modified and moved entries");
+                var files = (ListView)Field(form, "files");
+                foreach (var file in comparison.Files.Where(item => item.ItemType == "F" && item.Status == "M"))
+                {
+                    foreach (ListViewItem selected in files.SelectedItems) selected.Selected = false;
+                    files.Items.Cast<ListViewItem>().Single(row => Object.ReferenceEquals(row.Tag, file)).Selected = true;
+                    using (var historical = (HistoricalFileForm)typeof(ChangesetComparisonForm).GetMethod("CreateFileDialog", flags).Invoke(form, null))
+                    {
+                        Prepare(historical);
+                        var operation = (System.Threading.Tasks.Task)typeof(HistoricalFileForm).GetMethod("CompareAsync", flags).Invoke(historical, new object[] { false });
+                        WaitUntil(() => operation.IsCompleted, "Live moved file content comparison finishes");
+                        Require(!operation.IsFaulted && ((Label)Field(historical, "status")).Text == "比较完成。", "Live moved file comparison reads old and new paths: " + file.Path);
+                        if (file.Path == "/stable-moved.txt")
+                            Require(((TextBox)Field(historical, "preview")).Text == "两个版本的文件内容相同。", "Move without edits retains equal content across distinct paths");
+                        else
+                            Require(((TextBox)Field(historical, "preview")).Text.Contains("--- " + file.OldPath) && ((TextBox)Field(historical, "preview")).Text.Contains("+++ " + file.Path) && ((TextBox)Field(historical, "preview")).Lines.Length >= 5,
+                                "Moved and edited file preview identifies both historical paths on distinct native text lines");
+                        Save(historical, Path.Combine(artifacts, file.Path == "/stable-moved.txt" ? "live-stable-move.png" : "live-edited-move.png"));
+                        historical.Close();
+                    }
+                }
+                Save(form, Path.Combine(artifacts, "live-changeset-comparison.png"));
+                form.Size = form.MinimumSize; Application.DoEvents(); Save(form, Path.Combine(artifacts, "live-changeset-comparison-minimum.png"));
+                Require(SynchronizationContext.Current is WindowsFormsSynchronizationContext,
+                    "Live comparison retains its UI synchronization context after child windows close");
+                using (var ordinary = new HistoricalFileForm(client, workspacePath, "/changed.txt", to, from))
+                {
+                    Prepare(ordinary);
+                    Require((string)Field(ordinary, "expectedRepository") == workspace.Repository && (string)Field(ordinary, "expectedRoot") == workspace.RootPath,
+                        "Ordinary historical file windows capture their repository and workspace context");
+                    typeof(HistoricalFileForm).GetField("expectedRepository", flags).SetValue(ordinary, "changed-repository");
+                    var operation = (System.Threading.Tasks.Task)typeof(HistoricalFileForm).GetMethod("CompareAsync", flags).Invoke(ordinary, new object[] { false });
+                    WaitUntil(() => operation.IsCompleted, "Ordinary historical file context rejection finishes");
+                    Require(((TextBox)Field(ordinary, "preview")).Text.Contains("仓库已改变"), "Ordinary historical file actions reject a changed repository");
+                    ordinary.Close();
+                }
+                for (int attempt = 0; attempt < 20; attempt++)
+                {
+                    ((Button)Field(form, "refresh")).PerformClick();
+                    Require(files.Items.Count == 0 && Field(form, "comparison") == null && !((Button)Field(form, "open")).Enabled,
+                        "Repeated comparison refresh clears stale actions " + attempt);
+                    ((Button)Field(form, "cancel")).PerformClick();
+                    WaitUntil(() => !(bool)Field(form, "busy"), "Repeated comparison cancellation completes " + attempt);
+                    Require(files.Items.Count == 0 && Field(form, "comparison") == null && !((Button)Field(form, "open")).Enabled && ((Button)Field(form, "refresh")).Enabled,
+                        "Repeated cancelled comparison is empty and retryable " + attempt);
+                }
+                form.Close();
+            }
+        }
+
+        private static void CheckChangesetComparison(ChangesetComparisonForm form, string workspace, string artifacts, long revision)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            Prepare(form);
+            WaitUntil(() => !(bool)Field(form, "busy"), "Changeset tree comparison completes");
+            var comparison = (PlasticChangesetComparison)Field(form, "comparison");
+            Require(comparison != null && comparison.Files.Count == 0, "Live same-changeset tree comparison has no differences");
+            var list = (ListView)Field(form, "files");
+            var rows = new[] {
+                new PlasticChangesetFile { Status = "A", Path = "/目录/新增 文件.txt", ItemType = "F" },
+                new PlasticChangesetFile { Status = "D", Path = "/目录/已删除.txt", ItemType = "F" },
+                new PlasticChangesetFile { Status = "M", Path = "/目录/新名称.txt", OldPath = "/原目录/旧名称.txt", ItemType = "F" },
+                new PlasticChangesetFile { Status = "C", Path = "/目录/修改.bin", ItemType = "B" },
+                new PlasticChangesetFile { Status = "M", Path = "/新目录", OldPath = "/原目录", ItemType = "D" },
+                new PlasticChangesetFile { Status = "C", Path = "/链接", ItemType = "S" },
+                new PlasticChangesetFile { Status = "C", Path = "/挂载", ItemType = "X" }
+            };
+            comparison.Files = rows;
+            typeof(ChangesetComparisonForm).GetMethod("RenderFiles", flags).Invoke(form, null);
+            for (int index = 0; index < rows.Length; index++)
+            {
+                foreach (ListViewItem selected in list.SelectedItems) selected.Selected = false;
+                list.Items[index].Selected = true; Application.DoEvents();
+                Require(((Button)Field(form, "open")).Enabled == (index < 4), "Tree comparison gates historical content for item type " + rows[index].ItemType);
+                if (index >= 4) continue;
+                using (var historical = (HistoricalFileForm)typeof(ChangesetComparisonForm).GetMethod("CreateFileDialog", flags).Invoke(form, null))
+                {
+                    Prepare(historical);
+                    Require(!((NumericUpDown)Field(historical, "fromRevision")).Enabled && !((NumericUpDown)Field(historical, "toRevision")).Enabled,
+                        "Tree file actions keep their validated comparison endpoints fixed");
+                    Require(((Button)Field(historical, "compare")).Enabled == (index >= 2) && ((Button)Field(historical, "external")).Enabled == (index >= 2),
+                        "Added and deleted items cannot compare a fabricated empty side");
+                    Require(((Button)Field(historical, "exportSource")).Enabled == (index != 0) && ((Button)Field(historical, "export")).Enabled == (index != 1),
+                        "History export is enabled only for existing endpoint content");
+                    if (index == 2)
+                    {
+                        Require((string)Field(historical, "fromRepositoryPath") == rows[index].OldPath && (string)Field(historical, "repositoryPath") == rows[index].Path,
+                            "Moved files compare the original and destination paths");
+                        Save(historical, Path.Combine(artifacts, "changeset-moved-file.png"));
+                        historical.Size = historical.MinimumSize; Application.DoEvents();
+                        foreach (var button in new[] { "compare", "external", "export", "exportSource" })
+                        {
+                            var control = (Button)Field(historical, button);
+                            Require(control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)),
+                                "Historical endpoint " + button + " remains visible at minimum size");
+                        }
+                        Save(historical, Path.Combine(artifacts, "changeset-moved-file-minimum.png"));
+                    }
+                    historical.Close();
+                }
+            }
+            ((TextBox)Field(form, "filter")).Text = "旧名称";
+            Require(list.Items.Count == 1 && ((PlasticChangesetFile)list.Items[0].Tag).Status == "M", "Comparison filter matches moved-file original paths");
+            ((TextBox)Field(form, "filter")).Text = "no-match";
+            Require(list.Items.Count == 0 && !((Button)Field(form, "open")).Enabled, "Empty comparison filter disables stale file actions");
+            ((TextBox)Field(form, "filter")).Clear();
+            list.Items[2].Selected = true; Application.DoEvents();
+            Save(form, Path.Combine(artifacts, "changeset-comparison.png"));
+            form.Size = form.MinimumSize; Application.DoEvents();
+            foreach (var name in new[] { "refresh", "cancel", "open", "close" })
+            {
+                var button = (Button)Field(form, name);
+                Require(form.RectangleToScreen(form.ClientRectangle).Contains(button.RectangleToScreen(button.ClientRectangle)) &&
+                    button.Parent.RectangleToScreen(button.Parent.ClientRectangle).Contains(button.RectangleToScreen(button.ClientRectangle)),
+                    "Changeset comparison " + name + " remains visible at minimum size");
+            }
+            Save(form, Path.Combine(artifacts, "changeset-comparison-minimum.png"));
+            ((Button)Field(form, "refresh")).PerformClick();
+            Require(list.Items.Count == 0 && !((Button)Field(form, "open")).Enabled && Field(form, "comparison") == null,
+                "Refreshing tree comparison immediately removes stale actionable results");
+            ((Button)Field(form, "cancel")).PerformClick();
+            WaitUntil(() => !(bool)Field(form, "busy"), "Tree comparison cancellation completes");
+            Require(list.Items.Count == 0 && !((Button)Field(form, "open")).Enabled && ((Button)Field(form, "refresh")).Enabled,
+                "Cancelled comparison stays empty and can be retried (rows=" + list.Items.Count + ", open=" + ((Button)Field(form, "open")).Enabled + ", refresh=" + ((Button)Field(form, "refresh")).Enabled + ", status=" + ((Label)Field(form, "status")).Text + ")");
+            typeof(ChangesetComparisonForm).GetField("expectedRepository", flags).SetValue(form, "changed-repository");
+            ((Button)Field(form, "refresh")).PerformClick();
+            WaitUntil(() => !(bool)Field(form, "busy"), "Changed repository context fails promptly");
+            Require(Field(form, "comparison") == null && ((Label)Field(form, "status")).Text.Contains("仓库已改变"),
+                "Tree comparison rejects a repository context change before reading another repository");
+            form.Close();
+        }
+
         private static void Require(bool value, string label)
         { if (!value) throw new Exception(label); Console.WriteLine("PASS: " + label); }
         private static object Field(object target, string name)

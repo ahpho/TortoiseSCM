@@ -1,5 +1,14 @@
 # TortoiseSCM 验证记录
 
+## 完整变更集差异浏览（2026-09-27）
+
+- 新增只读 `diff-changesets --from N --to N`，比较完整仓库两个快照；GUI 从历史列表的比较标记打开独立差异窗口，提供筛选、刷新、取消和文件操作。原生 A/C/D/M 记录保留，目录、链接和 Xlink 仅显示结构项；不累加中间提交，也不展开未修改的目录子项。
+- `diff-history --from-item` 及 GUI 支持跨路径内容比较；移动同时修改的 C/M 两行都能定位旧路径，移动目录下的修改文件也映射到原目录。文件窗口可分别导出两端，新增/删除仅允许导出存在的一端。普通历史文件窗口同样固定仓库上下文，避免打开后切换仓库却继续读取同号版本。
+- 独立分支 fixture 为 `qa/integration-20260927-103107-af4bb423/`，cs:685 → cs:688（含中间 cs:686/687）。最终公开 EXE 的 31 项服务器检查通过，日志 `qa/changeset-comparison-final-live.log`，详情 `changeset-comparison-results.json`：新增、删除、修改、中文移动、目录移动下修改、空目录、反向/同版本、Partial 未加载内容、二进制、先改后还原内容、删除文件导出。验证前后工作树字节、selector 和 pending 均不变。
+- 新后端 49 项断言覆盖格式/路径拒绝、缺失端点、取消、仓库变更、移动多状态、目录后代、同名替换和外部工具参数。首次真实测试准备时发现 Windows PowerShell 5 对无 BOM 脚本的中文解码不一致，测试脚本已保存为 UTF-8 BOM，使用新的上述 fixture 重测；旧试验分支保持隔离。
+- UI 首次取消测试暴露的是无 `Application.Run` 的测试器在子窗口关闭后丢失 WinForms 同步上下文。已显式持有该上下文并启用跨线程检查；真实窗口专项含连续 20 次刷新/取消验证。目视检查还发现原生 TextBox 对 LF 差异文本不分行，现只在 GUI 显示时转换 CRLF，CLI 保持原始 diff 文本。
+- 最终完整 `build-tortoisescm.ps1 -Test -Workspace <producer>` 通过，日志 `qa/changeset-comparison-final-validation.log`，包含 1209 项 CLI、49 项新后端及既有后端/Shell/GUI。包/隔离安装/卸载 44 项通过（`qa/changeset-comparison-package.log`）；最终 UI 编译产物在真实 cs:685 → cs:688 的 73 项专项通过（`qa/changeset-ui-live-final.log`）。普通/最小差异窗口和移动文件窗口已目视检查，图片分别在 `qa/changeset-ui-live-final/` 与 `qa/Release/changeset-*.png`。这些是程序内渲染，不声称真人 Explorer 点击、多 DPI 或实际外部第三方工具验收。
+
 ## 历史窗口操作与状态图标语义修正（2026-09-27）
 
 - 历史列表增加比较起点标记/清除、复制编号和说明；文件列表增加与标记版本比较、显示路径历史、复制当前/原路径，支持 F5 刷新和按列表焦点 Ctrl+C。显式比较版本及用户编辑不再被异步版本建议覆盖；打开子窗口前复核工作区和仓库身份。
