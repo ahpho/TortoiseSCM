@@ -1,0 +1,6 @@
+Invocation: csc.exe CliTests.cs -> C:\Users\admin\AppData\Local\Temp\CliShelveTests-978bd46a96574d019da92d8dbaa59cf6.exe
+CompileExit: 0
+
+Invocation: C:\Users\admin\AppData\Local\Temp\CliShelveTests-978bd46a96574d019da92d8dbaa59cf6.exe D:\Work\Juscent\SCM_Study\TortoiseSCM\bin\TortoiseSCM\Release\TortoiseSCM.exe
+TestExit: 0
+PASS: 2063 CLI assertions

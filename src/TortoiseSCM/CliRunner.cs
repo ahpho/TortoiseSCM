@@ -18,7 +18,7 @@ namespace TortoiseSCM
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
-            "          shelves, shelve-details, shelve-create, blame\r\n" +
+            "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, blame\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -38,7 +38,9 @@ namespace TortoiseSCM
             "  Lists and details cover the repository; --path locates the workspace, not a filter.\r\n" +
             "  shelve-create --path <selected controlled pending file> [--path ...] --comment <text> --yes\r\n" +
             "  --commentsfile may replace --comment. Select explicit pending files; directories are rejected.\r\n" +
-            "  Saves selected pending changes on the server and preserves local edits; no apply or delete command yet.\r\n" +
+            "  Saves selected pending changes on the server and preserves local edits.\r\n" +
+            "  shelve-apply --path <clean Standard workspace> --shelve N --yes (Partial/Gluon refused)\r\n" +
+            "  shelve-delete --path <workspace> --shelve N --yes (repository-validated)\r\n" +
             "Blame: blame --path <one existing controlled file> [--ignore none|eol|whitespaces|eol&whitespaces]\r\n" +
             "  Read-only line ownership; --ignore is passed to cm annotate and binary files are rejected by Plastic.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
@@ -171,6 +173,18 @@ namespace TortoiseSCM
                 SetResult(response, client.CreateShelveAsync(workspace.RootPath, options.Paths, options.Comment,
                     workspace.Repository, workspace.Selector, CancellationToken.None).GetAwaiter().GetResult());
                 response.data = new { workspace = workspaceData, operation = "shelve-create", paths = options.Paths.ToArray(), localChangesPreserved = response.exitCode == 0 };
+                return;
+            }
+            if (options.Command == "shelve-apply")
+            {
+                SetResult(response, client.ApplyShelveAsync(workspace.RootPath, options.Shelve.Value, CancellationToken.None).GetAwaiter().GetResult());
+                response.data = new { workspace = workspaceData, operation = "shelve-apply", shelveId = options.Shelve.Value };
+                return;
+            }
+            if (options.Command == "shelve-delete")
+            {
+                SetResult(response, client.DeleteShelveAsync(workspace.RootPath, options.Shelve.Value, CancellationToken.None).GetAwaiter().GetResult());
+                response.data = new { workspace = workspaceData, operation = "shelve-delete", shelveId = options.Shelve.Value };
                 return;
             }
             if (options.Command == "branches")
@@ -762,17 +776,20 @@ namespace TortoiseSCM
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch",
-                "shelves", "shelve-details", "shelve-create", "blame", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
+                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "blame", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "shelve-create", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "shelve-create", "shelve-apply", "shelve-delete", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
-            if ((options.Command == "shelve-details") != options.Shelve.HasValue) throw new ArgumentException("--shelve is required only for shelve-details.");
-            if ((options.Command == "shelves" || options.Command == "shelve-details") && (options.Paths.Count != 1 || yes))
-                throw new ArgumentException("Read-only shelveset commands require exactly one workspace path and do not accept --yes.");
+            if (new[] { "shelve-details", "shelve-apply", "shelve-delete" }.Contains(options.Command) != options.Shelve.HasValue)
+                throw new ArgumentException("--shelve is required only for shelve-details, shelve-apply and shelve-delete.");
+            if (new[] { "shelves", "shelve-details", "shelve-apply", "shelve-delete" }.Contains(options.Command) && options.Paths.Count != 1)
+                throw new ArgumentException("Shelveset commands require exactly one workspace path.");
+            if (new[] { "shelves", "shelve-details" }.Contains(options.Command) && yes)
+                throw new ArgumentException("Read-only shelveset commands do not accept --yes.");
             bool branchCommand = new[] { "branches", "branch-tree", "branch-head", "switch-branch", "create-branch" }.Contains(options.Command);
             bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "create-branch";
             if (branchCommand && options.Paths.Count != 1) throw new ArgumentException("Branch commands require exactly one workspace path.");

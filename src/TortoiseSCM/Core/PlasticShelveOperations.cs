@@ -153,6 +153,99 @@ namespace TortoiseSCM
             }
         }
 
+        public async Task<PlasticCommandResult> ApplyShelveAsync(string root, long shelveId, CancellationToken cancellationToken)
+        {
+            ValidateShelveId(shelveId);
+            var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
+            var workspace = await GetWorkspaceAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+            if (workspace.IsPartial)
+                throw new ArgumentException("Applying a shelveset is supported only in a Standard workspace. Partial/Gluon workspaces must use the official Plastic client.");
+            ValidateShelveContext(context);
+
+            using (var structureGate = StructureGate(context.RootPath))
+            using (var mergeGate = OpenMergeGate(context.RootPath))
+            {
+                var currentWorkspace = await GetWorkspaceAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                if (currentWorkspace.IsPartial)
+                    throw new ArgumentException("The workspace changed to Partial/Gluon mode during shelveset preparation; no shelveset was applied.");
+                ValidateShelveContext(context);
+                RejectShelveSessions(context.RootPath);
+                // A normal status omits ignored entries. Include all local entries
+                // so an ignored/private file at a shelveset path cannot be silently
+                // overwritten by the native apply operation.
+                var statusResult = await ExecuteAsync(RevisionCommand(context.RootPath, new[] {
+                    "status", context.RootPath, "--all", "--ignored", "--xml", "--encoding=utf-8", "--fullpaths"
+                }), cancellationToken).ConfigureAwait(false);
+                RequireSuccess(statusResult);
+                var pending = ParseStatus(statusResult.Output, context.RootPath);
+                if (pending.Count != 0)
+                    throw new ArgumentException("The workspace has pending changes. Applying a shelveset is refused to prevent overwriting local content; review or save those changes first.");
+                var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                if (!shelves.Any(item => item.ShelveId == shelveId))
+                    throw new ArgumentException("The selected shelveset no longer exists in this repository. Refresh the shelves list.");
+                var details = await GetShelveChangesAsync(context.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
+                if (details.Count == 0)
+                    throw new InvalidDataException("The selected shelveset has no changed files and cannot be applied safely.");
+                ValidateShelveContext(context);
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = await ExecuteAsync(RevisionCommand(context.RootPath, new[] {
+                    "shelveset", "apply", ShelveSpec(shelveId, context.Repository), "--encoding=utf-8"
+                }), cancellationToken).ConfigureAwait(false);
+                if (!result.Succeeded)
+                    result.Error += " The shelveset may not have been applied; inspect workspace status before retrying.";
+                else
+                {
+                    try { ValidateShelveContext(context); }
+                    catch (Exception error)
+                    {
+                        result.ExitCode = 1;
+                        result.Error += " Shelveset apply verification failed: " + error.Message + " Inspect workspace status before retrying.";
+                    }
+                }
+                return result;
+            }
+        }
+
+        public async Task<PlasticCommandResult> DeleteShelveAsync(string root, long shelveId, CancellationToken cancellationToken)
+        {
+            ValidateShelveId(shelveId);
+            var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
+            ValidateShelveContext(context);
+            using (var mergeGate = OpenMergeGate(context.RootPath))
+            {
+                var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                if (!shelves.Any(item => item.ShelveId == shelveId))
+                    throw new ArgumentException("The selected shelveset no longer exists in this repository. Refresh the shelves list.");
+                ValidateShelveContext(context);
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = await ExecuteAsync(RevisionCommand(context.RootPath, new[] {
+                    "shelveset", "delete", ShelveSpec(shelveId, context.Repository)
+                }), cancellationToken).ConfigureAwait(false);
+                if (!result.Succeeded)
+                    result.Error += " The shelveset may still exist; refresh the shelves list before retrying.";
+                else
+                {
+                    try
+                    {
+                        ValidateShelveContext(context);
+                        var remaining = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                        if (remaining.Any(item => item.ShelveId == shelveId))
+                        {
+                            result.ExitCode = 1;
+                            result.Error = (result.Error ?? "") + " Shelveset deletion could not be verified; refresh the shelves list before retrying.";
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception error)
+                    {
+                        result.ExitCode = 1;
+                        result.Error += " Shelveset deletion verification failed: " + error.Message + " Refresh the shelves list before retrying.";
+                    }
+                }
+                return result;
+            }
+        }
+
         internal static IList<PlasticShelve> ParseShelves(string xml, string repository)
         {
             ValidateBranchRepository(repository);

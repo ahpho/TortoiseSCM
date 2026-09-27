@@ -222,8 +222,9 @@ internal static class CliTests
         string failure = Path.Combine(temporary, ".plastic", "fake-shelve-failure.txt");
         string clean = Path.Combine(temporary, "fake-clean.marker");
         string partial = Path.Combine(temporary, "fake-partial.marker");
+        string ignored = Path.Combine(temporary, ".plastic", "fake-ignored.marker");
         string selected = Path.Combine(temporary, "shelve 中文 & selected.txt");
-        bool wasClean = File.Exists(clean), wasPartial = File.Exists(partial);
+        bool wasClean = File.Exists(clean), wasPartial = File.Exists(partial), wasIgnored = File.Exists(ignored);
         try
         {
             File.Delete(clean); File.Delete(partial);
@@ -245,7 +246,8 @@ internal static class CliTests
             Run(2, "--command", "shelve-create", "--path", selected, "--comment", "x");
             Run(2, "--command", "shelve-create", "--path", selected, "--yes");
             Run(2, "--command", "shelve-create", "--path", selected, "--comment", "  ", "--yes");
-            Run(2, "--command", "shelve-apply", "--path", temporary, "--shelve", "5", "--yes");
+            Run(2, "--command", "shelve-apply", "--path", temporary, "--shelve", "5");
+            Run(2, "--command", "shelve-delete", "--path", temporary, "--shelve", "5");
             var shelves = (IList)Data(Run(0, read))["shelves"];
             var shelf = (Dictionary<string, object>)shelves[0];
             Check(shelves.Count == 1 && Convert.ToInt64(shelf["shelveId"]) == 5 && Convert.ToInt64(shelf["objectId"]) == 55 &&
@@ -269,10 +271,33 @@ internal static class CliTests
             Run(1, create); Check(!File.Exists(created), "Native shelveset failure does not claim successful saved metadata");
             File.WriteAllText(failure, "malformed"); Run(1, read);
             File.WriteAllText(failure, "timeout"); Run(124, read.Concat(new[] { "--timeout", "1" }).ToArray());
+
+            // Apply is deliberately restricted to a clean Standard workspace and
+            // verifies the shelveset remains in this repository before mutation.
+            File.Delete(failure); File.Delete(marker); File.WriteAllText(clean, "clean");
+            var applied = Data(Run(0, "--command", "shelve-apply", "--path", temporary, "--shelve", "5", "--yes", "--cm", fakeCm));
+            Check(applied["operation"].ToString() == "shelve-apply" &&
+                File.ReadAllLines(Path.Combine(temporary, ".plastic", "cli-cm-calls.log")).Any(line => line.Contains("shelveset\",\"apply\",\"sh:5@test@server:8087")),
+                "Shelveset apply uses the repository-qualified native command after clean preflight");
+            File.WriteAllText(ignored, "ignored");
+            Run(2, "--command", "shelve-apply", "--path", temporary, "--shelve", "5", "--yes", "--cm", fakeCm);
+            File.Delete(ignored);
+            File.WriteAllText(partial, "partial");
+            Run(2, "--command", "shelve-apply", "--path", temporary, "--shelve", "5", "--yes", "--cm", fakeCm);
+            File.Delete(partial);
+            File.Delete(clean); File.WriteAllText(marker, "active");
+            Run(2, "--command", "shelve-apply", "--path", temporary, "--shelve", "5", "--yes", "--cm", fakeCm);
+            File.WriteAllText(clean, "clean");
+            var deleted = Data(Run(0, "--command", "shelve-delete", "--path", temporary, "--shelve", "5", "--yes", "--cm", fakeCm));
+            Check(deleted["operation"].ToString() == "shelve-delete" &&
+                File.ReadAllLines(Path.Combine(temporary, ".plastic", "cli-cm-calls.log")).Any(line => line.Contains("shelveset\",\"delete\",\"sh:5@test@server:8087")),
+                "Shelveset delete uses repository-qualified native command and verifies removal");
+            File.Delete(Path.Combine(temporary, ".plastic", "fake-shelve-deleted.txt")); File.Delete(clean);
         }
         finally
         {
-            File.Delete(marker); File.Delete(created); File.Delete(failure); File.Delete(selected);
+            File.Delete(marker); File.Delete(created); File.Delete(failure); File.Delete(selected); File.Delete(clean);
+            File.Delete(Path.Combine(temporary, ".plastic", "fake-shelve-deleted.txt"));
             if (wasClean) File.WriteAllText(clean, "clean"); else File.Delete(clean);
             if (wasPartial) File.WriteAllText(partial, "partial"); else File.Delete(partial);
         }
@@ -810,7 +835,8 @@ internal static class CliTests
             string failure = Path.Combine(metadata, "fake-shelve-failure.txt");
             if (File.Exists(failure) && File.ReadAllText(failure) == "timeout") { Thread.Sleep(30000); return 0; }
             if (File.Exists(failure) && File.ReadAllText(failure) == "malformed") { Console.WriteLine("<PLASTICQUERY><SHELVE /></PLASTICQUERY>"); return 0; }
-            var xml = new XElement("PLASTICQUERY", new XElement("SHELVE", new XElement("ID", "55"), new XElement("SHELVEID", "5"),
+            var xml = new XElement("PLASTICQUERY");
+            if (!File.Exists(Path.Combine(metadata, "fake-shelve-deleted.txt"))) xml.Add(new XElement("SHELVE", new XElement("ID", "55"), new XElement("SHELVEID", "5"),
                 new XElement("COMMENT", "Saved 中文\nline"), new XElement("DATE", "2026-09-27T00:00:00Z"), new XElement("OWNER", "fixture-owner"),
                 new XElement("PARENT", "1"), new XElement("REPOSITORY", "test"), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")));
             string created = Path.Combine(metadata, "fake-shelve-comment.txt");
@@ -824,6 +850,13 @@ internal static class CliTests
             if (File.Exists(Path.Combine(metadata, "fake-shelve-failure.txt"))) { Console.Error.WriteLine("Native shelve creation failed 中文"); return 7; }
             File.WriteAllText(Path.Combine(metadata, "fake-shelve-comment.txt"), args.Single(arg => arg.StartsWith("-c=", StringComparison.Ordinal)).Substring(3));
             Console.WriteLine("Created shelve 6");
+        }
+        else if (args[0] == "shelveset" && args[1] == "apply")
+            Console.WriteLine("Applied " + args[2]);
+        else if (args[0] == "shelveset" && args[1] == "delete")
+        {
+            File.WriteAllText(Path.Combine(metadata, "fake-shelve-deleted.txt"), "delete");
+            Console.WriteLine("Deleted " + args[2]);
         }
         else if (args[0] == "diff" && args[1].StartsWith("sh:", StringComparison.Ordinal))
             Console.WriteLine("C|\"/shelve 中文 & selected.txt\"|F|\"\"|\"\"");

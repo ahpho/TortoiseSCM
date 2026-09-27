@@ -433,11 +433,13 @@ Explorer “TortoiseSCM → 暂存集…”及主窗口“操作 → 暂存集�
 & $exe --cli --command shelve-create --path 'D:\workspace\src\a.cs' --path 'D:\workspace\src\b.cs' --comment '保存进行中的修改' --yes --json | ConvertFrom-Json
 & $exe --cli --command shelves --path 'D:\workspace' --json | ConvertFrom-Json
 & $exe --cli --command shelve-details --path 'D:\workspace' --shelve 12 --json | ConvertFrom-Json
+& $exe --cli --command shelve-apply --path 'D:\workspace' --shelve 12 --yes --json | ConvertFrom-Json
+& $exe --cli --command shelve-delete --path 'D:\workspace' --shelve 12 --yes --json | ConvertFrom-Json
 ```
 
 `--commentsfile` 可代替 `--comment`。创建支持 Standard 和 Partial 对应原生命令；失败或超时后，服务器可能已经保存，请先刷新列表确认，程序不会自动重试。
 列表返回 `data.shelves`（`shelveId` 为公开的 `sh:` 编号，`objectId` 为服务器内部对象编号），详情返回 `data.files`。
-本阶段尚无暂存集应用、删除及内容比较/导出；恢复需使用官方客户端。后续将接入已有合并/冲突恢复机制，因此尚不构成完整的 Git stash/pop 等价功能。
+暂存集应用和删除已提供 CLI。应用前要求仓库匹配、Standard 工作区、无待定更改且暂存集有文件；Partial/Gluon 工作区明确拒绝并提示使用官方客户端。写操作必须显式 `--yes`，失败或验证不确定时要求检查状态；当前仍无暂存集内容比较/导出，因此尚不构成完整的 Git stash/pop 等价功能。
 
 ### 本轮五项需求对照
 
