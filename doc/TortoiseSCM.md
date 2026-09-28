@@ -3,6 +3,39 @@
 TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control 客户端。
 这次移植建立了独立的 Plastic 运行入口，没有将 Git 命令简单改名后继续执行。
 
+## 首次安装与日常操作
+
+运行需要 Windows x64、.NET Framework 4.8，以及已安装并完成服务器登录的 Plastic SCM / Unity Version Control 客户端；不需要安装 Visual Studio。比较使用单独安装的 Beyond Compare 4/5，三方合并需要 Pro。
+
+1. 解压最新 Windows x64 ZIP，在解压目录打开 64 位 PowerShell，执行以下两行。默认安装到当前用户目录并注册经典右键菜单，不需要管理员权限：
+
+   ```powershell
+   $app = .\Install.ps1
+   & (Join-Path $app.versionDirectory 'TortoiseSCM.exe')
+   ```
+
+   若系统阻止运行脚本，可仅在这个 PowerShell 窗口执行 `Set-ExecutionPolicy -Scope Process Bypass` 后重试；不改变全局策略。状态图标为可选项，管理员安装时添加 `-EnableMachineOverlays`。首次使用默认经典菜单即可。
+
+2. 在欢迎窗口点击“拉取仓库…”。填写团队提供的服务器地址（如 `host:8087`、`ssl://host:8088` 或 `组织名@cloud`），点击“查询仓库”并选择已有仓库。填写唯一工作区名称、新的空目录（如 `D:\Workspaces\MyProject`），分支通常保持 `/main`。点击“拉取并打开”，核对确认后等待下载完成。
+3. 拉取成功后自动进入待定更改窗口。以后在该目录右键 → TortoiseSCM；Windows 11 先点“显示更多选项”。若菜单尚未出现，注销再登录；也可双击安装目录的 EXE，选择“打开已有工作区…”。
+4. 从下表开始日常测试。根目录入口操作整个工作区；文件或子目录的历史只查看对应范围。
+
+| 目的 | 最简操作 |
+| --- | --- |
+| 更新库 | 工作区根目录右键 → TortoiseSCM → “更新…”；也可在主窗口“操作 → 更新…”，确认整体更新 |
+| showLog | 根目录右键 → TortoiseSCM → “历史记录…”；主窗口使用“操作 → 当前范围历史 / 恢复” |
+| commit | 修改文件后打开“待处理更改…”或“签入…”；勾选文件，填写说明，点击“提交”，核对预览后确认 |
+| 添加新文件 | 在待定列表勾选未版本控制的文件，“操作 → 添加…”，再勾选提交 |
+| 比较修改 | 文件右键 → TortoiseSCM → “比较差异…”；使用 Beyond Compare |
+
+首次可先完成“拉取 → 看日志 → 更新”，再修改一个可提交的测试文件并提交，最后刷新日志确认新变更集。提交失败或结果未确认时先刷新并检查历史，不要直接重复提交。
+
+向导只创建已有仓库的 **Standard 完整工作区**；不创建服务器仓库、不复制服务器历史、不创建 Partial/动态工作区。目标必须为空或尚不存在，拒绝已有/嵌套工作区和链接目录；会复核仓库及分支身份。查询可取消，确认后的预检/创建/下载期间禁重复操作和关闭；失败会保留目录及阶段信息，不自动删除或重复创建。其他客户端并发操作不属于服务器原子事务。
+
+工作区创建成功而下载未完成时，按向导提示在官方客户端核对仓库、分支和本地状态后继续更新，不要删除目录或重新创建。下载使用设置中的 Plastic 命令超时，默认 5 分钟；大仓库首次拉取前可在欢迎窗口“设置…”调长。认证失败或 SSL 证书尚未信任时，先通过官方客户端完成配置。官方对工作区与仓库的区别见 [创建工作区说明](https://docs.unity.com/en-us/unity-version-control/workflow/create-workspace)。
+
+入口也支持 `TortoiseSCM.exe --command create-workspace`，可选 `--path 'D:\Workspaces\MyProject'` 预填目标目录；这是 GUI 向导命令。已打开工作区的“操作 → 拉取仓库…”会在完成后打开独立窗口，保留原工作区。
+
 ## 构建与运行
 
 要求 Windows x64、.NET Framework 4.8、Visual Studio 2022 或更新版本的 C++ 桌面开发组件与 Windows SDK。
@@ -14,7 +47,7 @@ cd D:\Work\Juscent\SCM_Study\TortoiseSCM
 .\bin\TortoiseSCM\Release\TortoiseSCM.exe --path 'D:\Work\Juscent\SCM_Study\TestSCM'
 ```
 
-也可以双击 `TortoiseSCM.exe`，在目录选择器中选择 Plastic 工作区。`--command settings` 打开客户端路径设置。
+也可以双击 `TortoiseSCM.exe`，从欢迎窗口拉取新工作区或打开已有 Plastic 工作区。`--command settings` 打开客户端路径设置。
 
 运行时复用 Plastic 客户端现有的用户配置和认证。新程序不储存密码，也不要求安装 Git。
 首次使用会发现标准安装目录和本机 `D:\Program Files\PlasticSCM5\client`；也可在“设置”中指定路径。

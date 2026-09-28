@@ -235,6 +235,18 @@ namespace TortoiseSCM
             operations.Items.Add("操作记录…", null, delegate { ShowOutput(); });
             operations.Items.Add(new ToolStripSeparator());
             operations.Items.Add("打开 Gluon", null, async delegate { await ExecuteAsync(PlasticCommand.Gluon); });
+            operations.Items.Add("拉取仓库…", null, delegate {
+                if (busy) return;
+                using (var wizard = new WorkspaceCreationForm())
+                {
+                    if (wizard.ShowDialog(this) != DialogResult.OK) return;
+                    try {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath,
+                            "--path " + PlasticClient.QuoteArgument(wizard.SelectedWorkspacePath)) { UseShellExecute = false });
+                    }
+                    catch (Exception ex) { ShowError(new InvalidOperationException("工作区已创建，但无法打开新窗口。请从该目录右键打开 TortoiseSCM。\r\n" + wizard.SelectedWorkspacePath, ex)); }
+                }
+            });
             operations.Items.Add("设置…", null, delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = WinFormsPlasticToolHost.CreateClient(PlasticClientConfig.Load(), this); });
             actions.Click += delegate { operations.Show(actions, new Point(0, actions.Height)); };
             left.Controls.Add(refresh);
