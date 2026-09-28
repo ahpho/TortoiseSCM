@@ -195,7 +195,7 @@ namespace TortoiseSCM
                     if (args[i].StartsWith("/righttitle=", StringComparison.Ordinal))
                         args[i] = "/righttitle=Shelve sh:" + shelveId.ToString(CultureInfo.InvariantCulture) + " " + change.Path + (change.Status == "D" ? " (empty: deleted)" : "");
                 }
-                return await BeyondCompareProcess.RunAsync(beyondCompare, args, temporary, cancellationToken).ConfigureAwait(false);
+                return await BeyondCompareProcess.RunDiffAsync(beyondCompare, args, temporary, cancellationToken).ConfigureAwait(false);
             }
             catch (BeyondCompareWaitException) { preserve = true; throw; }
             finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }

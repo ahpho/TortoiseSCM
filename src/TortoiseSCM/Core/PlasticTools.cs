@@ -175,7 +175,7 @@ namespace TortoiseSCM
                 if (snapshot.Deleted) File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
                 token.ThrowIfCancellationRequested();
                 if (host != null) return await host.ShowDiffAsync(before, after, token).ConfigureAwait(false);
-                return await BeyondCompareProcess.RunAsync(beyondCompare,
+                return await BeyondCompareProcess.RunDiffAsync(beyondCompare,
                     new[] { "/solo", "/readonly", before, after,
                         "/lefttitle=" + local + (snapshot.Added ? " (不存在 / empty)" : " (base cs:" + snapshot.Changeset.ToString(CultureInfo.InvariantCulture) + ")"),
                         "/righttitle=" + local + (snapshot.Deleted ? " (已删除 / empty)" : " (working)") }, temporary, token).ConfigureAwait(false);

@@ -273,6 +273,44 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
             Sleep(20);
         } while (GetTickCount64() < deadline);
         require(contents == expected, "modern handoff preserves fresh selection and UTF-8 path bytes");
+        // Exercise the shipping DLL's real launcher for the basic file operations.
+        // The staged executable only records argv/pathfile bytes, never edits SCM files.
+        for (const wchar_t* command : {L"add", L"remove"})
+        {
+            ULONG index = 0;
+            while (index < ARRAYSIZE(commands) && wcscmp(commands[index].name, command) != 0) ++index;
+            require(index < ARRAYSIZE(commands), "modern basic operation command exists");
+            enumerator->Reset(); enumerator->Skip(index);
+            ComPtr<IExplorerCommand> operation;
+            require(enumerator->Next(1, &operation, &fetched) == S_OK, "modern basic operation enumerated");
+            unsigned selectionCase = 0;
+            for (const auto& operationPath : {selectedPath, first})
+            {
+                auto operationSelection = ModernSelection({operationPath.native()});
+                require(SUCCEEDED(operation->GetState(operationSelection.Get(), TRUE, &state)) && state == ECS_ENABLED, "modern basic operation enabled for file and directory");
+                const auto operationCapture = stage / (std::wstring(command) + L"-" + std::to_wstring(selectionCase++) + L".txt");
+                require(SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", operationCapture.c_str()) != FALSE, "modern basic operation capture environment");
+                const HRESULT invoked = operation->Invoke(operationSelection.Get(), nullptr);
+                SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", oldLength && oldLength < ARRAYSIZE(oldCapture) ? oldCapture : nullptr);
+                require(SUCCEEDED(invoked), "modern basic operation invokes production launcher");
+                const std::wstring wideOperation = std::wstring(command) + L"\n" + operationPath.native() + L"\n";
+                const int size = WideCharToMultiByte(CP_UTF8, 0, wideOperation.c_str(), static_cast<int>(wideOperation.size()), nullptr, 0, nullptr, nullptr);
+                std::string operationExpected(size, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, wideOperation.c_str(), static_cast<int>(wideOperation.size()), operationExpected.data(), size, nullptr, nullptr);
+                std::string actual;
+                const auto operationDeadline = GetTickCount64() + 10000;
+                do
+                {
+                    std::ifstream capture(operationCapture, std::ios::binary);
+                    actual.assign(std::istreambuf_iterator<char>(capture), std::istreambuf_iterator<char>());
+                    if (actual == operationExpected) break;
+                    Sleep(20);
+                } while (GetTickCount64() < operationDeadline);
+                const std::string label = "modern production dispatch " + Ascii(command) + " selection=" + std::to_string(selectionCase - 1);
+                require(actual == operationExpected, label.c_str());
+                require(std::filesystem::exists(operationPath), "modern recorder never removes selected fixture");
+            }
+        }
         enumerator->Reset(); enumerator->Skip(26);
         ComPtr<IExplorerCommand> checkout; require(enumerator->Next(1, &checkout, &fetched) == S_OK, "modern handoff checkout command");
         const auto unicodeParent = first.parent_path() / L"checkout \u4e2d\u6587 & parent";

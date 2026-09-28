@@ -38,9 +38,9 @@ namespace TortoiseSCM
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 8 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));

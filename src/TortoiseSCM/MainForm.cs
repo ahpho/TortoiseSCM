@@ -386,6 +386,7 @@ namespace TortoiseSCM
                 else if (launch.Command == "diff") await ExecuteAsync(PlasticCommand.Diff);
                 else if (launch.Command == "gluon") await ExecuteAsync(PlasticCommand.Gluon);
                 else if (launch.Command == "checkin") comment.Focus();
+                else if (launch.Command == "add") await ExecuteAsync(PlasticCommand.Add, new List<string>(launch.Paths));
                 else if (launch.Command == "move" || launch.Command == "remove" || launch.Command == "ignore")
                     await ExecuteFileOperationAsync(launch.Command, new List<string>(launch.Paths));
                 else if (launch.Command == "locks" || launch.Command == "unlock")

@@ -564,6 +564,8 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 
 ## 验证
 
+基础 GUI 服务器验收可运行 `test/TortoiseSCM/Run-BasicGuiAcceptance.ps1`（也已接入 `build-tortoisescm.ps1 -Integration`）。它分别创建隔离 `tortoisescm-autotest-*` 分支，测试 Standard/Gluon 的添加和删除后签入、历史比较与回滚、目录历史和更新，并保留截图及原生命令证据；需要已配置并登录的 Plastic 客户端。可选 `-BeyondComparePath '路径\BComp.exe'` 验证真实只读比较窗口正常打开和关闭。真实桌面 Explorer 鼠标点击、状态覆盖图标和三方人工编辑仍需单独验收。
+
 `build-tortoisescm.ps1 -Test` 编译并运行无服务器的后端测试、真实 EXE 的 CLI 黑盒测试、Shell 测试和设置窗口渲染。
 加入 `-Workspace 'D:\Work\Juscent\SCM_Study\TestSCM'` 会执行实际 cm 集成测试和待定更改窗口渲染。
 集成测试仅创建专用临时文件，测试添加/撤销后清理，不提交服务器，也不修改现有文件。

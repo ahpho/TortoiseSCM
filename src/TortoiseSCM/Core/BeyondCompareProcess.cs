@@ -17,6 +17,19 @@ namespace TortoiseSCM
 
     public static class BeyondCompareProcess
     {
+        // BC's comparison result codes describe equality/differences, not launch failures.
+        // Keep this separate from merge completion: conflicts/output validation remain strict.
+        public static async Task<PlasticCommandResult> RunDiffAsync(string executable, IList<string> arguments,
+            string workingDirectory, CancellationToken token)
+        {
+            var result = await RunAsync(executable, arguments, workingDirectory, token).ConfigureAwait(false);
+            int code = result.ExitCode;
+            if (code == 0 || code == 1 || code == 2 || code == 11 || code == 12 || code == 13)
+                return new PlasticCommandResult { ExitCode = 0, Error = "", Output =
+                    "Beyond Compare 比较窗口已关闭（比较结果代码 " + code + "）。" };
+            return result;
+        }
+
         public static async Task<PlasticCommandResult> RunAsync(string executable, IList<string> arguments,
             string workingDirectory, CancellationToken token)
         {

@@ -259,7 +259,7 @@ void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binar
             HMENU menu = CreatePopupMenu();
             const HRESULT queried = context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL);
             require(SUCCEEDED(queried) && HRESULT_CODE(queried) == (selectionKind == 0 ? 26 : selectionKind < 3 ? 24 : 1), "classic handoff filtered menu populated");
-            for (const wchar_t* command : (selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version"} : std::vector<const wchar_t*>{L"create-workspace"}))
+            for (const wchar_t* command : (selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove"} : std::vector<const wchar_t*>{L"create-workspace"}))
             {
                 const std::wstring canonical = L"tortoisescm." + std::wstring(command);
                 UINT offset = 0;

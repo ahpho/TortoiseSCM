@@ -68,11 +68,24 @@ internal static class BeyondCompareProcessTests
             bool rejected = false; try { await client.RunMergeToolAsync(baseline, local, remote, output, canceled.Token); } catch (OperationCanceledException) { rejected = true; }
             Check(rejected && !File.Exists(Path.Combine(root, "opened")), "Pre-cancel never launches BC");
         }
-        foreach (int code in new[] { 101, 103, 104, 17 })
+        config.Timeout = TimeSpan.FromSeconds(10);
+        foreach (int code in new[] { 1, 2, 11, 12, 13 })
+        {
+            File.WriteAllText(Path.Combine(root, "mode"), "exit" + code);
+            var result = await client.OpenDiffToolAsync(local, CancellationToken.None);
+            Check(result.Succeeded && result.Error.Length == 0 && result.Output.Contains(code.ToString()), "Comparison result is not an editor failure: " + code);
+            result = await client.OpenRevisionDiffToolAsync(root, "/original.txt", "/later.txt", 1, 2, CancellationToken.None);
+            Check(result.Succeeded, "Historical comparison result is not an editor failure: " + code);
+            result = await client.RunMergeToolAsync(baseline, local, remote, output, CancellationToken.None);
+            Check(!result.Succeeded && result.ExitCode == code, "Comparison status must not imply successful merge: " + code);
+        }
+        foreach (int code in new[] { 14, 100, 101, 103, 104, 105, 106, 107, 17 })
         {
             File.WriteAllText(Path.Combine(root, "mode"), "exit" + code);
             var result = await client.RunMergeToolAsync(baseline, local, remote, output, CancellationToken.None);
             Check(result.ExitCode == code && !result.Succeeded && result.Error.Length > 0, "Nonzero BC exit remains failure: " + code);
+            result = await client.OpenDiffToolAsync(local, CancellationToken.None);
+            Check(!result.Succeeded && result.ExitCode == code && result.Error.Length > 0, "Comparison errors remain failures: " + code);
         }
         config.Timeout = TimeSpan.FromSeconds(10);
         File.WriteAllText(Path.Combine(root, "mode"), "exit102");

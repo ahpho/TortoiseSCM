@@ -2,6 +2,19 @@
 
 范围说明（2026-09-28）：用户已排除多 DPI、提交失败草稿跨重启恢复，以及签名/自动更新/ARM64 等发布与平台产品化工作。以下历史记录中的未验收事实保留；历史“下一步/待完成”描述不覆盖 [当前路线图](../ROADMAP.md) 的范围约定。
 
+## 基础 GUI 工作流验收与修复（2026-09-28）
+
+- 本轮按用户指定路径验收真实 WinForms 窗口、确认框和按钮，操作真实 Plastic 服务器；所有写入仅在独立 `tortoisescm-autotest-*` 分支及 QA 工作区。桌面 computer-use 接口返回 native pipe unavailable，因此没有把进程内点击或 COM 测试写成实际 Explorer 鼠标验收。Native Shell 361、生产 DLL 537 项通过，新增经典/现代 Add、Remove 的准确 argv 与选择范围捕获；真实桌面菜单显示和覆盖层仍保留后续验收。
+- 添加/删除/签入 GUI 集成 256 项通过，覆盖 Standard 和 Gluon：未管理文件添加、签入并由独立 consumer 核对 UTF-8 中文内容；受控文件删除后呈 DE 待签入，再提交并在 consumer 确认删除；目录递归添加/删除；未选私有兄弟文件排除；取消添加/删除/审核、空说明拒绝、刷新及说明选择保留。复现并修复 `--command add` 只打开主窗口而未进入添加确认的缺陷；修复最小签入审核窗口说明和锁列表裁切。证据 `qa/basic-workflow-gui-final.log`、`qa/basic-workflow-gui-final/`，fixture 为 `qa/integration-20260928-230855-2d5c387a/`。
+- 更新 GUI 集成 60 项通过：真实入口创建 UpdateForm，点击前不写入；Gluon 选中嵌套目录只接收该目录新增/修改/删除，兄弟目录保持旧内容；Standard 明确展示并执行整工作区更新；根更新、刷新/no-op、繁忙禁重复/关闭、跨工作区拒绝。Standard/Gluon 有冲突时保留本地字节、selector 及 CH 待签入状态。证据 `qa/integration-20260928-230814-1e2279bf/`，普通/最小及冲突截图已查看。
+- 历史 GUI 在同一隔离 fixture 续跑 54 项通过：Standard/Gluon 文件历史自动载入全部三个版本；Ctrl+D、双击、标记任意两个版本的真实导出字节准确；取消恢复不改变内容，已有待提交修改时恢复拒绝且保留原内容；干净文件回滚至 cs882 后内容准确、保留待签入状态，selector 和服务器分支头均不变。目录历史及刷新全部仅显示 cs882/883/885/886（含子目录），排除仅修改相似前缀兄弟目录的 cs884。证据 `qa/integration-20260928-231321-41df5d12/history-gui-resume.log` 及截图；早期自动测试器误判原生提示框按钮编号而停滞，修复测试器后才记录通过，产品恢复逻辑无需修改。
+- 普通右键对应的不带分支过滤 HistoryForm 另行只读验收通过：自然打开自动扫描全部 887 条提交，330.85 秒后准确仅显示 cs886/885/883/882，包含子目录、排除相似前缀兄弟目录 cs884。普通/最小截图已查看，证据 `qa/directory-history-readonly-20260928/`；查询性能仍列为 ROADMAP 待优化项。
+- 另用真实恢复按钮复核精确状态，两种工作区均返回 `CO` 待签入，旧内容 UTF-8 字节正确，服务器头保持 cs886、selector 字节不变；随后只在测试工作区撤销测试更改。证据为同 fixture 下 `producer-exact-rollback.json`、`partial-exact-rollback.json`。
+- 真实 HistoryForm 标记 cs856、选中 cs859 文件后直接打开用户提供的 BC，窗口两侧显示正确版本号及 `version one 中文` / `version three 中文`；只读、无中间窗口、输入在窗口关闭前保留，关闭后清理，并恢复历史窗口按钮。15 项检查及两张截图在 `qa/history-real-bc-20260929/`。另一个独立实际 BC 窗口测试复现普通差异窗口关闭返回 13 被误报失败；按 [BC 官方返回码](https://www.scootersoftware.com/v4help/command_line_reference.html)，仅双向比较将 0/1/2/11/12/13 视为正常结果，合并仍严格处理非零码，错误及无法等待仍保留原有保护。修复后真实 BC 窗口关闭验证通过，BC 进程专项 51、历史比较 90、工作文件比较 184、暂存集比较 65 项通过。证据 `qa/gui-acceptance-20260928/real-bc-window-fixed/` 及同目录日志。
+- 完整 `build-tortoisescm.ps1 -Test` 通过，包含 Core、2297 项主 CLI、Shell 与完整 WinForms；生产修复完成后再次构建并重跑受影响 BC 专项和完整 WinForms 回归通过。新增 `Run-BasicGuiAcceptance.ps1` 统一创建独立 fixtures 并运行三类基础 GUI 集成，接入 `-Integration`；真实 BC 窗口烟测为显式可选项，避免无人值守时打开编辑器。正常/最小截图均已查看。
+- 最终包相关回归：安装/升级回退/卸载 46、双击入口 83、随包 Beyond Compare 39 项通过，均使用隔离目录且不注册真实 Shell。日志在 `qa/gui-acceptance-20260928/`。
+- 原 TestSCM、TestSCM2 共 4,009 个文件（包含工作区元数据）的路径、长度、修改时间、SHA-256 前后相同，证据 `qa/gui-acceptance-20260928/user-workspaces-preserved.json`。测试提交说明保存在 QA 专用目录；未安装新版本到用户活动目录、注册 Shell 或重启 Explorer。三方人工编辑/保存、BC 5 和实际桌面菜单点击不属于本轮通过项。
+
 ## 右键首次拉取与默认 Gluon 工作区（2026-09-28）
 
 - 安装协调器仅提示安装成功及位置，不启动欢迎窗口；保留旧 `-NoLaunch` 参数兼容。正常安装测试不传该参数，并注入拒绝进程启动的探针，证明成功不依赖启动应用。升级检测旧扩展和用户确认 Explorer 重启的行为保留。

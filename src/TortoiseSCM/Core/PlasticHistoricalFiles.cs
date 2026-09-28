@@ -161,7 +161,7 @@ namespace TortoiseSCM
                 cancellationToken.ThrowIfCancellationRequested();
                 if (host != null) return await host.ShowDiffAsync(before, after, cancellationToken).ConfigureAwait(false);
                 if (beyondCompare != null)
-                    return await BeyondCompareProcess.RunAsync(beyondCompare,
+                    return await BeyondCompareProcess.RunDiffAsync(beyondCompare,
                         HistoricalBeyondCompareArguments(before, after,
                             HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset),
                             HistoricalSpec(context.Repository, toRepositoryPath, toChangeset)), temporary, cancellationToken).ConfigureAwait(false);
@@ -215,7 +215,7 @@ namespace TortoiseSCM
                 string beforeTitle = HistoricalSpec(repository, sourcePath, fromChangeset) + (status == "A" ? " (不存在 / empty)" : "");
                 string afterTitle = HistoricalSpec(repository, path, toChangeset) + (status == "D" ? " (不存在 / empty)" : "");
                 cancellationToken.ThrowIfCancellationRequested();
-                return await BeyondCompareProcess.RunAsync(executable, HistoricalBeyondCompareArguments(before, after, beforeTitle, afterTitle),
+                return await BeyondCompareProcess.RunDiffAsync(executable, HistoricalBeyondCompareArguments(before, after, beforeTitle, afterTitle),
                     temporary, cancellationToken).ConfigureAwait(false);
             }
             catch (BeyondCompareWaitException) { preserve = true; throw; }

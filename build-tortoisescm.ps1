@@ -116,6 +116,7 @@ if ($Test -or $Integration) {
         if ($LASTEXITCODE -ne 0) { throw 'CLI integration test compilation failed.' }
         $setupArguments = @{}
         if ($Workspace) { $setupArguments.ReferenceWorkspace = $Workspace }
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\Run-BasicGuiAcceptance.ps1') @setupArguments
         $manifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $manifest -or -not (Test-Path -LiteralPath $manifest)) { throw 'Test workspace setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-integration.txt'), $manifest)
