@@ -377,3 +377,11 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 新历史 GUI 49 项通过，实际点击按钮验证普通/固定比较路由、增删空侧说明、导出范围、参数快照、异步锁定、失败恢复与关闭保护。暂存集 GUI 另覆盖文件选择、真实按钮路由、取消后等待、重复启动/关闭拦截和 selector 变化拒绝。
 - 最终完整 `build-tortoisescm.ps1 -Test -Workspace` 通过（`qa/bc-browsing-regression.log`），包括新增后端/GUI、2,082 项 CLI、原有后端、Shell/现代菜单和全部窗口回归。已目视检查 `qa/Release/shelves.png`、`shelves-minimum.png`、`history-beyond-compare.png` 与新增项最小窗口截图；控件均可见，无重叠。这些是进程内 WinForms 渲染，未声称真实 Explorer 或多 DPI 验收。
 - 安装/升级回滚/卸载检查 44 项通过（`qa/bc-browsing-package.log`），未改变真实 Explorer 注册。下一阶段继续提交窗口的失败保留与重试预检；工作文件增删空侧、工具并行会话、BC 实际保存/放弃及多 DPI 仍列为未完成。
+
+# 提交预览、执行前复核与失败保留（2026-09-28）
+
+- 新增提交预览后端 25 项和 GUI 47 项通过。预览复制并固定仓库、工作区名称、selector、Standard/Partial 模式、请求路径、实际递归文件、锁提示、私有/忽略排除数量及文件状态/内容指纹；UI 只读显示完整说明和实际范围，普通/最小窗口截图为 `qa/checkin-review*.png` 与 `qa/checkin-main-success.png`。
+- 原生执行前在现有 Standard 合并和 Partial 冲突 gate 内重新读取工作区、状态与内容，检查移动旧路径、目录新增后代、selector/名称/模式变化；回调发生在最终原生命令前，不绕过已有冲突会话保护。客户端文件哈希是紧邻执行前的复核，不宣称跨进程原子冻结。
+- 真实 Plastic 集成 37 项通过，最终 fixture 为 `qa/integration-20260928-151219-b6c567ee/manifest.json`，证据为相邻 `checkin-preflight-results.json`。Standard/Partial 覆盖预览后内容变化、状态变化、目录新增受控子项、显式文件范围、目录范围和排除私有项；拒绝时服务器分支头、工作文件、状态和 selector 均不变，原 TestSCM 也保持不变。
+- GUI 失败、超时、非零退出、抛出异常和刷新失败均保留说明/勾选/列表顺序及操作记录，不自动重试；成功刷新解锁预览但不跳过不确定结果确认，只有明确成功才清空说明。关闭挂起提交会被拦截；取消预览不发送签入。完整回归日志为 `qa/checkin-regression-final2.log`，包含原有 2,082 项 CLI、Core、Shell 和窗口检查；新增 UI 测试最终 47 项通过。
+- 本阶段不提供程序重启后的失败草稿恢复，不把锁提示当作权限结论，也不保证与其他客户端并发修改之间的服务器原子事务。下一步是草稿恢复、进度/取消和更细的服务端结果核对。
