@@ -991,7 +991,7 @@ internal static class CliTests
         }
         else if (args[0] == "diff") Console.WriteLine("C|\"/history-folder/file.txt\"|F|\"\"|\"\"");
         else if (args[0] == "fileinfo")
-            Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><Type>txt</Type></FileInfo></FileInfos>");
+            Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><Status>controlled</Status><Type>txt</Type><IsUnderXlink>false</IsUnderXlink><RepSpec>test@server:8087</RepSpec><Hash>fake-hash</Hash></FileInfo></FileInfos>");
         else if (args[0] == "cat")
             File.WriteAllText(args.Single(arg => arg.StartsWith("--file=")).Substring(7), args[1].StartsWith("serverpath:") ?
                 (args[1].Contains("/merge-conflict.txt#") ? (args[1].Contains("#cs:0@") ? "merge base 中文\n" : args[1].Contains("#cs:1@") ? "merge local 中文\n" : "merge remote 中文\n") :

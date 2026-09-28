@@ -387,3 +387,11 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 真实 Plastic 集成 37 项通过，最终 fixture 为 `qa/integration-20260928-151219-b6c567ee/manifest.json`，证据为相邻 `checkin-preflight-results.json`。Standard/Partial 覆盖预览后内容变化、状态变化、目录新增受控子项、显式文件范围、目录范围和排除私有项；拒绝时服务器分支头、工作文件、状态和 selector 均不变，原 TestSCM 也保持不变。
 - GUI 失败、超时、非零退出、抛出异常和刷新失败均保留说明/勾选/列表顺序及操作记录，不自动重试；成功刷新解锁预览但不跳过不确定结果确认，只有明确成功才清空说明。关闭挂起提交会被拦截；取消预览不发送签入。完整回归日志为 `qa/checkin-regression-final2.log`，包含原有 2,082 项 CLI、Core、Shell 和窗口检查；新增 UI 测试最终 47 项通过。
 - 本阶段不把锁提示当作权限结论，也不保证与其他客户端并发修改之间的服务器原子事务。跨重启失败草稿恢复已按用户要求排除；后续保留进度/取消和更细的服务端结果核对。
+
+# 工作文件 Beyond Compare 空侧（2026-09-28）
+
+- `PlasticTools` 现按 Plastic 原生 `AD`、`DE`、`LD`、修改和移动状态准备工作文件比较。新增使用只读空基线；受控删除和本地删除使用只读空工作侧；普通修改/重命名继续按 ItemId 下载并在启动前复核身份。下载失败、状态不一致、重建删除路径、私有/忽略/目录/链接和删除基线身份不唯一时拒绝启动，不把错误伪装为空文件。
+- 聚焦回归 `WorkingBeyondCompareTests` 184 项通过；既有 `BuiltInToolTests` 58 项、`BeyondCompareProcessTests` 22 项通过。覆盖取消、非零退出、不确定工具生命周期、selector/状态/ItemId/内容与文件存在性变化。
+- 隔离 Plastic 实测 `WorkingBeyondCompareIntegrationTests` 78 项通过（Standard 与 Partial），覆盖修改、添加、二进制添加、受控删除、本地删除、重命名后修改、中文路径、重复历史基线和删除路径重新出现；原 `TestSCM` selector、文件及待定状态保持不变。证据目录：`qa/integration-20260928-160035-89e17358/`，结果为 `bc-working-results.json`。
+- 主窗口路由测试在 Standard 与 Partial 各 80 项通过，使用延迟工具宿主验证忙碌/关闭拦截、临时输入生命周期、空侧只读属性和普通/最小尺寸截图；这是工具宿主测试，不声称真实 Beyond Compare 窗口内保存/放弃验收。产物位于同一隔离目录下的 `ui-producer/` 和 `ui-partial/`。
+- 全量 `build-tortoisescm.ps1 -Test` 通过，包含新增 184 项后端套件和原有 CLI/Core/Shell/WinForms 回归；x64 包构建与安装/卸载检查 45 项通过，包为 `bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-bc-working-20260928-windows-x64.zip`。实际 BC 保存/放弃、已有实例并行行为仍是后续验收项。

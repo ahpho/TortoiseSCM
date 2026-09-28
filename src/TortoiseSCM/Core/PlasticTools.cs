@@ -148,55 +148,96 @@ namespace TortoiseSCM
         {
             var command = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
             string local = command.Arguments[1];
-            if (!File.Exists(local)) throw new ArgumentException("Choose an existing controlled file for comparison.");
             var context = DiscoverWorkspace(local);
             if (context == null || !SamePath(command.WorkingDirectory, context.RootPath))
                 throw new InvalidOperationException("The selected workspace changed during comparison preparation. Refresh before continuing.");
             ValidateBranchRepository(context.Repository);
-            command.Arguments = new List<string> { "fileinfo", local, "--xml", "--encoding=utf-8" };
-            var info = await ExecuteAsync(command, token).ConfigureAwait(false);
-            RequireSuccess(info);
-            var file = SafeXml.Load(info.Output).Descendants("FileInfo").SingleOrDefault();
-            long changeset;
-            if (file == null || !Int64.TryParse((string)file.Element("RevisionChangeset"), out changeset) || changeset < 0)
-                throw new InvalidOperationException("The file has no checked-in base revision to compare.");
-            if (String.Equals((string)file.Element("IsUnderXlink"), "true", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Cross-repository linked files cannot be compared with this tool.");
-            long itemId = await BuiltInToolItemIdAsync(context, local, token).ConfigureAwait(false);
+            var snapshot = await ReadWorkingDiffStateAsync(context, local, token).ConfigureAwait(false);
             string temporary = NewHistoricalTemporaryDirectory();
             string before = Path.Combine(temporary, "base" + Path.GetExtension(local));
+            string after = snapshot.Deleted ? Path.Combine(temporary, "deleted" + Path.GetExtension(local)) : local;
             bool preserve = false;
             try
             {
                 // Resolve the checked-in path using native identity: a local rename
                 // must never download another item that previously occupied its name.
-                await DownloadPartialIdentityFileAsync(context, itemId, changeset, before, token).ConfigureAwait(false);
+                if (snapshot.Added) File.WriteAllBytes(before, new byte[0]);
+                else await DownloadPartialIdentityFileAsync(context, snapshot.ItemId, snapshot.Changeset, before, token).ConfigureAwait(false);
+                if (snapshot.Deleted) File.WriteAllBytes(after, new byte[0]);
                 token.ThrowIfCancellationRequested();
                 ValidateHistoricalContext(context);
                 RejectReparsePath(local);
-                if (await BuiltInToolItemIdAsync(context, local, token).ConfigureAwait(false) != itemId)
-                    throw new InvalidOperationException("The selected file changed identity during comparison preparation. Refresh before continuing.");
+                var current = await ReadWorkingDiffStateAsync(context, local, token).ConfigureAwait(false);
+                if (snapshot.Fingerprint != current.Fingerprint)
+                    throw new InvalidOperationException("The selected file changed status, revision or identity during comparison preparation. Refresh before continuing.");
                 ValidateHistoricalContext(context);
                 File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
+                if (snapshot.Deleted) File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
                 token.ThrowIfCancellationRequested();
-                if (host != null) return await host.ShowDiffAsync(before, local, token).ConfigureAwait(false);
+                if (host != null) return await host.ShowDiffAsync(before, after, token).ConfigureAwait(false);
                 return await BeyondCompareProcess.RunAsync(beyondCompare,
-                    PlasticToolArguments.Expand(BeyondCompareTool.DiffArguments,
-                        new Dictionary<string, string> { { "base", before }, { "local", local } }, false), temporary, token).ConfigureAwait(false);
+                    new[] { "/solo", "/readonly", before, after,
+                        "/lefttitle=" + local + (snapshot.Added ? " (不存在 / empty)" : " (base cs:" + snapshot.Changeset.ToString(CultureInfo.InvariantCulture) + ")"),
+                        "/righttitle=" + local + (snapshot.Deleted ? " (已删除 / empty)" : " (working)") }, temporary, token).ConfigureAwait(false);
             }
             catch (BeyondCompareWaitException) { preserve = true; throw; }
-            finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before); }
+            finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, snapshot.Deleted ? after : null); }
         }
 
-        private async Task<long> BuiltInToolItemIdAsync(PlasticWorkspace context, string path, CancellationToken token)
+        private sealed class WorkingDiffState
         {
-            var result = await ExecuteAsync(RevisionCommand(context.RootPath,
-                new[] { "ls", path, "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
-            RequireSuccess(result);
-            var entry = SafeXml.Load(result.Output).Descendants("LsItem").SingleOrDefault();
-            if (entry == null || !StructureRegularFile(entry, context.Repository) || ((long?)entry.Element("ItemId") ?? -1) <= 0)
-                throw new ArgumentException("Select one controlled regular file in the workspace repository; linked or private files cannot be compared.");
-            return (long)entry.Element("ItemId");
+            internal bool Added, Deleted;
+            internal long ItemId, Changeset;
+            internal string Fingerprint;
+        }
+
+        private async Task<WorkingDiffState> ReadWorkingDiffStateAsync(PlasticWorkspace context, string path, CancellationToken token)
+        {
+            ValidateHistoricalContext(context);
+            RejectReparsePath(path);
+            var nested = DiscoverWorkspace(path);
+            if (nested == null || !SamePath(nested.RootPath, context.RootPath) || Directory.Exists(path))
+                throw new ArgumentException("Select one regular file in the selected workspace.");
+            var pending = (await GetStatusAsync(context.RootPath, token).ConfigureAwait(false)).Where(item => SamePath(item.Path, path)).ToList();
+            if (pending.Any(item => item.IsDirectory || IsPrivateCheckinStatus(item.StatusCode)))
+                throw new ArgumentException("Private, ignored or directory items cannot be compared.");
+            bool added = pending.Any(item => item.StatusCode == "AD"), deleted = pending.Any(item => item.StatusCode == "DE"), missing = pending.Any(item => item.StatusCode == "LD");
+            if ((added || deleted || missing) && pending.Count != 1)
+                throw new ArgumentException("The selected file has ambiguous pending states; refresh before comparison.");
+            if (File.Exists(path) == (deleted || missing))
+                throw new ArgumentException("The selected file's presence does not match its native state; refresh before comparison.");
+            var infoResult = await ExecuteAsync(RevisionCommand(context.RootPath,
+                new[] { "fileinfo", path, "--fields=RevisionChangeset,Hash,Status,Type,IsUnderXlink,RepSpec", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
+            RequireSuccess(infoResult);
+            var info = SafeXml.Load(infoResult.Output).Descendants("FileInfo").SingleOrDefault();
+            long changeset;
+            if (info == null || !Int64.TryParse((string)info.Element("RevisionChangeset"), out changeset) ||
+                (string)info.Element("IsUnderXlink") != "false" || !new[] { "txt", "bin" }.Contains((string)info.Element("Type")))
+                throw new ArgumentException("The selected file's native revision or regular-file type cannot be verified.");
+            string status = (string)info.Element("Status");
+            if (added ? changeset != -1 || status != "added" : changeset < 0 || !(deleted ? status == "deleted" : new[] { "controlled", "checked-out", "moved" }.Contains(status)))
+                throw new ArgumentException("The selected file's native state does not prove a valid comparison endpoint.");
+            if (!deleted && (string)info.Element("RepSpec") != context.Repository)
+                throw new ArgumentException("The selected file does not belong to the workspace repository.");
+            long itemId;
+            if (deleted) itemId = await StructureDeletedItemIdAsync(context, path, changeset, token).ConfigureAwait(false);
+            else
+            {
+                var result = await ExecuteAsync(RevisionCommand(context.RootPath,
+                    new[] { "ls", path, "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
+                RequireSuccess(result);
+                var entry = SafeXml.Load(result.Output).Descendants("LsItem").SingleOrDefault();
+                if (entry == null || !StructureRegularFile(entry, context.Repository) || !Int64.TryParse((string)entry.Element("ItemId"), out itemId) ||
+                    (added ? itemId >= 0 || (long?)entry.Element("Changeset") != -1 : itemId <= 0))
+                    throw new ArgumentException("Select one controlled regular file in the workspace repository; linked or private files cannot be compared.");
+            }
+            ValidateHistoricalContext(context);
+            RejectReparsePath(path);
+            if (Directory.Exists(path) || File.Exists(path) == (deleted || missing))
+                throw new ArgumentException("The selected file's presence changed during comparison preparation; refresh before comparison.");
+            return new WorkingDiffState { Added = added, Deleted = deleted || missing, ItemId = itemId, Changeset = changeset,
+                Fingerprint = String.Join("|", itemId, changeset, status, (string)info.Element("Hash"),
+                    String.Join("\n", pending.Select(item => item.StatusCode + "|" + item.OldPath).OrderBy(value => value))) };
         }
 
         public async Task<PlasticCommandResult> RunMergeToolAsync(string basePath, string localPath, string remotePath, string mergedPath, CancellationToken cancellationToken)

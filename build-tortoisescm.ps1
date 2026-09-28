@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'ShelveBeyondCompareTests', 'HistoricalBeyondCompareTests', 'CheckinPreflightTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'WorkingBeyondCompareTests', 'ShelveBeyondCompareTests', 'HistoricalBeyondCompareTests', 'CheckinPreflightTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -135,6 +135,27 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-bc-browsing.txt'), $bcBrowsingManifest)
         & $bcBrowsingOutput $bcBrowsingManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Beyond Compare browsing integration tests failed. Inspect $bcBrowsingManifest." }
+        $bcWorkingOutput = Join-Path $out 'WorkingBeyondCompareIntegrationTests.exe'
+        $bcWorkingSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+        $bcWorkingSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkingBeyondCompareIntegrationTests.cs'
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$bcWorkingOutput" $bcWorkingSources
+        if ($LASTEXITCODE -ne 0) { throw 'Working-file Beyond Compare integration compilation failed.' }
+        $bcWorkingManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $bcWorkingManifest -or -not (Test-Path -LiteralPath $bcWorkingManifest)) { throw 'Working-file Beyond Compare fixture setup failed.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-bc-working.txt'), $bcWorkingManifest)
+        & $bcWorkingOutput $bcWorkingManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+        if ($LASTEXITCODE -ne 0) { throw "Working-file Beyond Compare integration failed. Inspect $bcWorkingManifest." }
+        $bcWorkingUiOutput = Join-Path $out 'WorkingBeyondCompareUiTests.exe'
+        $bcWorkingUiSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
+        $bcWorkingUiSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+        $bcWorkingUiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkingBeyondCompareUiTests.cs'
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.WorkingBeyondCompareUiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$bcWorkingUiOutput" $bcWorkingUiSources
+        if ($LASTEXITCODE -ne 0) { throw 'Working-file Beyond Compare UI compilation failed.' }
+        $bcWorkingFixture = Get-Content -LiteralPath $bcWorkingManifest -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($role in @('producer', 'partial')) {
+            & $bcWorkingUiOutput (Join-Path $bcWorkingFixture.runDirectory "ui-$role") $bcWorkingFixture.$role
+            if ($LASTEXITCODE -ne 0) { throw "Working-file Beyond Compare UI failed for $role. Inspect $bcWorkingManifest." }
+        }
         $checkinOutput = Join-Path $out 'CheckinPreflightIntegrationTests.exe'
         $checkinSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $checkinSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CheckinPreflightIntegrationTests.cs'

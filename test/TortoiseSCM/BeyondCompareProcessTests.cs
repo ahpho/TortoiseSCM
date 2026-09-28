@@ -116,7 +116,7 @@ internal static class BeyondCompareProcessTests
         }
         string cmMode = File.Exists(Path.Combine(testRoot, "cm-mode")) ? File.ReadAllText(Path.Combine(testRoot, "cm-mode")) : "";
         if (args[0] == "status") { Console.WriteLine("<StatusOutput><WorkspaceStatus><Status><Changeset>-1</Changeset></Status></WorkspaceStatus></StatusOutput>"); return 0; }
-        if (args[0] == "fileinfo") { Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset></FileInfo></FileInfos>"); return 0; }
+        if (args[0] == "fileinfo") { Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><IsUnderXlink>false</IsUnderXlink><Type>txt</Type><Status>controlled</Status><RepSpec>test@server</RepSpec></FileInfo></FileInfos>"); return 0; }
         if (args[0] == "ls")
         {
             bool history = args.Any(x => x.StartsWith("--tree="));

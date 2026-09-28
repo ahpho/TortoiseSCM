@@ -24,9 +24,11 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ModernMenu') -Destination (Join-Path $stage 'ModernMenu') -Recurse
     & (Join-Path $PSScriptRoot 'Build-ModernMenu.ps1') -OutputDirectory (Join-Path $stage 'ModernMenu') | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $stage
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'ROADMAP.md') -Destination $stage
     [IO.Directory]::CreateDirectory((Join-Path $stage 'doc')) | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM.md') -Destination (Join-Path $stage 'doc\TortoiseSCM.md')
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM-parity.md') -Destination (Join-Path $stage 'doc\TortoiseSCM-parity.md')
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM-validation.md') -Destination (Join-Path $stage 'doc\TortoiseSCM-validation.md')
     @'
 TortoiseSCM for Windows x64
 
@@ -40,7 +42,7 @@ Optional Explorer status overlays require elevated PowerShell:
 Optional Windows 11 modern menu (unsigned local-test preview) requires elevated Windows PowerShell:
   .\Install.ps1 -EnableModernMenu
 Modern menu stays enabled when upgrading an installation that already enabled it.
-The preview changes no certificate trust or Developer Mode settings; production distribution needs a signed package.
+The preview changes no certificate trust or Developer Mode settings. Signed distribution is outside the current project scope; see ROADMAP.md.
 Preview installation without changing files or registry:
   .\Install.ps1 -WhatIf
 Portable use without shell registration:

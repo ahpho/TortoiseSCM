@@ -41,6 +41,7 @@ try {
     $package = Join-Path $fixture 'unpacked'
     [IO.Compression.ZipFile]::ExtractToDirectory($zip, $package)
     $manifest = Read-TscmManifest $package -VerifyFiles
+    Assert (Test-Path -LiteralPath (Join-Path $package 'ROADMAP.md')) 'Packaged documentation includes the linked completion scope'
     Assert (@($manifest.files | Where-Object { $_.path -match '(?i)(Tests|\.pdb$|\.lib$|\.plastic|^cm\.exe$|settings\.xml)' }).Count -eq 0) 'Package excludes tests, symbols, workspaces and user settings'
     Assert ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -eq ([IO.File]::ReadAllText($zip + '.sha256').Split(' ')[0])) 'Archive SHA-256 sidecar matches'
     $installRoot = Join-Path $fixture 'install root'

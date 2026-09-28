@@ -161,7 +161,7 @@ internal static class BuiltInToolTests
         string metadata = Path.Combine(Environment.CurrentDirectory, ".plastic");
         string mode = File.Exists(Path.Combine(metadata, "mode")) ? File.ReadAllText(Path.Combine(metadata, "mode")) : "";
         if (args[0] == "status") { Console.WriteLine("<StatusOutput><WorkspaceStatus><Status><Changeset>-1</Changeset></Status></WorkspaceStatus></StatusOutput>"); return 0; }
-        if (args[0] == "fileinfo") { Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><IsUnderXlink>false</IsUnderXlink></FileInfo></FileInfos>"); return 0; }
+        if (args[0] == "fileinfo") { Console.WriteLine("<FileInfos><FileInfo><RevisionChangeset>1</RevisionChangeset><IsUnderXlink>false</IsUnderXlink><Type>txt</Type><Status>controlled</Status><RepSpec>test@server</RepSpec></FileInfo></FileInfos>"); return 0; }
         if (args[0] == "ls")
         {
             bool historical = args.Any(a => a.StartsWith("--tree="));
