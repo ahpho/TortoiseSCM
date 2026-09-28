@@ -1,0 +1,86 @@
+﻿# Exercises the actual Inno installer and uninstaller, using only TestSetup builds.
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string]$BeyondCompareDirectory,
+    [string]$BinaryDirectory = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/Release'),
+    [string]$IsccPath
+)
+$ErrorActionPreference = 'Stop'
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$scripts = Join-Path $repo 'contrib/tortoisescm'
+. (Join-Path $scripts 'Package.Common.ps1')
+$script:assertions = 0
+function Assert([bool]$Condition, [string]$Description) {
+    $script:assertions++
+    if (-not $Condition) { throw $Description }
+    Write-Host ('PASS: ' + $Description)
+}
+$testArp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{D7305D7A-348E-4E30-88D3-6BCE9CE856BA}_is1'
+if (Test-Path $testArp) { throw 'A TestSetup installation already exists. Remove it before starting this isolated acceptance run.' }
+$fixture = Assert-TscmPlainPath (Join-Path $repo ('bin/TortoiseSCM/qa/setup-native-' + [Guid]::NewGuid().ToString('N')))
+[IO.Directory]::CreateDirectory($fixture) | Out-Null
+$root = Join-Path $fixture '安装目录 with spaces & symbols'
+$productionRoot = Join-Path $env:LOCALAPPDATA 'Programs/TortoiseSCM'
+$productionPointer = Join-Path $productionRoot 'current-install.json'
+$beforePointerHash = if (Test-Path -LiteralPath $productionPointer) { (Get-FileHash -LiteralPath $productionPointer -Algorithm SHA256).Hash } else { '' }
+$productionArp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B30D80DC-C4F3-4CD7-8175-86D48C0896A4}_is1'
+$beforeArp = Test-Path $productionArp
+$uninstaller = Join-Path $root 'setup/unins000.exe'
+$versions = @(('setup-native-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '-a'), ('setup-native-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '-b'))
+function Run-Installer([string]$Executable, [string]$LogName, [bool]$Install) {
+    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG="' + (Join-Path $fixture ($LogName + '.log')) + '"'))
+    if ($Install) { $arguments += ('/DIR="' + $root + '"') }
+    $process = Start-Process -FilePath $Executable -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+    return $process.ExitCode
+}
+$lock = $null
+try {
+    $setups = @()
+    foreach ($version in $versions) {
+        $setups += & (Join-Path $scripts 'Build-Setup.ps1') -BeyondCompareDirectory $BeyondCompareDirectory -BinaryDirectory $BinaryDirectory -OutputDirectory $fixture -Version $version -IsccPath $IsccPath -TestSetup
+    }
+    Assert ($setups.Count -eq 2) 'Two test installers with distinct package versions compiled.'
+    Assert (@($setups | Where-Object { $_ -notlike '*-Setup-Test.exe' }).Count -eq 0) 'Only test installer executable names may execute.'
+    Assert ((Run-Installer $setups[0] 'install-a' $true) -eq 0) 'First real installer returns success.'
+    $first = [IO.File]::ReadAllText((Join-Path $root 'current-install.json')) | ConvertFrom-Json
+    Assert (-not $first.registered) 'TestSetup does not register Explorer shell extensions.'
+    Assert ([string]$first.installRoot -eq $root) 'Unicode, spaces and ampersand install path is passed intact.'
+    Assert ((Read-TscmManifest $first.versionDirectory -VerifyFiles).version -eq $versions[0]) 'First installed payload hashes and version are correct.'
+    Assert (Test-Path $testArp) 'Installer registers the independent test Apps entry.'
+    Assert ((Get-ItemProperty $testArp).DisplayName -like 'TortoiseSCM Installer Test *') 'Test Apps entry is visibly distinguished from production.'
+    Assert (Test-Path -LiteralPath $uninstaller) 'Windows Apps uninstaller is present.'
+    Assert (Test-Path -LiteralPath (Join-Path $first.versionDirectory 'Tools/BeyondCompare/BComp.exe')) 'Beyond Compare is installed with the payload.'
+    $oldDll = Join-Path $first.versionDirectory 'TortoiseSCMShell.dll'
+    $lock = [IO.File]::Open($oldDll, 'Open', 'Read', 'Read')
+    Assert ((Run-Installer $setups[1] 'upgrade-b' $true) -eq 0) 'A newer installer upgrades while the old shell DLL is locked.'
+    $second = [IO.File]::ReadAllText((Join-Path $root 'current-install.json')) | ConvertFrom-Json
+    Assert ($first.versionDirectory -ne $second.versionDirectory) 'Upgrade publishes a fresh version directory.'
+    Assert ((Read-TscmManifest $second.versionDirectory -VerifyFiles).version -eq $versions[1]) 'Upgrade selects the newer package version with verified files.'
+    Assert (Test-Path -LiteralPath $oldDll) 'Old loaded shell DLL is preserved during upgrade.'
+    Assert ((Get-ItemProperty $testArp).DisplayVersion -eq $versions[1]) 'Windows Apps entry reflects the new version.'
+    Assert ((Run-Installer $setups[1] 'reinstall-b' $true) -eq 0) 'Reinstalling the same newer installer is supported.'
+    $third = [IO.File]::ReadAllText((Join-Path $root 'current-install.json')) | ConvertFrom-Json
+    Assert ($third.versionDirectory -ne $second.versionDirectory) 'Same-version reinstall also avoids overwriting a loaded payload.'
+    Assert ((Run-Installer $uninstaller 'uninstall-locked' $false) -ne 0) 'Uninstaller returns failure when an older version remains locked.'
+    Assert (Test-Path $testArp) 'Failed uninstall preserves the Windows Apps entry for retry.'
+    Assert (Test-Path -LiteralPath $uninstaller) 'Failed uninstall preserves its executable.'
+    Assert (Test-Path -LiteralPath (Join-Path $root 'setup/SetupBridge.ps1')) 'Failed uninstall preserves support scripts.'
+    Assert (Test-Path -LiteralPath $oldDll) 'Failed uninstall preserves the locked file.'
+    $lock.Dispose(); $lock = $null
+    Assert ((Run-Installer $uninstaller 'uninstall-retry' $false) -eq 0) 'The same Windows Apps uninstaller completes on retry after releasing the file.'
+    Assert (-not (Test-Path $testArp)) 'Successful uninstall removes only the test Apps entry.'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $root 'current-install.json'))) 'Successful uninstall removes the active version pointer.'
+    Assert (-not (Test-Path -LiteralPath $oldDll)) 'Successful retry removes the formerly locked old DLL.'
+    $afterPointerHash = if (Test-Path -LiteralPath $productionPointer) { (Get-FileHash -LiteralPath $productionPointer -Algorithm SHA256).Hash } else { '' }
+    Assert ($beforePointerHash -eq $afterPointerHash) 'Existing production installation pointer is unchanged.'
+    Assert ($beforeArp -eq (Test-Path $productionArp)) 'Production Windows Apps entry presence is unchanged.'
+    [pscustomobject]@{ assertions = $script:assertions; success = $true; artifacts = $fixture; productionUnchanged = $true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'results.json') -Encoding UTF8
+    Write-Host ("PASS: {0} native installer assertions. Artifacts: {1}" -f $script:assertions, $fixture)
+} finally {
+    if ($lock) { $lock.Dispose() }
+    # Only our fixed test AppId and recorded fixture-owned executable may be cleaned up.
+    if ((Test-Path $testArp) -and (Test-Path -LiteralPath $uninstaller)) {
+        $recordedRoot = [string](Get-ItemProperty $testArp).InstallLocation
+        if ($recordedRoot.TrimEnd('\') -eq $root.TrimEnd('\')) { Run-Installer $uninstaller 'cleanup-test' $false | Out-Null }
+    }
+}
