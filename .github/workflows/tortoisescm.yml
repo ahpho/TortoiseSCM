@@ -45,6 +45,8 @@ jobs:
         run: .\test\TortoiseSCM\PackageTests.ps1
       - name: Verify optional Beyond Compare bundle and installation
         run: .\test\TortoiseSCM\BundledBeyondComparePackageTests.ps1
+      - name: Verify double-click install and uninstall launchers
+        run: .\test\TortoiseSCM\PackageLauncherTests.ps1
       - name: Verify modern menu package and registration rollback
         run: .\test\TortoiseSCM\ModernPackageTests.ps1
       - name: Create portable package

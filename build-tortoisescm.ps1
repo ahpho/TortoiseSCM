@@ -95,6 +95,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CheckinUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CommitMessageUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkspaceCreationUiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\VersionInfoUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchRenameUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchDeleteUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialBranchSwitchUiTests.cs'

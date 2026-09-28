@@ -38,7 +38,7 @@ try {
     # Explicit allowlist: test executables, symbols, workspace metadata and cm.exe are never shipped.
     foreach ($file in @('TortoiseSCM.exe', 'TortoiseSCMShell.dll')) { Copy-Item -LiteralPath (Join-Path $binaries $file) -Destination (Join-Path $stage $file) }
     if (Test-Path -LiteralPath (Join-Path $binaries 'TortoiseSCM.exe.config')) { Copy-Item -LiteralPath (Join-Path $binaries 'TortoiseSCM.exe.config') -Destination $stage }
-    foreach ($file in @('Install.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Register-Shell.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Register-ModernShell.ps1', 'Unregister-ModernShell.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $stage }
+    foreach ($file in @('Install.cmd', 'Uninstall.cmd', 'PackageLauncher.ps1', 'Install.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Register-Shell.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Register-ModernShell.ps1', 'Unregister-ModernShell.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $stage }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ModernMenu') -Destination (Join-Path $stage 'ModernMenu') -Recurse
     & (Join-Path $PSScriptRoot 'Build-ModernMenu.ps1') -OutputDirectory (Join-Path $stage 'ModernMenu') | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $stage
@@ -72,7 +72,13 @@ TortoiseSCM for Windows x64
 
 Requires Windows x64, .NET Framework 4.8 and an installed Plastic SCM / Unity Version Control client.
 {BEYOND_COMPARE_INSTRUCTIONS}
-Install for this user from 64-bit PowerShell:
+Extract the entire ZIP first. Double-click Install.cmd to install and open TortoiseSCM.
+Double-click Uninstall.cmd to confirm and remove the active installation.
+Both launchers keep the result visible; PowerShell script association does not matter.
+These double-click entries close their command window when finished; use the PS1 scripts from an existing terminal or automation.
+Version information: right-click a Plastic workspace > TortoiseSCM > Version information.
+It displays the package version, source commit and running program directory.
+For advanced use, install from 64-bit PowerShell:
   .\Install.ps1
 Optional Explorer status overlays require elevated PowerShell:
   .\Install.ps1 -EnableMachineOverlays

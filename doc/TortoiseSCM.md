@@ -7,15 +7,7 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 
 运行需要 Windows x64、.NET Framework 4.8，以及已安装并完成服务器登录的 Plastic SCM / Unity Version Control 客户端；不需要安装 Visual Studio。含 BC 的安装包已携带 Beyond Compare 运行文件，无需另装程序；不含 BC 的包需自行安装。三方合并需要 Pro 授权。
 
-1. 解压最新 Windows x64 ZIP，在解压目录打开 64 位 PowerShell，执行以下两行。默认安装到当前用户目录并注册经典右键菜单，不需要管理员权限：
-
-   ```powershell
-   $app = .\Install.ps1
-   & (Join-Path $app.versionDirectory 'TortoiseSCM.exe')
-   ```
-
-   若系统阻止运行脚本，可仅在这个 PowerShell 窗口执行 `Set-ExecutionPolicy -Scope Process Bypass` 后重试；不改变全局策略。状态图标为可选项，管理员安装时添加 `-EnableMachineOverlays`。首次使用默认经典菜单即可。
-
+1. 将最新 Windows x64 ZIP **完整解压**，双击 **`Install.cmd`**。安装完成后自动打开 TortoiseSCM，结果窗口按回车关闭；默认安装到当前用户目录并注册经典右键菜单，不需要手动打开 PowerShell。不要在 ZIP 预览窗口内直接运行。已有安装会升级到新版本目录。
 2. 在欢迎窗口点击“拉取仓库…”。填写团队提供的服务器地址（如 `host:8087`、`ssl://host:8088` 或 `组织名@cloud`），点击“查询仓库”并选择已有仓库。填写唯一工作区名称、新的空目录（如 `D:\Workspaces\MyProject`），分支通常保持 `/main`。点击“拉取并打开”，核对确认后等待下载完成。
 3. 拉取成功后自动进入待定更改窗口。以后在该目录右键 → TortoiseSCM；Windows 11 先点“显示更多选项”。若菜单尚未出现，注销再登录；也可双击安装目录的 EXE，选择“打开已有工作区…”。
 4. 从下表开始日常测试。根目录入口操作整个工作区；文件或子目录的历史只查看对应范围。
@@ -28,6 +20,9 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 | 添加新文件 | 在待定列表勾选未版本控制的文件，“操作 → 添加…”，再勾选提交 |
 | 比较修改 | 文件右键 → TortoiseSCM → “比较差异…”；使用 Beyond Compare |
 
+查看当前版本：工作区右键 → TortoiseSCM → **“版本信息…”**，可查看安装包版本、Git 提交号、程序目录和架构；主窗口及欢迎窗口也提供入口。开发构建或缺失/损坏的包信息会明确提示，不据此声称最新版。安装新包后若菜单仍显示旧版本，注销 Windows 再登录后核对。
+
+卸载：双击解压目录或安装目录里的 **`Uninstall.cmd`**，核对显示的当前安装目录，输入 `Y` 并回车确认。工作区和用户设置保留；若文件被占用或修改，窗口会提示尚未完全卸载并保留重试入口。仅启用了系统级状态图标/需提升权限的现代菜单时，按提示右键以管理员身份运行。
 首次可先完成“拉取 → 看日志 → 更新”，再修改一个可提交的测试文件并提交，最后刷新日志确认新变更集。提交失败或结果未确认时先刷新并检查历史，不要直接重复提交。
 
 向导只创建已有仓库的 **Standard 完整工作区**；不创建服务器仓库、不复制服务器历史、不创建 Partial/动态工作区。目标必须为空或尚不存在，拒绝已有/嵌套工作区和链接目录；会复核仓库及分支身份。查询可取消，确认后的预检/创建/下载期间禁重复操作和关闭；失败会保留目录及阶段信息，不自动删除或重复创建。其他客户端并发操作不属于服务器原子事务。
@@ -123,12 +118,12 @@ $resolved = (& $exe --cli --json --command label-resolve --path $workspace --lab
 使用含 BC 的包时，在“设置 → 差异查看器”保留空路径（自动模式）即可。已有自定义路径会继续优先使用；需要改用包内 BC 时点击“自动检测”并保存。卸载保留用户新增/修改文件，包括使用 BC 后生成的文件。
 
 产物位于 `bin/TortoiseSCM/packages`：Windows x64 ZIP、SHA-256 校验文件，ZIP 内含逐文件校验清单。
-解压后运行 `Install.ps1`，默认安装到 `%LOCALAPPDATA%\Programs\TortoiseSCM` 并注册当前用户右键菜单。
+普通使用双击 `Install.cmd`，安装成功后自动打开程序；需要命令行参数时使用 `Install.ps1`。默认安装到 `%LOCALAPPDATA%\Programs\TortoiseSCM` 并注册当前用户右键菜单。
 `Install.ps1 -WhatIf` 可预览；需要状态图标时，在管理员 PowerShell 使用 `Install.ps1 -EnableMachineOverlays`。
 每次安装使用新版本目录，不覆盖 Explorer 已加载的 DLL。旧版本保留，注册失败时恢复原注册。
-运行 `Uninstall.ps1` 卸载当前版本；有机器级图标注册时需管理员执行并添加 `-RemoveMachineOverlays`。
+双击 `Uninstall.cmd` 并确认卸载当前活动版本；高级用法可运行 `Uninstall.ps1`；有机器级图标注册时需管理员执行并添加 `-RemoveMachineOverlays`。
 卸载仅清理属于该包且哈希未变化的文件，保留设置、工作区和用户新增/修改的文件。被锁定的文件会保留，注销后可重试。
-包当前未数字签名，也不提供自动更新。
+双击入口自动调用 64 位 Windows PowerShell，`ExecutionPolicy Bypass` 仅对本次进程生效，不修改系统执行策略；没有自动提权。`.cmd` 入口结束时会关闭其命令窗口；在已有终端或自动化中请使用底层 `.ps1`，它们保留高级选项。包当前未数字签名，也不提供自动更新。
 
 ### Windows 11 现代右键菜单（预览）
 

@@ -13,6 +13,7 @@ namespace TortoiseSCM
         private readonly Button open = DialogStyle.Button("打开已有工作区…");
         private readonly Button settings = DialogStyle.Button("设置…");
         private readonly Button close = DialogStyle.Button("关闭");
+        private readonly Button version = DialogStyle.Button("版本信息…");
         private readonly Label status = new Label();
         private Func<string> selectExisting;
         private Func<string> createNew;
@@ -35,9 +36,10 @@ namespace TortoiseSCM
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             create.Width = 120; open.Width = 162; settings.Width = 88; actions.Controls.Add(create); actions.Controls.Add(open); actions.Controls.Add(settings); layout.Controls.Add(actions, 0, 2);
             status.Text = "首次拉取采用 Standard 完整工作区。比较和合并统一使用 Beyond Compare。"; status.Dock = DockStyle.Fill; layout.Controls.Add(status, 0, 3);
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft }; buttons.Controls.Add(close); layout.Controls.Add(buttons, 0, 4);
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft }; buttons.Controls.Add(close); buttons.Controls.Add(version); layout.Controls.Add(buttons, 0, 4);
             Controls.Add(layout); AcceptButton = create; CancelButton = close;
             create.Click += delegate { var path = createNew(); if (!String.IsNullOrEmpty(path)) Finish(path); };
+            version.Click += delegate { using (var form = new VersionInfoForm()) form.ShowDialog(this); };
             open.Click += async delegate { await OpenAsync(); }; settings.Click += delegate { using (var form = new SettingsForm()) form.ShowDialog(this); }; close.Click += delegate { Close(); };
             FormClosing += delegate { if (cancellation != null) cancellation.Cancel(); };
         }

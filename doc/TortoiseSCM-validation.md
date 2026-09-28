@@ -2,6 +2,14 @@
 
 范围说明（2026-09-28）：用户已排除多 DPI、提交失败草稿跨重启恢复，以及签名/自动更新/ARM64 等发布与平台产品化工作。以下历史记录中的未验收事实保留；历史“下一步/待完成”描述不覆盖 [当前路线图](../ROADMAP.md) 的范围约定。
 
+## 双击安装/卸载与版本信息（2026-09-28）
+
+- 安装包新增 `Install.cmd`、`Uninstall.cmd` 和 PowerShell 协调入口。双击使用 64 位 Windows PowerShell、显示结果并等待回车；安装后打开欢迎窗口，升级保留已有系统级图标选项。卸载先显示并确认当前活动目录，绑定确认时的版本，保留工作区及用户设置；部分卸载保留双击重试入口。CMD 入口结束时关闭其命令窗口，终端自动化继续使用 PS1。
+- 经典/现代右键、主窗口操作菜单和欢迎窗口新增版本信息，显示当前启动程序的包版本、完整源码提交、路径和架构，支持复制。独立 `--command version` 不要求工作区；缺失、损坏、过大或不可读的清单显示明确状态。窗口不查询远程最新版，也不声称检测到了 Explorer 已加载扩展的版本。
+- Release 构建、完整 WinForms 回归、原生 Shell 与正式现代菜单 DLL 回归通过；版本专项 51 项通过，覆盖清单校验、复制失败和普通/最小布局。已查看版本窗口普通/最小及欢迎窗口最小尺寸截图。日志为 `qa/version-release-build.log`、`version-full-ui.log`、`version-shell.log`、`version-modern-dll.log`，截图在 `qa/version-ui/`。
+- 双击入口专项 40 项通过：中文、空格、`& ! ()` 路径、不同工作目录、32/64 位 CMD 宿主、延迟展开、退出码、自删除、隔离安装、取消卸载、部分卸载恢复和损坏包拒绝。既有安装/升级/卸载 45 项、随包 BC 39 项、现代菜单包事务 27 项通过。日志为 `qa/package-launcher-tests.log` 和 `qa/click-version-{PackageTests,BundledBeyondComparePackageTests,ModernPackageTests}.log`；新专项已接入 CI。
+- 安装测试使用隔离目录及 `-NoRegister`，实际 Explorer 注册和 Appx 注册保持不变；未替用户升级现有安装，也未把进程内菜单测试作为真实桌面点击验收。本次不改变 SCM 后端，未重跑服务器写入集成。
+
 ## 随包携带 Beyond Compare 运行文件（2026-09-28）
 
 - 按用户要求，`Package.ps1 -BeyondCompareDirectory` 可将提供的 BC 运行文件放入 `Tools/BeyondCompare`，纳入 SHA-256 清单及既有版本安装/升级/卸载机制；未指定参数仍生成不含 BC 的包。README 区分两类包，并保留第三方 `License.html`。白名单不复制个人许可证、配置/会话、补丁程序及 BC Shell 扩展。

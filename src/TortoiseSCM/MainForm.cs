@@ -248,6 +248,7 @@ namespace TortoiseSCM
                 }
             });
             operations.Items.Add("设置…", null, delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = WinFormsPlasticToolHost.CreateClient(PlasticClientConfig.Load(), this); });
+            operations.Items.Add("版本信息…", null, delegate { using (var version = new VersionInfoForm()) version.ShowDialog(this); });
             actions.Click += delegate { operations.Show(actions, new Point(0, actions.Height)); };
             left.Controls.Add(refresh);
             left.Controls.Add(actions);

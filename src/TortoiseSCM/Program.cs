@@ -25,6 +25,11 @@ namespace TortoiseSCM
             try
             {
                 var request = LaunchRequest.Parse(args);
+                if (request.Command == "version")
+                {
+                    Application.Run(new VersionInfoForm());
+                    return 0;
+                }
                 if (request.Command == "settings")
                 {
                     Application.Run(new SettingsForm());
@@ -116,7 +121,7 @@ namespace TortoiseSCM
             // through MainForm so they retain the same confirmation and
             // workspace safety checks as the in-app menus.
             string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "blame", "gluon", "settings",
-                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "revision-graph", "export", "rollback", "recover", "create-workspace" };
+                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "revision-graph", "export", "rollback", "recover", "create-workspace", "version" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             if (result.Command == "create-workspace" && result.Paths.Count > 1) throw new ArgumentException("拉取仓库只能指定一个新的本地工作区目录。");
             if (result.Changeset.HasValue && result.Command != "repository-browser") throw new ArgumentException("--changeset 仅适用于仓库浏览器。");
