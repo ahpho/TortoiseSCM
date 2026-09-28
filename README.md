@@ -9,9 +9,11 @@ TortoiseSCM — Plastic SCM / Unity Version Control for Windows
 差异、分页提交历史与文件明细、历史比较/导出、文件/目录恢复、整仓待提交回滚、快照切换、删除/移动/忽略，
 以及 Gluon 入口。Explorer 右键还提供移动、删除、忽略、锁管理、合并和历史恢复/导出等入口，均复用桌面窗口的安全确认。
 `TortoiseSCM.exe --cli` 提供与 GUI 共用后端的无界面模式，支持 JSON 输出及自动化测试。
-支持外部 diff/merge 配置、Standard 工作区文件冲突处理、锁管理，以及独立后台缓存驱动的 Explorer 状态图标。
+比较与合并统一使用 Beyond Compare（三方文本合并需要 Pro），支持 Standard 工作区文件冲突处理、锁管理，以及独立后台缓存驱动的 Explorer 状态图标。
 提供带校验清单的 Windows x64 安装 ZIP 和 Windows CI；此版本尚未迁移 TortoiseGit 的全部对话框。
-支持 Standard 目录结构冲突逐项选择，以及 Partial 文件内容、同名新增、删除和移动冲突；Partial 目录窗口提供完整加载子树的服务器移动/删除预检、影响清单、整树备份和恢复，也可将服务器已删除的本地目录树保留为新添加项。具体边界见使用说明。分支图、签名 MSI、自动更新和 Windows 11 一级菜单尚未提供。
+支持 Standard 目录结构冲突逐项选择，以及 Partial 文件内容、同名新增、删除和移动冲突；Partial 目录窗口提供完整加载子树的服务器移动/删除预检、影响清单、整树备份和恢复，也可将服务器已删除的本地目录树保留为新添加项。具体边界见使用说明。已提供分支层级和分页提交/合并关系图，Windows 11 现代菜单为未签名预览，尚待真实 Explorer 显示验收。
+
+完成范围见 [ROADMAP](ROADMAP.md)：多 DPI、提交失败草稿跨程序重启恢复，以及正式签名、自动更新、ARM64 等产品化工作已排除；其余 SCM 工作流、真实桌面功能验证和现有 x64 安装维护继续推进。
 
 ```powershell
 # Visual Studio 2022+：C++ 桌面开发、Windows SDK、.NET Framework 4.8 targeting pack
