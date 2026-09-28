@@ -30,10 +30,27 @@ namespace TortoiseSCM
         private bool busy;
         private bool loaded;
         private bool changingChecks;
+        private bool submissionNeedsRefresh;
+        private bool submissionUncertain;
+        private string submissionNotice = "";
+        private Func<string, CancellationToken, Task<IList<PlasticStatusItem>>> getPending;
+        private Func<string, IList<string>, string, string, CancellationToken, Task<PlasticCheckinPreview>> prepareCheckin;
+        private Func<PlasticCheckinPreview, string, CancellationToken, Task<PlasticCommandResult>> submitCheckin;
+        private Func<PlasticCheckinPreview, string, bool, DialogResult> reviewCheckin;
+        private Action<string> reportError;
 
-        public MainForm(LaunchRequest request)
+        public MainForm(LaunchRequest request) : this(request, true) { }
+
+        internal MainForm(LaunchRequest request, bool initialize)
         {
             launch = request;
+            getPending = (path, token) => client.GetStatusAsync(path, token);
+            prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinAsync(root, paths, repository, selector, token);
+            submitCheckin = (preview, message, token) => client.CheckinPreparedAsync(preview, message, token);
+            reviewCheckin = (preview, message, uncertain) => {
+                using (var dialog = new CheckinReviewForm(preview, message, uncertain)) return dialog.ShowDialog(this);
+            };
+            reportError = message => MessageBox.Show(this, message, "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Text = "TortoiseSCM — 待定更改";
             DialogStyle.Apply(this);
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -42,13 +59,13 @@ namespace TortoiseSCM
             Size = new Size(930, 720);
             AutoScaleMode = AutoScaleMode.Dpi;
             BuildLayout();
-            Shown += async delegate { await InitializeAsync(); };
+            if (initialize) Shown += async delegate { await InitializeAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
                 if (busy)
                 {
                     e.Cancel = true;
-                    MessageBox.Show(this, "操作正在进行，请等待完成后关闭窗口。", "TortoiseSCM");
+                    reportError("操作正在进行，请等待完成后关闭窗口。");
                 }
             };
         }
@@ -126,6 +143,7 @@ namespace TortoiseSCM
             status.Dock = DockStyle.Fill;
             status.TextAlign = ContentAlignment.MiddleLeft;
             status.AutoEllipsis = true;
+            status.UseMnemonic = false;
             layout.Controls.Add(status, 0, 2);
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
@@ -426,14 +444,21 @@ namespace TortoiseSCM
             catch (Exception ex) { ShowError(ex); }
         }
 
-        private async Task RefreshAsync()
+        private async Task<bool> RefreshAsync()
         {
-            if (busy || !loaded) return;
+            if (busy || !loaded) return false;
             SetBusy(true, "正在读取工作区状态…");
+            bool refreshed = false;
+            string failure = null;
             try
             {
+                ValidatePendingContext();
                 var checkedPaths = new HashSet<string>(files.CheckedItems.Cast<ListViewItem>().Select(i => ((PlasticStatusItem)i.Tag).Path), StringComparer.OrdinalIgnoreCase);
-                var items = await client.GetStatusAsync(workspace.RootPath, CancellationToken.None);
+                var items = await getPending(workspace.RootPath, CancellationToken.None);
+                ValidatePendingContext();
+                if (items == null || items.Any(item => item == null)) throw new InvalidOperationException("待定状态返回无效，请重新刷新。");
+                bool previousChangingChecks = changingChecks;
+                changingChecks = true;
                 files.BeginUpdate();
                 try
                 {
@@ -449,10 +474,28 @@ namespace TortoiseSCM
                         files.Items.Add(row);
                     }
                 }
-                finally { files.EndUpdate(); }
+                finally { files.EndUpdate(); changingChecks = previousChangingChecks; }
+                refreshed = true;
+                submissionNeedsRefresh = false;
+                if (submissionUncertain) submissionNotice = "状态已刷新；请查看历史核对上次提交，再确认是否重试。";
+                else submissionNotice = "";
             }
-            catch (Exception ex) { ShowError(ex); }
-            finally { SetBusy(false, ""); UpdateSelectionCount(); }
+            catch (Exception ex)
+            {
+                failure = "刷新失败：" + ex.Message; submissionNeedsRefresh = true;
+                submissionNotice = "刷新未完成；原勾选和说明已保留，请重试刷新。";
+                AppendOutput(failure); reportError(failure);
+            }
+            finally { SetBusy(false, ""); if (failure != null) status.Text = failure; else UpdateSelectionCount(); }
+            return refreshed;
+        }
+
+        private void ValidatePendingContext()
+        {
+            var current = client.DiscoverWorkspace(workspace.RootPath);
+            if (current == null || current.Repository != workspace.Repository || current.Selector != workspace.Selector ||
+                current.Name != workspace.Name || !String.Equals(current.RootPath, workspace.RootPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("工作区仓库或分支已改变，请关闭并重新打开待定更改窗口。");
         }
 
         private List<string> SelectedPaths(bool forRead, bool allowScope)
@@ -510,6 +553,7 @@ namespace TortoiseSCM
         private async Task CheckinAsync()
         {
             if (busy || !loaded) return;
+            if (submissionNeedsRefresh) { reportError("上次签入未确认，请先刷新状态并查看历史，核对服务器结果后再重试。"); return; }
             if (!workspace.IsPartial && (client.HasSavedMergeSession(workspace.RootPath) || File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress"))))
             {
                 SetBusy(true, "正在检查合并状态…");
@@ -523,14 +567,65 @@ namespace TortoiseSCM
                 }
                 catch (Exception ex) { ShowError(ex); SetBusy(false, "合并尚不能提交"); return; }
                 SetBusy(false, "合并已解决，请确认整个工作区的提交范围。");
-                await ExecuteAsync(PlasticCommand.Checkin, new List<string> { workspace.RootPath });
+                await CheckinSelectionAsync(new List<string> { workspace.RootPath });
             }
-            else await ExecuteAsync(PlasticCommand.Checkin);
+            else await CheckinSelectionAsync(null);
+        }
+
+        private async Task CheckinSelectionAsync(List<string> explicitPaths)
+        {
+            if (busy || !loaded || submissionNeedsRefresh) return;
+            var selectedRows = files.CheckedItems.Cast<ListViewItem>().Select(row => (PlasticStatusItem)row.Tag).ToArray();
+            // Directory selection also checks private descendants for Add/Undo workflows.
+            // Checkin has no --private: omit those covered descendants from its explicit
+            // path list and let the review report them as excluded. Standalone private
+            // selections still require an explicit Add operation.
+            var coveredPrivate = new HashSet<string>(selectedRows.Where(item => IsPrivate(item.StatusCode) &&
+                selectedRows.Any(parent => parent.IsDirectory && !IsPrivate(parent.StatusCode) &&
+                    item.Path.StartsWith(parent.Path.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase)))
+                .Select(item => item.Path), StringComparer.OrdinalIgnoreCase);
+            var paths = (explicitPaths ?? SelectedPaths(false, false).Where(path => !coveredPrivate.Contains(path)).ToList()).ToArray();
+            if (paths.Length == 0) { reportError("请先勾选要提交的项。"); return; }
+            string message = comment.Text;
+            if (String.IsNullOrWhiteSpace(message)) { reportError("请填写签入说明。"); comment.Focus(); return; }
+            if (explicitPaths == null && selectedRows.Any(row => IsPrivate(row.StatusCode) && !coveredPrivate.Contains(row.Path)))
+            { reportError("请先将私有项加入版本控制，再提交。"); return; }
+            bool dispatched = false, succeeded = false;
+            SetBusy(true, "正在准备提交范围与内容预览…");
+            try
+            {
+                ValidatePendingContext();
+                var preview = await prepareCheckin(workspace.RootPath, paths, workspace.Repository, workspace.Selector, CancellationToken.None);
+                if (reviewCheckin(preview, message, submissionUncertain) != DialogResult.OK) return;
+                ValidatePendingContext();
+                status.Text = "正在重新核对预览并签入…";
+                AppendOutput("\r\n[" + DateTime.Now.ToString("HH:mm:ss") + "] 签入\r\n" + String.Join("\r\n", preview.Paths));
+                dispatched = true;
+                var result = await submitCheckin(preview, message, CancellationToken.None);
+                AppendOutput(result.Output); AppendOutput(result.Error);
+                AppendOutput(result.TimedOut ? "签入超时，服务器可能已经接受提交。" : "退出码：" + result.ExitCode);
+                succeeded = result.Succeeded;
+                if (!succeeded) throw new InvalidOperationException("签入未确认。说明和勾选已保留；请先刷新状态并查看历史核对服务器结果。\r\n" + result.Error);
+                comment.Clear(); submissionUncertain = submissionNeedsRefresh = false;
+                submissionNotice = "签入成功。";
+                foreach (string path in paths) SHChangeNotify(0x00002000, 0x0005, path, IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                submissionNeedsRefresh = true;
+                submissionUncertain = submissionUncertain || dispatched;
+                submissionNotice = dispatched ? "签入未确认；说明和勾选已保留，请刷新并查看历史。" : "提交预检未通过；请刷新后重新核对。";
+                AppendOutput(submissionNotice); AppendOutput(ex.Message); reportError(ex.Message);
+            }
+            finally { SetBusy(false, submissionNotice); UpdateSelectionCount(); }
+            // A failed/uncertain write never refreshes away the user's reviewed selection.
+            if (succeeded) await RefreshAsync();
         }
 
         private async Task ExecuteAsync(PlasticCommand command, List<string> explicitPaths)
         {
             if (busy || !loaded) return;
+            if (command == PlasticCommand.Checkin) { await CheckinSelectionAsync(explicitPaths); return; }
             bool read = command == PlasticCommand.History || command == PlasticCommand.Diff || command == PlasticCommand.Gluon;
             var paths = explicitPaths ?? SelectedPaths(read, command != PlasticCommand.Checkin && command != PlasticCommand.Undo);
             if (command == PlasticCommand.Gluon) paths = new List<string> { workspace.RootPath };
@@ -544,10 +639,6 @@ namespace TortoiseSCM
                 await RefreshAsync();
                 return;
             }
-            if (command == PlasticCommand.Checkin && string.IsNullOrWhiteSpace(comment.Text))
-            { MessageBox.Show(this, "请填写签入说明。", "TortoiseSCM"); comment.Focus(); return; }
-            if (command == PlasticCommand.Checkin && files.CheckedItems.Cast<ListViewItem>().Any(i => IsPrivate(((PlasticStatusItem)i.Tag).StatusCode)))
-            { MessageBox.Show(this, "请先使用“添加”将私有项加入版本控制，再签入。", "TortoiseSCM"); return; }
             if (!read)
             {
                 string note = command == PlasticCommand.Undo ? "所选项的本地更改将丢失。\r\n" : "";
@@ -555,9 +646,6 @@ namespace TortoiseSCM
                     note += "完整工作区需整体更新：这将更新整个工作区中的受控文件。\r\n";
                 if (paths.Any(Directory.Exists) || files.CheckedItems.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).IsDirectory))
                     note += "目录操作会包含其全部子项，包括没有单独勾选的子项。\r\n";
-                if (command == PlasticCommand.Checkin) note += "更改将提交到当前 Plastic 服务器。\r\n";
-                if (command == PlasticCommand.Checkin && paths.Count == 1 && paths[0] == workspace.RootPath && (client.HasSavedMergeSession(workspace.RootPath) || File.Exists(Path.Combine(workspace.RootPath, ".plastic", "plastic.mergeprogress"))))
-                    note += "这是整个合并的提交，将包含工作区内全部受控更改，不受当前勾选范围限制。\r\n";
                 if (MessageBox.Show(this, note + "\r\n" + string.Join("\r\n", paths.Take(12).ToArray()) +
                     (paths.Count > 12 ? "\r\n… 共 " + paths.Count + " 项" : "") + "\r\n\r\n继续" + CommandName(command) + "？",
                     "TortoiseSCM — " + CommandName(command), MessageBoxButtons.OKCancel,
@@ -569,7 +657,7 @@ namespace TortoiseSCM
             {
                 AppendOutput("\r\n[" + DateTime.Now.ToString("HH:mm:ss") + "] " + CommandName(command) + "\r\n" + string.Join("\r\n", paths.ToArray()));
                 var request = new PlasticCommandRequest { Command = command, WorkingDirectory = workspace.RootPath, Paths = paths,
-                    Comment = command == PlasticCommand.Checkin ? comment.Text : null, Recursive = true };
+                    Recursive = true };
                 var result = command == PlasticCommand.Diff ? await client.OpenDiffToolAsync(paths[0], CancellationToken.None) :
                     await client.RunAsync(request, CancellationToken.None);
                 success = result.Succeeded;
@@ -578,7 +666,6 @@ namespace TortoiseSCM
                 AppendOutput(result.TimedOut ? "操作超时；请刷新核对当前工作区状态。" : "退出码：" + result.ExitCode);
                 if (!result.Succeeded)
                     MessageBox.Show(this, "操作未成功。请从“操作”菜单打开“操作记录”查看详细信息。", "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                else if (command == PlasticCommand.Checkin) comment.Clear();
                 if (!read)
                     foreach (string path in paths) SHChangeNotify(0x00002000, 0x0005, path, IntPtr.Zero);
             }
@@ -613,7 +700,7 @@ namespace TortoiseSCM
         {
             busy = value;
             actions.Enabled = !value;
-            checkin.Enabled = !value && loaded;
+            checkin.Enabled = !value && loaded && !submissionNeedsRefresh;
             files.Enabled = !value;
             comment.Enabled = !value;
             selectAll.Enabled = selectNone.Enabled = !value;
@@ -622,7 +709,7 @@ namespace TortoiseSCM
         }
 
         private void UpdateSelectionCount()
-        { if (!busy) status.Text = files.Items.Count + " 个待定更改 · 已勾选 " + files.CheckedItems.Count + " 项"; }
+        { if (!busy) status.Text = (submissionNotice.Length == 0 ? "" : submissionNotice + "  ") + files.Items.Count + " 个待定更改 · 已勾选 " + files.CheckedItems.Count + " 项"; }
 
         private void AppendOutput(string text)
         { if (!string.IsNullOrEmpty(text)) output.AppendText(text.TrimEnd() + Environment.NewLine); }

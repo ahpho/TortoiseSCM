@@ -225,26 +225,26 @@ namespace TortoiseSCM
                 File.Delete(PartialIndex(workspace.RootPath));
             }
         }
-        private async Task<PlasticCommandResult> ExecuteWithPartialConflictGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken)
+        private async Task<PlasticCommandResult> ExecuteWithPartialConflictGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken, Func<Task> beforeExecute = null)
         {
             if (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Update || request.Command == PlasticCommand.Undo)
             {
                 using (var gate = StructureGate(command.WorkingDirectory))
                 {
                     ThrowIfPartialStructureActive(command.WorkingDirectory);
-                    return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken).ConfigureAwait(false);
+                    return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken, beforeExecute).ConfigureAwait(false);
                 }
             }
-            return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken).ConfigureAwait(false);
+            return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken, beforeExecute).ConfigureAwait(false);
         }
-        private async Task<PlasticCommandResult> ExecutePartialConflictGuardCoreAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken)
+        private async Task<PlasticCommandResult> ExecutePartialConflictGuardCoreAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken, Func<Task> beforeExecute = null)
         {
             if (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Update || request.Command == PlasticCommand.Undo)
                 ThrowIfPartialStructureActive(command.WorkingDirectory);
             if (request.Command != PlasticCommand.Checkin && request.Command != PlasticCommand.Undo)
-                return await ExecuteWithMergeGuardAsync(command, request, cancellationToken).ConfigureAwait(false);
+                return await ExecuteWithMergeGuardAsync(command, request, cancellationToken, beforeExecute).ConfigureAwait(false);
             var workspace = await GetWorkspaceAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false);
-            if (!workspace.IsPartial) return await ExecuteWithMergeGuardAsync(command, request, cancellationToken).ConfigureAwait(false);
+            if (!workspace.IsPartial) return await ExecuteWithMergeGuardAsync(command, request, cancellationToken, beforeExecute).ConfigureAwait(false);
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
                 var state = LoadPartialState(workspace.RootPath, false);
@@ -274,6 +274,7 @@ namespace TortoiseSCM
                         throw new ArgumentException("Selected files have incoming conflicts. Prepare and resolve them before checkin; no official merge tool was launched.");
                 }
                 // No native standard merge session can coexist with a Partial resolution.
+                if (beforeExecute != null) await beforeExecute().ConfigureAwait(false);
                 var result = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded || state == null) return result;
                 var pending = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);

@@ -90,6 +90,7 @@ namespace TortoiseSCM
                 catch (ArgumentException) { }
                 BeyondCompareSettingsUiTests.Run(artifacts);
                 HistoricalBeyondCompareUiTests.Run(artifacts);
+                CheckinUiTests.Run(artifacts);
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);
