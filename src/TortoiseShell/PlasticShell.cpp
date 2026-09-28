@@ -55,7 +55,8 @@ constexpr Command commands[] = {
     {L"repository-browser", L"Repository browser...", L"仓库浏览器..."},
     {L"labels", L"Labels...", L"标签..."},
     {L"revision-graph", L"Revision graph...", L"提交关系图..."},
-    {L"version", L"Version information...", L"版本信息..."}
+    {L"version", L"Version information...", L"版本信息..."},
+    {L"create-workspace", L"Check out repository...", L"\u62c9\u53d6\u4ed3\u5e93..."}
 };
 
 const wchar_t* Label(const Command& command)
@@ -63,9 +64,14 @@ const wchar_t* Label(const Command& command)
     return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? command.chineseLabel : command.label;
 }
 
+std::wstring WorkspaceRoot(const std::wstring& input);
+bool CheckoutParent(const std::vector<std::wstring>& paths);
+
 bool CommandVisible(size_t index, const std::vector<std::wstring>& paths)
 {
     if (index >= ARRAYSIZE(commands) || paths.empty()) return false;
+    if (wcscmp(commands[index].name, L"create-workspace") == 0) return CheckoutParent(paths);
+    if (WorkspaceRoot(paths.front()).empty()) return false;
     const bool singlePathOnly = index == 6 || index == 7 || index >= 10;
     if (singlePathOnly && paths.size() != 1) return false;
     if (index == 6 || wcscmp(commands[index].name, L"blame") == 0)
@@ -103,6 +109,19 @@ std::wstring WorkspaceRoot(const std::wstring& input)
             return {};
         path = parent;
     }
+}
+
+// Checkout creates a workspace beneath one existing ordinary directory. Keep
+// nested workspaces and Plastic metadata out of this entry point.
+bool CheckoutParent(const std::vector<std::wstring>& paths)
+{
+    if (paths.size() != 1 || paths.front().empty() || paths.front().find_first_of(L"\r\n") != std::wstring::npos) return false;
+    const std::filesystem::path path(paths.front());
+    if (!path.is_absolute()) return false;
+    for (const auto& part : path.lexically_normal())
+        if (_wcsicmp(part.c_str(), L".plastic") == 0) return false;
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) && WorkspaceRoot(path.native()).empty();
 }
 
 // Windows argv quoting: backslashes preceding quotes and the closing quote double.
@@ -165,35 +184,45 @@ HRESULT Launch(const Command& command, const std::vector<std::wstring>& paths, H
         MessageBoxW(parent, L"TortoiseSCM.exe must be installed beside TortoiseSCMShell.dll.", L"TortoiseSCM", MB_OK | MB_ICONERROR);
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
     }
-    wchar_t tempDirectory[MAX_PATH + 1]{};
-    const DWORD tempLength = GetTempPathW(ARRAYSIZE(tempDirectory), tempDirectory);
-    if (!tempLength || tempLength >= ARRAYSIZE(tempDirectory)) return E_FAIL;
-    GUID unique{};
-    if (FAILED(CoCreateGuid(&unique))) return E_FAIL;
-    wchar_t uniqueText[40]{};
-    StringFromGUID2(unique, uniqueText, ARRAYSIZE(uniqueText));
-    const auto tempFilePath = std::filesystem::path(tempDirectory) / (L"tscm-" + std::wstring(uniqueText) + L".paths");
-    const wchar_t* tempFile = tempFilePath.c_str();
-    std::wstring contents;
-    for (const auto& path : paths) contents += path + L"\n";
-    const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, contents.c_str(), static_cast<int>(contents.size()), nullptr, 0, nullptr, nullptr);
-    std::string utf8(length > 0 ? length : 0, '\0');
-    if (!length || !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, contents.c_str(), static_cast<int>(contents.size()), utf8.data(), length, nullptr, nullptr))
-    { DeleteFileW(tempFile); return E_FAIL; }
-    HANDLE file = CreateFileW(tempFile, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
-    DWORD written = 0;
-    const BOOL success = WriteFile(file, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
-    const DWORD error = GetLastError();
-    CloseHandle(file);
-    if (!success || written != utf8.size()) { DeleteFileW(tempFile); return HRESULT_FROM_WIN32(success ? ERROR_WRITE_FAULT : error); }
-    std::wstring arguments = Quote(executable.native()) + L" --command " + Quote(command.name) + L" --pathfile " + Quote(tempFile);
+    std::wstring arguments = Quote(executable.native()) + L" --command " + Quote(command.name);
+    std::wstring tempFile;
+    if (wcscmp(command.name, L"create-workspace") == 0)
+    {
+        if (!CheckoutParent(paths)) return E_INVALIDARG;
+        arguments += L" --parent-path " + Quote(paths.front());
+    }
+    else
+    {
+        wchar_t tempDirectory[MAX_PATH + 1]{};
+        const DWORD tempLength = GetTempPathW(ARRAYSIZE(tempDirectory), tempDirectory);
+        if (!tempLength || tempLength >= ARRAYSIZE(tempDirectory)) return E_FAIL;
+        GUID unique{};
+        if (FAILED(CoCreateGuid(&unique))) return E_FAIL;
+        wchar_t uniqueText[40]{};
+        StringFromGUID2(unique, uniqueText, ARRAYSIZE(uniqueText));
+        const auto tempFilePath = std::filesystem::path(tempDirectory) / (L"tscm-" + std::wstring(uniqueText) + L".paths");
+        tempFile = tempFilePath.native();
+        std::wstring contents;
+        for (const auto& path : paths) contents += path + L"\n";
+        const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, contents.c_str(), static_cast<int>(contents.size()), nullptr, 0, nullptr, nullptr);
+        std::string utf8(length > 0 ? length : 0, '\0');
+        if (!length || !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, contents.c_str(), static_cast<int>(contents.size()), utf8.data(), length, nullptr, nullptr))
+        { DeleteFileW(tempFile.c_str()); return E_FAIL; }
+        HANDLE file = CreateFileW(tempFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
+        DWORD written = 0;
+        const BOOL success = WriteFile(file, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+        const DWORD error = GetLastError();
+        CloseHandle(file);
+        if (!success || written != utf8.size()) { DeleteFileW(tempFile.c_str()); return HRESULT_FROM_WIN32(success ? ERROR_WRITE_FAULT : error); }
+        arguments += L" --pathfile " + Quote(tempFile);
+    }
     STARTUPINFOW startup{sizeof(startup)};
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(executable.c_str(), arguments.data(), nullptr, nullptr, FALSE, 0, nullptr, directory.c_str(), &startup, &process))
     {
         const DWORD launchError = GetLastError();
-        DeleteFileW(tempFile);
+        if (!tempFile.empty()) DeleteFileW(tempFile.c_str());
         MessageBoxW(parent, L"Unable to start TortoiseSCM. Check the installation and required .NET desktop runtime.", L"TortoiseSCM", MB_OK | MB_ICONERROR);
         return HRESULT_FROM_WIN32(launchError);
     }
@@ -253,7 +282,7 @@ public:
             }
             if (paths.empty()) return E_INVALIDARG;
             const auto root = WorkspaceRoot(paths.front());
-            if (root.empty()) { paths.clear(); return S_OK; }
+            if (root.empty()) { if (!CheckoutParent(paths)) paths.clear(); return S_OK; }
             for (const auto& path : paths)
                 if (_wcsicmp(WorkspaceRoot(path).c_str(), root.c_str()) != 0) { paths.clear(); break; }
             return S_OK;
@@ -278,6 +307,7 @@ public:
                 if (!AppendMenuW(submenu, MF_STRING, first + visibleCommands.size(), Label(commands[index]))) { DestroyMenu(submenu); return E_FAIL; }
                 visibleCommands.push_back(index);
             }
+            if (visibleCommands.empty()) { DestroyMenu(submenu); return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0); }
             if (!InsertMenuW(menu, position, MF_BYPOSITION | MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), L"TortoiseSCM")) { DestroyMenu(submenu); return E_FAIL; }
             if (!menuBitmap)
             {
@@ -309,7 +339,7 @@ public:
         try
         {
             const size_t selected = ResolveCommand(info, visibleCommands);
-            if (selected == ARRAYSIZE(commands)) return E_INVALIDARG;
+            if (selected == ARRAYSIZE(commands) || !CommandVisible(selected, paths)) return E_INVALIDARG;
             return Launch(commands[selected], paths, info->hwnd);
         }
         catch (...) { return E_FAIL; }

@@ -51,34 +51,44 @@ internal static class WorkspaceCreationIntegrationTests
             Check(Path.GetFullPath(root).StartsWith(run + "\\", StringComparison.OrdinalIgnoreCase) && Selector(root).Contains(branch) &&
                 !Directory.GetFileSystemEntries(root).Any(path => Path.GetFileName(path) != ".plastic"), "Isolated empty test workspace");
         string referenceState = Snapshot(reference), referenceSelector = Selector(reference), referenceStatus = Execute(reference, "status", "--short", "--machinereadable");
+        var client = new PlasticClient(new PlasticClientConfig { CmPath = cm, Timeout = TimeSpan.FromSeconds(90), SettingsPath = Path.Combine(run, "settings.xml") });
+        var repositories = client.GetRepositoriesAsync(server, CancellationToken.None).GetAwaiter().GetResult();
+        var selectedRepo = repositories.Single(item => item.Specification == repository);
+        string emptyDestination = Path.Combine(run, "empty-gluon");
+        var emptyResult = client.CreateWorkspaceAsync(selectedRepo, "tscm-empty-gluon-" + Guid.NewGuid().ToString("N"), emptyDestination, branch, true, null, CancellationToken.None).GetAwaiter().GetResult();
+        Check(emptyResult.Succeeded && client.GetWorkspaceAsync(emptyDestination, CancellationToken.None).GetAwaiter().GetResult().IsPartial && Selector(emptyDestination).Contains(branch), "Empty branch creates a real Partial tree and preserves selected branch: " + emptyResult.Error);
         Write(producer, "selected 中文.txt", "baseline\r\n"); Write(producer, "excluded.txt", "baseline\r\n");
         Directory.CreateDirectory(Path.Combine(producer, "目录 & space"));
         File.WriteAllBytes(Path.Combine(producer, "目录 & space", "binary.dat"), new byte[] { 0, 1, 255, 42 });
         Native(producer, "add", producer, "-R"); Native(producer, "checkin", producer, "--all", "-c=Workspace wizard isolated baseline");
-        var client = new PlasticClient(new PlasticClientConfig { CmPath = cm, Timeout = TimeSpan.FromSeconds(90), SettingsPath = Path.Combine(run, "settings.xml") });
-        var repositories = client.GetRepositoriesAsync(server, CancellationToken.None).GetAwaiter().GetResult();
-        var selectedRepo = repositories.Single(item => item.Specification == repository);
+        string standardDestination = Path.Combine(run, "standard-checkout");
+        var standardResult = client.CreateWorkspaceAsync(selectedRepo, "tscm-standard-" + Guid.NewGuid().ToString("N"), standardDestination, branch, null, CancellationToken.None).GetAwaiter().GetResult();
+        Check(standardResult.Succeeded && !client.GetWorkspaceAsync(standardDestination, CancellationToken.None).GetAwaiter().GetResult().IsPartial && Selector(standardDestination).Contains(branch), "Original overload retains Standard creation: " + standardResult.Error);
         Check(selectedRepo.Name == "TestSCM" && selectedRepo.Id >= 0 && !String.IsNullOrWhiteSpace(selectedRepo.Guid), "Real repository query returns native identity");
         string destination = Path.Combine(run, "拉取 中文 & space"), name = "tscm-wizard-" + Guid.NewGuid().ToString("N");
         Check(!Directory.Exists(destination), "First checkout starts without an existing local directory");
         using (var wizard = new WorkspaceCreationForm(destination))
         {
             Set(wizard, "getRepositories", new Func<string, CancellationToken, Task<IList<PlasticRepositoryInfo>>>(client.GetRepositoriesAsync));
-            Set(wizard, "createWorkspace", new Func<PlasticRepositoryInfo, string, string, string, IProgress<string>, CancellationToken, Task<PlasticWorkspaceCreationResult>>(client.CreateWorkspaceAsync));
+            Set(wizard, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(client.GetRegisteredWorkspacesAsync));
+            Set(wizard, "createWorkspace", new Func<PlasticRepositoryInfo, string, string, string, bool, IProgress<string>, CancellationToken, Task<PlasticWorkspaceCreationResult>>(client.CreateWorkspaceAsync));
             Set(wizard, "confirm", new Func<string, bool>(text => text.Contains(repository) && text.Contains(destination) && text.Contains(branch)));
             Field<TextBox>(wizard, "server").Text = server;
             Field<TextBox>(wizard, "workspaceName").Text = name;
             Field<TextBox>(wizard, "branch").Text = branch;
-            wizard.Show(); Application.DoEvents(); Await(wizard, "QueryAsync", null);
+            wizard.Show(); Application.DoEvents();
+            var queryUntil = DateTime.UtcNow.AddMinutes(1);
+            while (Field<object>(wizard, "queryCancellation") != null && DateTime.UtcNow < queryUntil) { Application.DoEvents(); Thread.Sleep(10); }
+            Await(wizard, "QueryAsync", null);
             var choices = Field<ComboBox>(wizard, "repositories");
             choices.SelectedItem = choices.Items.Cast<PlasticRepositoryInfo>().Single(item => item.Specification == repository);
             Check(Field<Button>(wizard, "create").Enabled, "Real wizard query enables the selected repository");
             using (var picture = new System.Drawing.Bitmap(wizard.Width, wizard.Height)) { wizard.DrawToBitmap(picture, new System.Drawing.Rectangle(0, 0, wizard.Width, wizard.Height)); picture.Save(Path.Combine(run, "first-checkout-wizard.png")); }
             Await(wizard, "CreateAsync", null);
-            Check(wizard.DialogResult == DialogResult.OK && wizard.SelectedWorkspacePath == destination, "Real wizard creates a Standard workspace and downloads the isolated branch: " + Field<TextBox>(wizard, "status").Text);
+            Check(wizard.DialogResult == DialogResult.OK && wizard.SelectedWorkspacePath == destination, "Real wizard defaults to Gluon and downloads the isolated branch: " + Field<TextBox>(wizard, "status").Text);
         }
         var workspace = client.GetWorkspaceAsync(destination, CancellationToken.None).GetAwaiter().GetResult();
-        Check(workspace.RootPath == destination && workspace.Repository == repository && !workspace.IsPartial && Selector(destination).Contains(branch), "Created workspace selects the requested repository and isolated branch");
+        Check(workspace.RootPath == destination && workspace.Repository == repository && workspace.IsPartial && Selector(destination).Contains(branch), "Created Gluon workspace selects the requested repository and isolated branch");
         Check(File.ReadAllText(Path.Combine(destination, "selected 中文.txt"), Utf8) == "baseline\r\n" &&
             File.ReadAllBytes(Path.Combine(destination, "目录 & space", "binary.dat")).SequenceEqual(new byte[] { 0, 1, 255, 42 }), "First checkout preserves Unicode paths, CRLF and binary bytes");
         var initialStatus = client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Status, WorkingDirectory = destination, Paths = new List<string> { destination } }, CancellationToken.None).GetAwaiter().GetResult();
@@ -91,6 +101,8 @@ internal static class WorkspaceCreationIntegrationTests
         Check(refused && File.ReadAllText(Path.Combine(destination, "selected 中文.txt"), Utf8) == "baseline\r\n", "Repeated creation refuses an existing workspace without changing its files");
         Write(producer, "selected 中文.txt", "server update\r\n"); Write(producer, "incoming.txt", "new server file\n");
         Native(producer, "add", Path.Combine(producer, "incoming.txt")); Native(producer, "checkin", producer, "--all", "-c=Workspace wizard update test");
+        var selectedUpdate = client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Update, WorkingDirectory = destination, Paths = new List<string> { Path.Combine(destination, "selected 中文.txt") } }, CancellationToken.None).GetAwaiter().GetResult();
+        Check(selectedUpdate.Succeeded && File.ReadAllText(Path.Combine(destination, "selected 中文.txt"), Utf8) == "server update\r\n" && !File.Exists(Path.Combine(destination, "incoming.txt")) && File.ReadAllText(Path.Combine(destination, "excluded.txt"), Utf8) == "baseline\r\n", "Gluon selected-file update preserves unselected files and does not load other incoming paths");
         var updated = client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Update, WorkingDirectory = destination, Paths = new List<string> { destination } }, CancellationToken.None).GetAwaiter().GetResult();
         Check(updated.Succeeded && File.ReadAllText(Path.Combine(destination, "selected 中文.txt"), Utf8) == "server update\r\n" && File.ReadAllText(Path.Combine(destination, "incoming.txt"), Utf8) == "new server file\n", "Update downloads the next server changeset");
         string selected = Path.Combine(destination, "selected 中文.txt");

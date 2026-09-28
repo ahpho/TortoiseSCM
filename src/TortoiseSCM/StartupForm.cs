@@ -35,7 +35,7 @@ namespace TortoiseSCM
             layout.Controls.Add(new Label { Text = "首次使用：拉取服务器上已有的仓库，创建本地工作区。\r\n已有工作区：打开本地目录，查看状态、更新、日志或提交。\r\n请先安装 Plastic / Unity Version Control 客户端并完成登录。", Dock = DockStyle.Fill }, 0, 1);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             create.Width = 120; open.Width = 162; settings.Width = 88; actions.Controls.Add(create); actions.Controls.Add(open); actions.Controls.Add(settings); layout.Controls.Add(actions, 0, 2);
-            status.Text = "首次拉取采用 Standard 完整工作区。比较和合并统一使用 Beyond Compare。"; status.Dock = DockStyle.Fill; layout.Controls.Add(status, 0, 3);
+            status.Text = "首次拉取默认 Gluon，可按文件或目录更新；也可选择 Standard。比较和合并统一使用 Beyond Compare。"; status.Dock = DockStyle.Fill; layout.Controls.Add(status, 0, 3);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft }; buttons.Controls.Add(close); buttons.Controls.Add(version); layout.Controls.Add(buttons, 0, 4);
             Controls.Add(layout); AcceptButton = create; CancelButton = close;
             create.Click += delegate { var path = createNew(); if (!String.IsNullOrEmpty(path)) Finish(path); };

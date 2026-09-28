@@ -24,6 +24,11 @@ internal static class WorkspaceCreationTests
         try
         {
             var client = Client(10);
+            Reset(""); Check(client.GetRegisteredWorkspacesAsync(CancellationToken.None).GetAwaiter().GetResult().Count == 0, "Registered workspace query accepts empty list");
+            Reset("workspace-name"); var registered = client.GetRegisteredWorkspacesAsync(CancellationToken.None).GetAwaiter().GetResult().Single();
+            Check(registered.Name == "NEW-WK" && registered.RootPath == Path.Combine(root, "elsewhere"), "Registered workspace query preserves names and paths");
+            foreach (string mode in new[] { "workspace-malformed", "workspace-list-fail" })
+            { Reset(mode); Reject(() => client.GetRegisteredWorkspacesAsync(CancellationToken.None).GetAwaiter().GetResult(), "Failed registered workspace query rejected " + mode); NoWrite(); }
             Reset(""); var repo = client.GetRepositoriesAsync("server:8087", CancellationToken.None).GetAwaiter().GetResult().Single();
             Check(repo.Name == "demo" && repo.Server == "server:8087" && repo.Specification == Repository && repo.Id == 7 && repo.Guid == RepositoryGuid, "Native repo fields retained");
             Reset("ssl");
@@ -66,6 +71,24 @@ internal static class WorkspaceCreationTests
                 Check(File.ReadAllText(Path.Combine(root, "switch-args")) == "br:/main/topic 中文 & literal@" + Repository + "\n--workspace=" + Target(), "Explicit branch literal args, no default download");
                 Check(File.ReadAllText(Path.Combine(Target(), "downloaded.txt")) == "selected", "Selected files downloaded");
                 Check(Read("create-count") == "1" && Read("switch-count") == "1", "Exactly one create/download");
+            }
+            foreach (string selectedBranch in new[] { "/main", "/main/topic 中文 & literal" })
+            {
+                Reset("");
+                var partialResult = client.CreateWorkspaceAsync(Expected(), "new-wk", Target(), selectedBranch, true, null, CancellationToken.None).GetAwaiter().GetResult();
+                Check(partialResult.Succeeded && client.GetWorkspaceAsync(Target(), CancellationToken.None).GetAwaiter().GetResult().IsPartial, "Requested Gluon creation verifies actual partial tree");
+                Check(Read("configure-count") == "1" && Read("partial-update-count") == "1", "Gluon initializes exactly once after full download");
+                Check(Read("branch") == selectedBranch && File.ReadAllText(Path.Combine(Target(), "downloaded.txt")) == "selected", "Gluon retains requested branch and first-download bytes");
+                Check(File.ReadAllText(Path.Combine(Target(), ".plastic", "plastic.workspace")).EndsWith("Standard"), "Mode verification uses actual tree, not stale metadata label");
+            }
+            foreach (string mode in new[] { "configure-fail", "partial-update-fail", "partial-mode-wrong", "partial-branch-wrong", "partial-repo-changed" })
+            {
+                Reset(mode);
+                var partialResult = client.CreateWorkspaceAsync(Expected(), "new-wk", Target(), "/main", true, null, CancellationToken.None).GetAwaiter().GetResult();
+                Check(!partialResult.Succeeded && partialResult.WorkspaceCreated && !partialResult.UpdateCompleted && partialResult.OutcomeUncertain, "Gluon failure preserves uncertain outcome " + mode);
+                Check(partialResult.Stage.Contains("Gluon") && partialResult.RecoveryInstructions.Contains(partialResult.Stage), "Gluon failure reports exact recovery stage " + mode);
+                Check(Read("create-count") == "1" && Read("switch-count") == "1" && Read("configure-count") == "1" && File.ReadAllText(Path.Combine(Target(), "downloaded.txt")) == "selected", "Gluon failure preserves bytes and never retries writes " + mode);
+                if (mode == "configure-fail") Check(!File.Exists(Path.Combine(root, "partial-update-count")), "Failed configure stops before partial update");
             }
             foreach (string mode in new[] { "create-fail", "create-identity", "create-partial", "create-extra-file", "switch-fail", "post-branch", "post-repo" })
             {
@@ -117,7 +140,7 @@ internal static class WorkspaceCreationTests
         if (args[0] == "repository")
         {
             int count = Count("repository-count"); if (mode == "repo-fail") return 1;
-            string id = mode == "bad-repo-id" ? "0" : (mode == "repo-changed" || (mode == "repo-late-changed" && count > 1) || (mode == "post-repo" && File.Exists(Path.Combine(root, "switch-count"))) ? "8" : "7");
+            string id = mode == "bad-repo-id" ? "0" : (mode == "repo-changed" || (mode == "repo-late-changed" && count > 1) || (mode == "post-repo" && File.Exists(Path.Combine(root, "switch-count"))) || (mode == "partial-repo-changed" && File.Exists(Path.Combine(root, "partial-update-count"))) ? "8" : "7");
             string line = id + "\tdemo\t" + Server + "\t" + (mode == "bad-repo-guid" ? "invalid" : RepositoryGuid);
             Console.WriteLine(mode == "repo-fields" ? line + "\textra" : line); if (mode == "duplicate-repo") Console.WriteLine(line); return 0;
         }
@@ -130,6 +153,7 @@ internal static class WorkspaceCreationTests
         }
         if (args[0] == "workspace" && args[1] == "list")
         {
+            if (mode == "workspace-list-fail") return 1;
             int count = Count("workspace-list-count");
             if (mode == "workspace-malformed") Console.WriteLine("malformed");
             if (mode == "workspace-name") Console.WriteLine("NEW-WK\t" + Path.Combine(root, "elsewhere") + "\t" + RepositoryGuid);
@@ -154,10 +178,26 @@ internal static class WorkspaceCreationTests
             File.WriteAllText(Path.Combine(Target(), "downloaded.txt"), "selected"); if (mode == "slow-switch") Thread.Sleep(3000);
             if (mode == "switch-fail") { Console.Error.WriteLine("network interrupted"); return 1; } return 0;
         }
+        if (args[0] == "partial")
+        {
+            if (Environment.CurrentDirectory != Target()) throw new Exception("Partial initialization must use new workspace root CWD");
+            if (args.SequenceEqual(new[] { "partial", "configure", "-/", "+/" }))
+            {
+                Check(File.Exists(Path.Combine(root, "switch-count")), "Configure follows full branch download");
+                Count("configure-count"); return mode == "configure-fail" ? 1 : 0;
+            }
+            if (args.SequenceEqual(new[] { "partial", "update", ".", "--report" }))
+            {
+                Check(File.Exists(Path.Combine(root, "configure-count")), "Partial update follows configure");
+                Count("partial-update-count");
+                if (mode == "partial-branch-wrong") { WriteSelector("/main/other"); File.WriteAllText(Path.Combine(root, "branch"), "/main/other"); }
+                return mode == "partial-update-fail" ? 1 : 0;
+            }
+        }
         if (args[0] == "status")
         {
             string branch = File.Exists(Path.Combine(root, "branch")) ? Read("branch") : "/main";
-            Console.WriteLine("<StatusOutput><WkConfigName>" + Escape(branch + "@" + Repository) + "</WkConfigName><WorkspaceStatus><Status><Changeset>" + (mode == "create-partial" ? "-1" : "0") + "</Changeset><RepSpec><Name>demo</Name><Server>" + Server + "</Server></RepSpec></Status></WorkspaceStatus></StatusOutput>"); return 0;
+            Console.WriteLine("<StatusOutput><WkConfigName>" + Escape(branch + "@" + Repository) + "</WkConfigName><WorkspaceStatus><Status><Changeset>" + (mode == "create-partial" || (File.Exists(Path.Combine(root, "partial-update-count")) && mode != "partial-mode-wrong") ? "-1" : "0") + "</Changeset><RepSpec><Name>demo</Name><Server>" + Server + "</Server></RepSpec></Status></WorkspaceStatus></StatusOutput>"); return 0;
         }
         Console.Error.WriteLine("Unsupported fake cm command: " + String.Join(" ", args)); return 1;
     }

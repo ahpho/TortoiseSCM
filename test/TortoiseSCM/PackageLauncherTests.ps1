@@ -197,7 +197,12 @@ exit $exitCode
     $manifest = Read-TscmManifest $package -VerifyFiles
     foreach ($file in @('Install.cmd', 'Uninstall.cmd', 'PackageLauncher.ps1', 'PackageExplorer.ps1')) { Assert (@($manifest.files | Where-Object path -eq $file).Count -eq 1) "Package manifest owns $file" }
     $installRoot = Join-Path $fixture '安装目录 & ! (双击) space'
-    $run = Run-Coordinator $package 'Install' $installRoot '-NoRegister -NoLaunch'
+    # Run the default install behavior without -NoLaunch, rejecting any attempted UI launch.
+    $command = "function global:Start-Process { throw 'Installation must not launch a program' }; & '" +
+        (Join-Path $package 'PackageLauncher.ps1').Replace("'", "''") + "' -Action Install -InstallRoot '" +
+        $installRoot.Replace("'", "''") + "' -NoRegister -NoPause"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $run = Run-Process $powershell ('-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + $encoded) $fixture
     if ($run.ExitCode -ne 0) { throw ('Coordinator installation failed: ' + $run.Output + $run.Error) }
     Assert ($run.ExitCode -eq 0) 'Coordinator installs verified package into isolated path'
     $pointerPath = Join-Path $installRoot 'current-install.json'

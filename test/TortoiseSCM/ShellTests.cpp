@@ -246,20 +246,20 @@ void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binar
         require(SUCCEEDED(context.As(&initialize)), "classic handoff shell initialization interface");
         const auto file = (first / L"child/selected \u4e2d\u6587 & item.txt").make_preferred();
         std::ofstream(file) << "fixture";
-        for (unsigned selectionKind = 0; selectionKind != 3; ++selectionKind)
+        for (unsigned selectionKind = 0; selectionKind != 6; ++selectionKind)
         {
-            const auto selectedPath = selectionKind == 0 ? file : first;
+            const auto selectedPath = selectionKind == 0 ? file : selectionKind < 3 ? first : selectionKind < 5 ? first.parent_path() : first.root_path();
             Selection selection({selectedPath.native()});
             PIDLIST_ABSOLUTE folder = nullptr;
-            if (selectionKind == 2)
-                require(SUCCEEDED(SHParseDisplayName(first.c_str(), nullptr, &folder, 0, nullptr)), "classic handoff background folder PIDL");
-            const HRESULT initialized = initialize->Initialize(folder, selectionKind == 2 ? nullptr : &selection, nullptr);
+            if (selectionKind == 2 || selectionKind == 4)
+                require(SUCCEEDED(SHParseDisplayName(selectedPath.c_str(), nullptr, &folder, 0, nullptr)), "classic handoff background folder PIDL");
+            const HRESULT initialized = initialize->Initialize(folder, (selectionKind == 2 || selectionKind == 4) ? nullptr : &selection, nullptr);
             CoTaskMemFree(folder);
             require(SUCCEEDED(initialized), "classic handoff file directory or background initialized");
             HMENU menu = CreatePopupMenu();
             const HRESULT queried = context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL);
-            require(SUCCEEDED(queried) && HRESULT_CODE(queried) == (selectionKind == 0 ? 26 : 24), "classic handoff filtered menu populated");
-            for (const wchar_t* command : {L"update", L"checkin", L"history", L"version"})
+            require(SUCCEEDED(queried) && HRESULT_CODE(queried) == (selectionKind == 0 ? 26 : selectionKind < 3 ? 24 : 1), "classic handoff filtered menu populated");
+            for (const wchar_t* command : (selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version"} : std::vector<const wchar_t*>{L"create-workspace"}))
             {
                 const std::wstring canonical = L"tortoisescm." + std::wstring(command);
                 UINT offset = 0;
@@ -406,6 +406,21 @@ int wmain(int argc, wchar_t** argv) {
     require(directoryCount==24, "directory background menu"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_DEFAULTONLY))==0, "default-only query ignored"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,102,CMF_NORMAL))==3, "command id limit respected"); DestroyMenu(menu);
+    for (const auto& parent : {base, base.root_path()})
+    {
+        Selection ordinary({parent.native()}); shell->Initialize(nullptr, &ordinary, nullptr); menu = CreatePopupMenu();
+        require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL)) == 1, "ordinary directory or drive exposes checkout only");
+        require(SUCCEEDED(shell->GetCommandString(0,GCS_VERBW,nullptr,reinterpret_cast<char*>(verb),80)) && wcscmp(verb,L"tortoisescm.create-workspace") == 0, "checkout uses filtered ordinal zero");
+        DestroyMenu(menu);
+    }
+    std::ofstream(base / L"outside.txt") << "test";
+    for (const auto& selected : std::vector<std::vector<std::wstring>>{
+        {(base / L"outside.txt").native()}, {base.native(), first.native()}, {(first / L".plastic").native()}})
+    {
+        Selection invalid(selected); shell->Initialize(nullptr,&invalid,nullptr); menu = CreatePopupMenu();
+        require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL)) == 0 && GetMenuItemCount(menu) == 0, "checkout rejects file multiselection or metadata"); DestroyMenu(menu);
+    }
+    require(!CheckoutParent({L"relative"}) && !CheckoutParent({first.native()}) && !CheckoutParent({(base / L"missing").native()}), "checkout rejects relative nested and missing directories");
     require(DllCanUnloadNow()==S_FALSE,"COM objects keep DLL loaded"); shell->Release();
     require(DllCanUnloadNow()==S_OK,"COM release allows unloading");
     IClassFactory* factory=nullptr; require(SUCCEEDED(DllGetClassObject(ShellClsid,IID_IClassFactory,reinterpret_cast<void**>(&factory))),"class factory export");

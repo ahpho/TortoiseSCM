@@ -87,7 +87,12 @@ HRESULT ExplorerPaths(IShellItemArray* items, IUnknown* site, std::vector<std::w
         resolved.emplace_back(path);
     }
     const auto root = WorkspaceRoot(resolved.front());
-    if (root.empty()) return E_INVALIDARG;
+    if (root.empty())
+    {
+        if (!CheckoutParent(resolved)) return E_INVALIDARG;
+        paths = std::move(resolved);
+        return S_OK;
+    }
     for (const auto& path : resolved)
         if (_wcsicmp(root.c_str(), WorkspaceRoot(path).c_str()) != 0) return E_INVALIDARG;
     paths = std::move(resolved);

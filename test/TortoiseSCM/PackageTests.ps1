@@ -26,6 +26,7 @@ try {
     $registrationScript = [IO.File]::ReadAllText((Join-Path $scripts 'Register-Shell.ps1'))
     $classIds = @([regex]::Matches($registrationScript, '\{B1DA45F9-4CD4-4857-A591-96B06953A0[A-F0-9]{2}\}') | ForEach-Object Value | Select-Object -Unique)
     $targets = @(Get-TscmRegistryTargets $true)
+    Assert (@($targets | Where-Object { $_.hive -eq 'CurrentUser' -and $_.path -eq 'Software\Classes\Drive\shellex\ContextMenuHandlers\TortoiseSCM' }).Count -eq 1) 'Installer rollback captures drive checkout registration'
     Assert ($classIds.Count -eq 9) 'Registration declares one menu and eight overlay classes'
     foreach ($id in $classIds) {
         Assert (@($targets | Where-Object { $_.hive -eq 'CurrentUser' -and $_.path -eq "Software\Classes\CLSID\$id" }).Count -eq 1) "Installer rollback captures user class $id"

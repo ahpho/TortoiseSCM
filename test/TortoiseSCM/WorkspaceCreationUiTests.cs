@@ -28,7 +28,7 @@ namespace TortoiseSCM
 
         internal static void Run(string artifacts)
         {
-            assertions = 0; Directory.CreateDirectory(artifacts); TestQueries(artifacts); TestCreation(artifacts); TestStartup(artifacts);
+            assertions = 0; Directory.CreateDirectory(artifacts); TestDefaults(artifacts); TestQueries(artifacts); TestCreation(artifacts); TestStartup(artifacts);
             Console.WriteLine("PASS: workspace creation UI (" + assertions + " assertions)");
         }
         private static PlasticRepositoryInfo Repository(string name)
@@ -37,6 +37,7 @@ namespace TortoiseSCM
         private static WorkspaceCreationForm Open()
         {
             var form = new WorkspaceCreationForm(@"D:\Workspaces\新项目");
+            EmptyWorkspaces(form);
             Field<TextBox>(form, "workspaceName").Text = "my-workspace";
             Set(form, "confirm", new Func<string, bool>(message => true)); form.Show(); Application.DoEvents(); return form;
         }
@@ -44,6 +45,70 @@ namespace TortoiseSCM
         {
             Set(form, "getRepositories", new Func<string, CancellationToken, Task<IList<PlasticRepositoryInfo>>>((server, token) => Task.FromResult(Repositories("示例仓库"))));
             Await(InvokeTask(form, "QueryAsync"));
+        }
+        private static void EmptyWorkspaces(WorkspaceCreationForm form)
+        { Set(form, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(token => Task.FromResult<IList<PlasticWorkspace>>(new List<PlasticWorkspace>()))); }
+        private static void TestDefaults(string artifacts)
+        {
+            var request = LaunchRequest.Parse(new[] { "--command", "create-workspace", "--parent-path", @"D:\" });
+            Require(request.ParentPath == @"D:\" && request.Paths.Count == 0, "Shell parent root is distinct from exact destination");
+            request = LaunchRequest.Parse(new[] { "--command", "create-workspace", "--path", @"D:\Exact 中文" });
+            Require(request.ParentPath == null && request.Paths[0] == @"D:\Exact 中文", "Explicit destination remains exact");
+            foreach (var args in new[] {
+                new[] { "--command", "status", "--parent-path", @"D:\" },
+                new[] { "--command", "create-workspace", "--parent-path", @"D:\", "--path", @"D:\Exact" },
+                new[] { "--command", "create-workspace", "--parent-path", @"D:\", "--parent-path", @"D:\" },
+                new[] { "--command", "create-workspace", "--parent-path", "relative" },
+                new[] { "--command", "create-workspace", "--parent-path", @"D:relative" },
+                new[] { "--command", "create-workspace", "--parent-path", @"\relative" },
+                new[] { "--command", "create-workspace", "--parent-path", "" } }) {
+                bool rejected = false; try { LaunchRequest.Parse(args); } catch (ArgumentException) { rejected = true; }
+                Require(rejected, "Invalid checkout parent arguments rejected");
+            }
+            string root = Path.Combine(Path.GetTempPath(), "TortoiseSCM-defaults-" + Guid.NewGuid().ToString("N"), "目录 with spaces");
+            Directory.CreateDirectory(root);
+            try {
+                var none = new List<PlasticWorkspace>();
+                var suggestion = WorkspaceCreationSuggestion.Choose(root, none);
+                Require(suggestion.Name == "TestSCM" && suggestion.Path == Path.Combine(root, "TestSCM"), "Unicode and space parent keeps TestSCM default child");
+                using (var rootForm = new WorkspaceCreationForm(null, @"D:\")) {
+                    Require(Path.GetDirectoryName(Field<TextBox>(rootForm, "directory").Text) == @"D:\", "Drive root produces child destination instead of targeting root");
+                    Require(Field<ComboBox>(rootForm, "mode").SelectedIndex == 0, "Gluon is the default workspace mode");
+                }
+                Directory.CreateDirectory(Path.Combine(root, "TestSCM"));
+                File.WriteAllText(Path.Combine(root, "TestSCM2"), "preserve");
+                var registered = new List<PlasticWorkspace> { new PlasticWorkspace { Name = "TESTscm3", RootPath = Path.Combine(root, "other") },
+                    new PlasticWorkspace { Name = "unrelated", RootPath = Path.Combine(root, "TestSCM4", "nested") } };
+                suggestion = WorkspaceCreationSuggestion.Choose(root, registered);
+                Require(suggestion.Name == "TestSCM5" && suggestion.Path == Path.Combine(root, "TestSCM5"), "Avoids directory, file, case-insensitive workspace name, and registered child collision");
+                using (var form = new WorkspaceCreationForm(null, root)) {
+                    var pending = new TaskCompletionSource<IList<PlasticWorkspace>>();
+                    Set(form, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(token => pending.Task));
+                    form.Show(); Application.DoEvents();
+                    Require(!Field<Button>(form, "create").Enabled, "Cannot create while local names are unknown");
+                    Field<TextBox>(form, "workspaceName").Text = "my-name";
+                    Field<TextBox>(form, "directory").Text = Path.Combine(root, "my-path");
+                    pending.SetResult(registered); Await(Task.FromResult(0));
+                    Require(Field<TextBox>(form, "workspaceName").Text == "my-name" && Field<TextBox>(form, "directory").Text == Path.Combine(root, "my-path"), "Delayed suggestions preserve both user edits");
+                    Set(form, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(token => Task.FromResult<IList<PlasticWorkspace>>(registered)));
+                    Set(form, "getRepositories", new Func<string, CancellationToken, Task<IList<PlasticRepositoryInfo>>>((server, token) => Task.FromResult<IList<PlasticRepositoryInfo>>(new List<PlasticRepositoryInfo> { Repository("Alpha"), Repository("TestSCM") })));
+                    Await(InvokeTask(form, "QueryAsync"));
+                    Require(((PlasticRepositoryInfo)Field<ComboBox>(form, "repositories").SelectedItem).Name == "TestSCM", "Prefers existing TestSCM remote repository without creating or renaming it");
+                    form.Close();
+                }
+                using (var form = new WorkspaceCreationForm(null, root)) {
+                    Set(form, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(token => { throw new IOException("名单读取失败"); }));
+                    form.Show(); Application.DoEvents();
+                    Require(!Field<bool>(form, "defaultsReady") && !Field<Button>(form, "create").Enabled && Field<TextBox>(form, "status").Text.Contains("名单读取失败"), "Workspace list failure is visible and does not allow unchecked creation");
+                    Set(form, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(token => Task.FromResult<IList<PlasticWorkspace>>(registered)));
+                    QueryResult(form);
+                    Require(Field<TextBox>(form, "workspaceName").Text == "TestSCM5" && Field<TextBox>(form, "directory").Text == Path.Combine(root, "TestSCM5"), "Retry resolves all local collisions automatically");
+                    Save(form, Path.Combine(artifacts, "checkout-defaults.png")); form.Size = form.MinimumSize; Application.DoEvents(); Bounds(form); Save(form, Path.Combine(artifacts, "checkout-defaults-minimum.png"));
+                    form.Close();
+                }
+                Require(File.ReadAllText(Path.Combine(root, "TestSCM2")) == "preserve", "Suggestion checks never modify collisions");
+            }
+            finally { Directory.Delete(Path.GetDirectoryName(root), true); }
         }
         private static void TestQueries(string artifacts)
         {
@@ -75,12 +140,15 @@ namespace TortoiseSCM
             for (int scenario = 0; scenario < 5; scenario++) using (var form = Open()) {
                 QueryResult(form); int writes = 0; string confirmation = ""; var pending = new TaskCompletionSource<PlasticWorkspaceCreationResult>();
                 Set(form, "confirm", new Func<string, bool>(message => { confirmation = message; return false; }));
-                Set(form, "createWorkspace", new Func<PlasticRepositoryInfo, string, string, string, IProgress<string>, CancellationToken, Task<PlasticWorkspaceCreationResult>>((repo, name, path, branch, progress, token) => {
+                bool expectedPartial = scenario != 4; Field<ComboBox>(form, "mode").SelectedIndex = expectedPartial ? 0 : 1;
+                Set(form, "createWorkspace", new Func<PlasticRepositoryInfo, string, string, string, bool, IProgress<string>, CancellationToken, Task<PlasticWorkspaceCreationResult>>((repo, name, path, branch, partial, progress, token) => {
                     writes++; Require(repo.Name == "示例仓库" && name == "my-workspace" && path == @"D:\Workspaces\新项目" && branch == "/main", "Captured inputs reach backend unchanged");
+                    Require(partial == expectedPartial, "Selected Gluon or Standard mode reaches backend unchanged");
                     Require(!token.CanBeCanceled, "Confirmed creation cannot be canceled"); return pending.Task;
                 }));
                 Await(InvokeTask(form, "CreateAsync")); Require(writes == 0 && form.SelectedWorkspacePath == null, "Declined confirmation makes no changes");
                 Require(confirmation.Contains("示例仓库@localhost:8087") && confirmation.Contains("/main") && confirmation.Contains(@"D:\Workspaces\新项目") && confirmation.Contains("整个分支"), "Confirmation describes exact repository branch destination and full download");
+                Require(confirmation.Contains(expectedPartial ? "Gluon / Partial" : "Standard"), "Confirmation describes selected workspace mode");
                 Set(form, "confirm", new Func<string, bool>(message => true)); Task creating = InvokeTask(form, "CreateAsync");
                 Require(!Field<Button>(form, "create").Enabled && !Field<Button>(form, "close").Enabled && !Field<TextBox>(form, "server").Enabled, "Creating locks input and close controls");
                 Await(InvokeTask(form, "CreateAsync")); form.Close();

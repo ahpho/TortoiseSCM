@@ -37,7 +37,7 @@ namespace TortoiseSCM
                 }
                 if (request.Command == "create-workspace")
                 {
-                    using (var wizard = new WorkspaceCreationForm(request.Paths.FirstOrDefault()))
+                    using (var wizard = new WorkspaceCreationForm(request.Paths.FirstOrDefault(), request.ParentPath))
                     {
                         if (wizard.ShowDialog() != DialogResult.OK) return 0;
                         request = LaunchRequest.Parse(new[] { "--path", wizard.SelectedWorkspacePath });
@@ -106,6 +106,7 @@ namespace TortoiseSCM
         internal string Command = "status";
         internal long? Changeset;
         internal long? Before;
+        internal string ParentPath;
         internal readonly List<string> Paths = new List<string>();
 
         internal static LaunchRequest Parse(string[] args)
@@ -120,6 +121,11 @@ namespace TortoiseSCM
                 {
                     case "--command": result.Command = value.ToLowerInvariant(); break;
                     case "--path": result.Paths.Add(Path.GetFullPath(value)); break;
+                    case "--parent-path":
+                        if (result.ParentPath != null || String.IsNullOrWhiteSpace(value) || !Path.IsPathRooted(value) ||
+                            (!value.StartsWith("\\\\", StringComparison.Ordinal) && (value.Length < 3 || value[1] != ':' || (value[2] != '\\' && value[2] != '/'))))
+                            throw new ArgumentException("拉取仓库父目录必须为绝对路径，且只能指定一次。");
+                        result.ParentPath = Path.GetFullPath(value); break;
                     case "--changeset":
                         long changeset;
                         if (result.Changeset.HasValue || !Int64.TryParse(value, System.Globalization.NumberStyles.None,
@@ -155,6 +161,8 @@ namespace TortoiseSCM
                 "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "revision-graph", "export", "rollback", "recover", "create-workspace", "version" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             if (result.Command == "create-workspace" && result.Paths.Count > 1) throw new ArgumentException("拉取仓库只能指定一个新的本地工作区目录。");
+            if (result.ParentPath != null && (result.Command != "create-workspace" || result.Paths.Count != 0))
+                throw new ArgumentException("--parent-path 仅适用于拉取仓库，不能与 --path 或 --pathfile 同时使用。");
             if (result.Changeset.HasValue && result.Command != "repository-browser") throw new ArgumentException("--changeset 仅适用于仓库浏览器。");
             if (result.Before.HasValue && result.Command != "revision-graph") throw new ArgumentException("--before 仅适用于版本关系图。");
             return result;

@@ -108,7 +108,8 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     require(root->GetState(file.Get(), FALSE, &state) == E_PENDING, "modern fast state defers filesystem probing");
     require(SUCCEEDED(root->GetState(file.Get(), TRUE, &state)) && state == ECS_ENABLED, "modern file root enabled");
     require(SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_HIDDEN, "modern null selection never reuses prior paths");
-    for (auto items : {cross.Get(), outside.Get(), metadata.Get()})
+    require(SUCCEEDED(root->GetState(outside.Get(), TRUE, &state)) && state == ECS_ENABLED, "modern checkout root enabled outside workspace");
+    for (auto items : {cross.Get(), metadata.Get()})
         require(SUCCEEDED(root->GetState(items, TRUE, &state)) && state == ECS_HIDDEN, "modern invalid workspace root hidden");
     ComPtr<IEnumExplorerCommand> enumerator;
     require(SUCCEEDED(root->EnumSubCommands(&enumerator)), "modern enumeration available before selection");
@@ -136,7 +137,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
         child->GetState(file.Get(), TRUE, &state); fileCount += state == ECS_ENABLED;
         child->GetState(directory.Get(), TRUE, &state); directoryCount += state == ECS_ENABLED;
         child->GetState(multiple.Get(), TRUE, &state); multiCount += state == ECS_ENABLED;
-        require(SUCCEEDED(child->GetState(outside.Get(), TRUE, &state)) && state == ECS_HIDDEN, "modern child outside workspace hidden");
+        require(SUCCEEDED(child->GetState(outside.Get(), TRUE, &state)) && state == (index == 26 ? ECS_ENABLED : ECS_HIDDEN), "modern only checkout enabled outside workspace");
         require(FAILED(child->Invoke(cross.Get(), nullptr)), "modern cross-workspace invocation rejected");
         if (index == 6) diff = child;
     }
@@ -157,7 +158,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     ComPtr<BackgroundSite> background; background.Attach(new BackgroundSite(first.native()));
     require(SUCCEEDED(withSite->SetSite(static_cast<IServiceProvider*>(background.Get()))), "modern background site set");
     require(SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_ENABLED, "modern background folder resolved from site");
-    require(SUCCEEDED(root->GetState(outside.Get(), TRUE, &state)) && state == ECS_HIDDEN, "modern explicit invalid selection cannot fall back to site");
+    require(SUCCEEDED(root->GetState(cross.Get(), TRUE, &state)) && state == ECS_HIDDEN, "modern explicit invalid selection cannot fall back to site");
     ComPtr<IUnknown> gotSite;
     require(SUCCEEDED(withSite->GetSite(IID_PPV_ARGS(&gotSite))), "modern retained site retrievable");
     enumerator.Reset(); root->EnumSubCommands(&enumerator);
@@ -167,6 +168,17 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
         exhausted->GetState(nullptr, TRUE, &state); backgroundCount += state == ECS_ENABLED; exhausted.Reset();
     }
     require(backgroundCount == 24, "modern children inherit background site");
+    ComPtr<BackgroundSite> checkoutBackground; checkoutBackground.Attach(new BackgroundSite(first.parent_path().native()));
+    withSite->SetSite(static_cast<IServiceProvider*>(checkoutBackground.Get()));
+    require(SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_ENABLED, "modern ordinary background checkout root visible");
+    enumerator.Reset(); root->EnumSubCommands(&enumerator);
+    backgroundCount = 0;
+    while (enumerator->Next(1, &exhausted, &fetched) == S_OK)
+    {
+        exhausted->GetState(nullptr, TRUE, &state); backgroundCount += state == ECS_ENABLED; exhausted.Reset();
+    }
+    require(backgroundCount == 1, "modern ordinary background exposes only checkout");
+
     require(SUCCEEDED(withSite->SetSite(nullptr)) && SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_HIDDEN, "modern clearing site clears background context");
     HWND classicWindow = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, nullptr, nullptr);
     require(classicWindow != nullptr, "modern classic site fixture window");
@@ -196,9 +208,18 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
 // the GUI executable name. It records the actual production Launch pathfile.
 int ModernHandoffRecorder(int argc, wchar_t** argv)
 {
-    if (argc != 5 || wcscmp(argv[1], L"--command") || wcscmp(argv[3], L"--pathfile")) return -1;
+    if (argc != 5 || wcscmp(argv[1], L"--command") ||
+        (wcscmp(argv[3], L"--pathfile") && wcscmp(argv[3], L"--parent-path"))) return -1;
     wchar_t output[32768]{};
     if (!GetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", output, ARRAYSIZE(output))) return 3;
+    if (wcscmp(argv[3], L"--parent-path") == 0)
+    {
+        const std::wstring value = std::wstring(argv[2]) + L"\n" + argv[4] + L"\n";
+        const int length = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+        std::string utf8(length, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), utf8.data(), length, nullptr, nullptr);
+        std::ofstream capture(output, std::ios::binary); capture << utf8; return 0;
+    }
     std::ifstream input(argv[4], std::ios::binary);
     std::ofstream capture(output, std::ios::binary);
     capture << Ascii(argv[2]) << '\n' << input.rdbuf();
@@ -252,6 +273,36 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
             Sleep(20);
         } while (GetTickCount64() < deadline);
         require(contents == expected, "modern handoff preserves fresh selection and UTF-8 path bytes");
+        enumerator->Reset(); enumerator->Skip(26);
+        ComPtr<IExplorerCommand> checkout; require(enumerator->Next(1, &checkout, &fetched) == S_OK, "modern handoff checkout command");
+        const auto unicodeParent = first.parent_path() / L"checkout \u4e2d\u6587 & parent";
+        std::filesystem::create_directory(unicodeParent);
+        unsigned checkoutCase = 0;
+        for (const auto& parentPath : {unicodeParent, first.root_path()})
+        {
+            auto checkoutSelection = ModernSelection({parentPath.native()});
+            require(SUCCEEDED(checkout->GetState(checkoutSelection.Get(), TRUE, &state)) && state == ECS_ENABLED, "modern checkout ordinary parent and drive root enabled");
+            const auto checkoutCapture = stage / (L"checkout-" + std::to_wstring(checkoutCase++) + L".txt");
+            require(SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", checkoutCapture.c_str()) != FALSE, "modern checkout capture environment");
+            const HRESULT invoked = checkout->Invoke(checkoutSelection.Get(), nullptr);
+            SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", oldLength && oldLength < ARRAYSIZE(oldCapture) ? oldCapture : nullptr);
+            require(SUCCEEDED(invoked), "modern checkout production launcher");
+            const std::wstring wideCheckout = L"create-workspace\n" + parentPath.native() + L"\n";
+            const int size = WideCharToMultiByte(CP_UTF8, 0, wideCheckout.c_str(), static_cast<int>(wideCheckout.size()), nullptr, 0, nullptr, nullptr);
+            std::string checkoutExpected(size, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, wideCheckout.c_str(), static_cast<int>(wideCheckout.size()), checkoutExpected.data(), size, nullptr, nullptr);
+            std::string checkoutContents;
+            const auto checkoutDeadline = GetTickCount64() + 10000;
+            do
+            {
+                std::ifstream capture(checkoutCapture, std::ios::binary);
+                checkoutContents.assign(std::istreambuf_iterator<char>(capture), std::istreambuf_iterator<char>());
+                if (checkoutContents == checkoutExpected) break;
+                Sleep(20);
+            } while (GetTickCount64() < checkoutDeadline);
+            require(checkoutContents == checkoutExpected, "modern checkout preserves Unicode spaces ampersand and root trailing slash");
+        }
+
     }
     FreeLibrary(loaded);
     // Wait for the short-lived recorder to release its image before fixture cleanup.

@@ -35,15 +35,7 @@ function Invoke-TscmPackageLauncher {
         Write-Host '安装完成。' -ForegroundColor Green
         Write-Host ('安装位置：' + $installed.versionDirectory)
         Invoke-TscmExplorerRefresh -VersionDirectory $installed.versionDirectory -NoRegister:$NoRegister -NoPause:$NoPause
-        if (-not $NoLaunch) {
-            $executable = Join-Path $installed.versionDirectory 'TortoiseSCM.exe'
-            try {
-                Start-Process -FilePath $executable -WorkingDirectory $installed.versionDirectory -WindowStyle Normal -ErrorAction Stop | Out-Null
-                Write-Host '已打开 TortoiseSCM；首次使用请选择“拉取仓库…”。'
-            } catch {
-                throw ('安装已完成，但无法打开程序。请从上述安装位置运行 TortoiseSCM.exe。详情：' + $_.Exception.Message)
-            }
-        }
+        # Installation never opens the application. Keep -NoLaunch as a compatible no-op.
         return 0
     }
 

@@ -72,7 +72,8 @@ TortoiseSCM for Windows x64
 
 Requires Windows x64, .NET Framework 4.8 and an installed Plastic SCM / Unity Version Control client.
 {BEYOND_COMPARE_INSTRUCTIONS}
-Extract the entire ZIP first. Double-click Install.cmd to install and open TortoiseSCM.
+Extract the entire ZIP first. Double-click Install.cmd to install; completion only reports success and does not open TortoiseSCM.
+To check out a repository, right-click a folder or its background > TortoiseSCM > Checkout repository.
 Double-click Uninstall.cmd to confirm and remove the active installation.
 Both launchers keep the result visible; PowerShell script association does not matter.
 These double-click entries close their command window when finished; use the PS1 scripts from an existing terminal or automation.

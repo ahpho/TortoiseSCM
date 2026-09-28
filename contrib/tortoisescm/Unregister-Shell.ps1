@@ -59,7 +59,7 @@ if ($classes) {
               try { if (-not $stopProcess.WaitForExit(10000)) { Write-Warning 'Cache stop signal did not complete within ten seconds.' } } finally { $stopProcess.Dispose() }
             }
           }
-          foreach ($kind in @('*', 'Directory', 'Directory\Background')) {
+          foreach ($kind in @('*', 'Directory', 'Directory\Background', 'Drive')) {
             $path = "$kind\shellex\ContextMenuHandlers\TortoiseSCM"
             $handler = $classes.OpenSubKey($path)
             if ($handler) {

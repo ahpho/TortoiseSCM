@@ -38,7 +38,7 @@ try {
     try { $class.SetValue('', 'TortoiseSCM Plastic SCM context menu') } finally { $class.Dispose() }
     $server = $classes.CreateSubKey("CLSID\$clsid\InprocServer32")
     try { $server.SetValue('', $dll); $server.SetValue('ThreadingModel', 'Apartment') } finally { $server.Dispose() }
-    foreach ($kind in @('*', 'Directory', 'Directory\Background')) {
+    foreach ($kind in @('*', 'Directory', 'Directory\Background', 'Drive')) {
         $handler = $classes.CreateSubKey("$kind\shellex\ContextMenuHandlers\TortoiseSCM")
         try { $handler.SetValue('', $clsid) } finally { $handler.Dispose() }
     }

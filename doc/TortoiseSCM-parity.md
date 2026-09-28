@@ -18,7 +18,7 @@
 | 标签 | 标签列表/筛选、创建、按 ID/变更集核对后删除、目标提交文件明细和固定快照浏览；`labels/label-resolve/label-create/label-delete` | 尚无用户重命名、移动或按标签切换；原生按名称删除不能原子防止跨客户端竞争 |
 | Blame | blame CLI, Annotate/Blame GUI, Explorer single-file entry | Implemented Plastic native annotate line, owner, changeset, date, branch and content; read-only, directories and binaries are rejected |
 | Repository browser | 固定变更集目录树、目录文件列表、只读文本预览、单文件导出；`repository-list` 与 `export` | 尚无递归整目录导出、跨仓库链接浏览；文本预览限 UTF-8 / 2 MiB |
-| Clone / Create repository | 欢迎窗口、查询服务器仓库、为已有仓库创建 Standard 工作区并首次下载；选择已有工作区 | 首次创建尚不支持 Partial/动态工作区；分支需输入路径；没有创建服务器仓库、复制/同步仓库及下载失败应用内恢复向导 |
+| Clone / Create repository | 目录/背景右键拉取、查询已有仓库、默认 Gluon（可选 Standard）工作区及首次完整下载；TestSCM 默认名称/子目录与重名避让；选择已有工作区 | 首次仍下载完整分支，尚无稀疏范围选择或动态工作区创建；分支需输入路径；没有创建服务器仓库、复制/同步仓库及下载失败应用内恢复向导 |
 | 批量文件操作、拖放 | 多路径提交/撤销/添加；单路径移动、删除、忽略 | 缺少拖放移动、批量删除/忽略及整批预检 |
 | Patch | 历史文件导出 | 尚无创建、预览、应用补丁的工作流 |
 | 发布体验 | x64 ZIP、校验清单、可双击的当前用户安装/卸载、自动构建 | 签名安装、自动更新、语言包、ARM64/32 位 Explorer 在范围外；维护现有 x64 安装能力 |
@@ -30,7 +30,7 @@
 3. 已补只读仓库浏览：按固定快照逐层读取完整目录树，提供历史文件预览与导出，GUI/CLI 共享后端。后续完善递归目录导出和历史路径身份跟踪。
 4. 已实现 Windows 11 现代右键菜单接口及可选预览包，与经典菜单共享命令。在现有未签名预览能力内继续真实 Explorer 显示验收并记录部署限制；不新增签名交付要求。
 5. 已补标签列表、创建、核验删除，以及使用服务器真实父关系与带类型合并边的分页提交关系图、非当前叶子分支重命名与空叶分支删除。已补保留加载配置的 Partial 切换；后续完善图的导航与筛选及被拦截加载结构变化的处理与恢复体验；不能用时间或分支名称猜测祖先关系。
-6. 提交说明历史/模板已完成；后续补 Changelist、说明规则、批量操作、补丁和工作区管理。Standard 首次工作区拉取向导已实现，Partial 创建与失败恢复增强继续列为 P0，详见 ROADMAP。
+6. 提交说明历史/模板已完成；后续补 Changelist、说明规则、批量操作、补丁和工作区管理。Gluon/Standard 首次工作区拉取向导已实现，首次稀疏范围选择与失败恢复增强继续列为 P0，详见 ROADMAP。
 
 每个里程碑都应包含相关自动检查、隔离 Plastic 实测、普通/最小尺寸 GUI 渲染、commit/push 和安装后验证。此列表是优先级，不是已实现承诺。
 

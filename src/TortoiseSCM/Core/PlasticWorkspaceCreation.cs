@@ -59,6 +59,10 @@ namespace TortoiseSCM
 
         public Task<PlasticWorkspaceCreationResult> CreateWorkspaceAsync(PlasticRepositoryInfo repository, string name,
             string path, string branch, IProgress<string> progress, CancellationToken token)
+        { return CreateWorkspaceAsync(repository, name, path, branch, false, progress, token); }
+
+        public Task<PlasticWorkspaceCreationResult> CreateWorkspaceAsync(PlasticRepositoryInfo repository, string name,
+            string path, string branch, bool partial, IProgress<string> progress, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             if (repository == null) throw new ArgumentNullException("repository");
@@ -74,11 +78,11 @@ namespace TortoiseSCM
             if (name == "." || name == ".." || name.IndexOfAny(new[] { '/', '\\', ':' }) >= 0) throw new ArgumentException("工作区名称不能包含路径分隔符或冒号。");
             branch = String.IsNullOrEmpty(branch) ? "/main" : branch; ValidateBranchName(branch);
             path = ValidateCreationPath(path);
-            return CreateWorkspaceCoreAsync(captured, name, path, branch, progress, token);
+            return CreateWorkspaceCoreAsync(captured, name, path, branch, partial, progress, token);
         }
 
         private async Task<PlasticWorkspaceCreationResult> CreateWorkspaceCoreAsync(PlasticRepositoryInfo repository, string name,
-            string path, string branch, IProgress<string> progress, CancellationToken token)
+            string path, string branch, bool partial, IProgress<string> progress, CancellationToken token)
         {
             // File locks work across awaited continuations and separate TortoiseSCM processes.
             using (var globalGate = CreationGate("all-workspace-creations"))
@@ -100,7 +104,7 @@ namespace TortoiseSCM
                 bool launched = false;
                 try
                 {
-                    ReportCreation(progress, "正在创建 Standard 工作区；请等待完成…");
+                    ReportCreation(progress, "正在创建工作区；请等待完成…");
                     Directory.CreateDirectory(path);
                     ValidateCreationDestination(path);
                     // Creating metadata does not download /main. Only the explicit switch below downloads files.
@@ -108,7 +112,7 @@ namespace TortoiseSCM
                     var create = await ExecuteAsync(CreationCommand(path, new[] { "workspace", "create", name, path, "rep:" + repository.Specification }), CancellationToken.None).ConfigureAwait(false);
                     result.Output += create.Output;
                     if (!create.Succeeded) throw new PlasticCommandException(create);
-                    await VerifyCreatedWorkspaceAsync(repository, name, path, CancellationToken.None).ConfigureAwait(false);
+                    await VerifyCreatedWorkspaceAsync(repository, name, path, false, CancellationToken.None).ConfigureAwait(false);
                     result.WorkspaceCreated = true;
                     result.Stage = "下载分支";
                     ReportCreation(progress, "工作区已创建，正在下载 " + branch + "…");
@@ -122,9 +126,28 @@ namespace TortoiseSCM
                     result.Output += update.Output;
                     if (!update.Succeeded) throw new PlasticCommandException(update);
                     await RequireCreationRepositoryAsync(repository, CancellationToken.None).ConfigureAwait(false);
-                    await VerifyCreatedWorkspaceAsync(repository, name, path, CancellationToken.None).ConfigureAwait(false);
+                    await VerifyCreatedWorkspaceAsync(repository, name, path, false, CancellationToken.None).ConfigureAwait(false);
                     var actualBranch = (await GetBranchesAsync(path, CancellationToken.None).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch && item.IsCurrent);
                     RequireCreationBranchIdentity(selected, actualBranch);
+                    if (partial)
+                    {
+                        result.Stage = "配置 Gluon 工作区";
+                        ReportCreation(progress, "分支已下载，正在配置 Gluon 工作区以支持部分更新…");
+                        RejectReparsePath(path); RejectUnsafeDescendants(path, path, CancellationToken.None);
+                        var configure = await ExecuteAsync(CreationCommand(path, new[] { "partial", "configure", "-/", "+/" }), CancellationToken.None).ConfigureAwait(false);
+                        result.Output += configure.Output;
+                        if (!configure.Succeeded) throw new PlasticCommandException(configure);
+                        // Empty configure can retain the complete tree. A partial update establishes
+                        // partial tree semantics even for an empty branch; metadata text is not authoritative.
+                        result.Stage = "完成 Gluon 初始化";
+                        var partialUpdate = await ExecuteAsync(CreationCommand(path, new[] { "partial", "update", ".", "--report" }), CancellationToken.None).ConfigureAwait(false);
+                        result.Output += partialUpdate.Output;
+                        if (!partialUpdate.Succeeded) throw new PlasticCommandException(partialUpdate);
+                        await RequireCreationRepositoryAsync(repository, CancellationToken.None).ConfigureAwait(false);
+                        await VerifyCreatedWorkspaceAsync(repository, name, path, true, CancellationToken.None).ConfigureAwait(false);
+                        actualBranch = (await GetBranchesAsync(path, CancellationToken.None).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch && item.IsCurrent);
+                        RequireCreationBranchIdentity(selected, actualBranch);
+                    }
                     result.UpdateCompleted = true; result.Stage = "完成";
                     return result;
                 }
@@ -132,7 +155,7 @@ namespace TortoiseSCM
                 {
                     result.Error = error.Message; result.OutcomeUncertain = launched;
                     result.RecoveryInstructions = result.WorkspaceCreated
-                        ? "工作区创建已确认，下载未确认完成。保留目录：" + path + "。请在官方 Plastic 客户端检查仓库与分支，确认仍为 " + branch + " 后继续更新。不要再次创建或删除此目录。"
+                        ? "工作区创建已确认，但“" + result.Stage + "”阶段未确认完成。保留目录：" + path + "。请在官方 Plastic / Gluon 客户端检查仓库、分支与工作区模式，确认仍为 " + branch + " 后继续处理。不要再次创建或删除此目录。"
                         : "创建未确认完成，目录和可能已生成的元数据均已保留：" + path + "。请在官方 Plastic 客户端检查工作区列表及此目录，确认实际状态后再处理；不要直接重试创建或删除目录。";
                     return result;
                 }
@@ -179,11 +202,11 @@ namespace TortoiseSCM
             }
         }
 
-        private async Task VerifyCreatedWorkspaceAsync(PlasticRepositoryInfo repository, string name, string path, CancellationToken token)
+        private async Task VerifyCreatedWorkspaceAsync(PlasticRepositoryInfo repository, string name, string path, bool partial, CancellationToken token)
         {
             RejectReparsePath(path);
             var workspace = await GetWorkspaceAsync(path, token).ConfigureAwait(false);
-            if (!String.Equals(workspace.RootPath, path, StringComparison.OrdinalIgnoreCase) || workspace.Name != name || workspace.IsPartial || workspace.Repository != repository.Specification)
+            if (!String.Equals(workspace.RootPath, path, StringComparison.OrdinalIgnoreCase) || workspace.Name != name || workspace.IsPartial != partial || workspace.Repository != repository.Specification)
                 throw new InvalidOperationException("创建后的工作区身份、路径或模式无法确认。");
             var response = await ExecuteAsync(CreationCommand(path, new[] { "status", path, "--header", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
             RequireSuccess(response); ValidateBranchStatusRepository(SafeXml.Load(response.Output), repository.Specification);
