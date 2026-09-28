@@ -37,7 +37,7 @@ namespace TortoiseSCM
                     }));
                     form.Show(); Application.DoEvents();
                     var button = Field<Button>(form, "compare");
-                    Require(button.Visible && button.Text == "Beyond Compare" && !Field<Button>(form, "external").Visible, "History has one visible Beyond Compare action");
+                    Require(button.Visible && button.Text == "比较工具" && !Field<Button>(form, "external").Visible, "History has one visible Beyond Compare action");
                     button.PerformClick(); Application.DoEvents();
                     Require(launches == 1 && Field<bool>(form, "busy"), "Clicking the actual history button dispatches the editor");
                     Require(!button.Enabled && !Field<Button>(form, "export").Enabled && !Field<NumericUpDown>(form, "fromRevision").Enabled, "Pending editor locks history operations and revision inputs");
@@ -77,7 +77,7 @@ namespace TortoiseSCM
                         button.PerformClick(); Application.DoEvents();
                         Require(launches == 1 && Field<bool>(form, "busy") && !button.Enabled, "Fixed-pair main action dispatches once and locks while pending: " + status);
                         pending.SetResult(new PlasticCommandResult { ExitCode = 0 }); Pump(form);
-                        Require(button.Enabled && Field<Label>(form, "status").Text == "Beyond Compare 操作完成。" && !Field<NumericUpDown>(form, "toRevision").Enabled, "BC completion restores fixed-pair actions without unpinning revisions");
+                        Require(button.Enabled && Field<Label>(form, "status").Text == "比较工具 操作完成。" && !Field<NumericUpDown>(form, "toRevision").Enabled, "BC completion restores fixed-pair actions without unpinning revisions");
                         if (status == "A")
                         {
                             Require(Field<TextBox>(form, "preview").Text.Contains("空起点"), "Added file explains the proven empty side");

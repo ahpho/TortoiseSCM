@@ -5,9 +5,9 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 
 ## 首次安装与日常操作
 
-运行需要 Windows x64、.NET Framework 4.8，以及已安装并完成服务器登录的 Plastic SCM / Unity Version Control 客户端；不需要安装 Visual Studio。含 BC 的安装包已携带 Beyond Compare 运行文件，无需另装程序；不含 BC 的包需自行安装。三方合并需要 Pro 授权。
+运行需要 Windows x64、.NET Framework 4.8，以及已安装并完成服务器登录的 Plastic SCM / Unity Version Control 客户端；不需要安装 Visual Studio。新版完整安装包内置 TortoiseGitMerge（默认比较/合并）、TortoiseGitUDiff（统一差异查看）及 Beyond Compare（备选）。只有选择 BC 进行三方合并才需要 Pro 授权。
 
-1. 双击最新 **`TortoiseSCM-…-windows-x64-Setup.exe`**，按向导安装。无需解压或手动执行 PS1、BAT/CMD；安装程序自动安装到当前用户目录并注册经典右键菜单。**升级时直接运行新版安装包，无需先卸载。** 安装完成只提示成功，不自动打开工作区或拉取向导。Beyond Compare 已内置，无需另装或设置路径；原有外部自定义工具路径保留。如果提示 Explorer 仍加载旧菜单，可选择稍后重启，或确认所有复制、移动、删除、解压任务结束后，按向导明确确认重启。重启会关闭文件夹窗口，桌面和任务栏短暂消失，不会自动发生。
+1. 双击最新 **`TortoiseSCM-…-windows-x64-Setup.exe`**，按向导安装。无需解压或手动执行 PS1、BAT/CMD；安装程序自动安装到当前用户目录并注册经典右键菜单。**升级时直接运行新版安装包，无需先卸载。** 安装完成只提示成功，不自动打开工作区或拉取向导。默认使用内置 TortoiseGitMerge；设置中可切换到 Beyond Compare。原有明确选择的外部 BC 路径保留。如果提示 Explorer 仍加载旧菜单，可选择稍后重启，或确认所有复制、移动、删除、解压任务结束后，按向导明确确认重启。重启会关闭文件夹窗口，桌面和任务栏短暂消失，不会自动发生。
 2. 在工作区以外的目标父目录空白处右键 → **TortoiseSCM → 拉取仓库…**（Windows 11 可先点“显示更多选项”）。例如在 `D:\` 右键，默认目录为 `D:\TestSCM`、本地工作区名称为 `TestSCM`；已有文件、目录或注册工作区重名时，自动建议 `TestSCM2`、`TestSCM3` 等可用名称，仍可手动修改。填写团队提供的服务器地址（如 `host:8087`、`ssl://host:8088` 或 `组织名@cloud`），点击“查询仓库”，优先选中已有 `TestSCM` 仓库，也可选其他仓库。默认 Gluon 模式，分支通常保持 `/main`；点击“拉取并打开”，核对后等待下载完成。
 3. 拉取成功后自动进入待定更改窗口。以后在该目录右键 → TortoiseSCM；Windows 11 先点“显示更多选项”。若菜单尚未出现，在任务管理器中重启“Windows 资源管理器”；也可双击安装目录的 EXE，选择“打开已有工作区…”。
 4. 从下表开始日常测试。根目录入口操作整个工作区；文件或子目录的历史只查看对应范围。
@@ -18,7 +18,7 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 | showLog | 根目录右键 → TortoiseSCM → “历史记录…”；主窗口使用“操作 → 当前范围历史 / 恢复” |
 | commit | 修改文件后打开“待处理更改…”或“签入…”；勾选文件，填写说明，点击“提交”，核对预览后确认 |
 | 添加新文件 | 在待定列表勾选未版本控制的文件，“操作 → 添加…”，再勾选提交 |
-| 比较修改 | 文件右键 → TortoiseSCM → “比较差异…”；使用 Beyond Compare |
+| 比较修改 | 文件右键 → TortoiseSCM → “比较差异…”；使用设置中所选工具 |
 
 查看当前版本：工作区右键 → TortoiseSCM → **“版本信息…”**，可查看安装包版本、Git 提交号、程序目录和架构；主窗口及欢迎窗口也提供入口。开发构建或缺失/损坏的包信息会明确提示，不据此声称最新版。安装新包后若菜单仍显示旧版本，请重启资源管理器后核对；必要时再注销 Windows 并重新登录。
 
@@ -37,7 +37,7 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 
 右键所选目录 → 更新 → 核对范围 → 更新。程序先预检所选范围中的传入冲突；发现冲突时，先停止本次更新并列出路径。通过以下入口明确处理，再返回刷新范围、重新点击更新，不自动续跑：
 
-- **保留修改**：点“处理传入冲突”。文本选择 Beyond Compare 三方合并；二进制选择“保留本地版本”或“采用服务器版本”，不启动文本合并。点击“准备结果”只生成独立结果文件；核对后再点“确认应用结果”。文本合并和保留本地的结果作为待定更改，需另行签入；完全采用服务器内容时无需再次签入。
+- **保留修改**：点“处理传入冲突”。文本使用所选三方合并工具；二进制选择“保留本地版本”或“采用服务器版本”，不启动文本合并。点击“准备结果”只生成独立结果文件；核对后再点“确认应用结果”。文本合并和保留本地的结果作为待定更改，需另行签入；完全采用服务器内容时无需再次签入。
 - **丢弃修改**：点“检查 / 丢弃修改”，仅选择确实不需要的修改行，再执行“丢弃所选行的修改”并确认。选择目录撤销会包含其全部子项；取消确认不会丢弃内容。
 - **暂不处理**：直接关闭窗口，或取消未应用准备；工作文件不变，准备时的备份和独立结果保留。结构冲突需另点“结构冲突”，该窗口显示整个工作区，应再次核对范围。
 
@@ -52,7 +52,7 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 在已有 Release 构建上运行：
 
 ```powershell
-.\contrib\tortoisescm\Build-Setup.ps1 -Version '0.1.0-dev-setup-20260929' -BeyondCompareDirectory 'D:\Work\Juscent\SCM_Study\Tool\BeyondCompare'
+.\contrib\tortoisescm\Build-Setup.ps1 -Version '0.1.0-dev-setup-20260929' -TortoiseToolsDirectory '.\bin\TortoiseSCM\native-tools-2.19.0' -BeyondCompareDirectory 'D:\Work\Juscent\SCM_Study\Tool\BeyondCompare'
 ```
 
 输出单个 `…-Setup.exe`、SHA-256 文件和作为内部负载的 ZIP。也可用 `-PackageArchive` 指定已经包含 BC 的 ZIP；图形安装包拒绝缺少 BC 的负载。首次构建自动获取固定版本的官方 Inno Setup 便携编译器，核对固定 SHA-256 和厂商签名；也可传 `-IsccPath` 使用已安装的编译器。此下载仅发生在开发机，用户安装时不下载工具。
@@ -131,6 +131,21 @@ $resolved = (& $exe --cli --json --command label-resolve --path $workspace --lab
 
 ### 可安装包
 
+新版完整 Setup 的构建方式（先运行 `build-tortoisescm.ps1`）：
+
+```powershell
+# 原生工具来源为官方签名的 TortoiseGit 2.19.0.0，保留原名称。
+# 本地 git 对象需包含该发布版本及固定子模块；准备脚本会导出完整对应源码。
+.\contrib\tortoisescm\Prepare-TortoiseTools.ps1 `
+  -RedistDirectory 'C:\path\to\MSVC\Redist\x64' `
+  -OutputDirectory '.\bin\TortoiseSCM\native-tools'
+.\contrib\tortoisescm\Build-Setup.ps1 -Version '0.2.0-preview-native' `
+  -TortoiseToolsDirectory '.\bin\TortoiseSCM\native-tools' `
+  -BeyondCompareDirectory '..\Tool\BeyondCompare'
+```
+
+以下为底层 ZIP 打包接口；用户安装应优先使用包含完整工具的 Setup EXE。
+
 ```powershell
 .\contrib\tortoisescm\Package.ps1 -Version '0.2.0-preview'
 ```
@@ -143,7 +158,7 @@ $resolved = (& $exe --cli --json --command label-resolve --path $workspace --lab
 
 运行文件安装到本版本的 `Tools\BeyondCompare`，进入逐文件校验清单并随版本安装/升级/卸载；不会注册 BC 自己的 Explorer 扩展。打包要求 `BCompare.exe`、`BComp.exe` 和 `License.html`，并按白名单携带运行所需辅助文件；不复制补丁程序、个人许可证、会话和配置。BC 使用独立许可，三方合并仍需 Pro。
 
-使用含 BC 的包时，在“设置 → 差异查看器”保留空路径（自动模式）即可。已有自定义路径会继续优先使用；需要改用包内 BC 时点击“自动检测”并保存。卸载保留用户新增/修改文件，包括使用 BC 后生成的文件。
+使用含 BC 的包时，在“设置 → 差异查看器”选择 Beyond Compare 并保留空路径（自动模式）即可。已有自定义路径会继续优先使用；需要改用包内 BC 时点击“自动检测”并保存。卸载保留用户新增/修改文件，包括使用 BC 后生成的文件。
 
 产物位于 `bin/TortoiseSCM/packages`：Windows x64 ZIP、SHA-256 校验文件，ZIP 内含逐文件校验清单。
 普通使用双击 `Install.cmd`，安装成功后仅提示结果；需要命令行参数时使用 `Install.ps1`。默认安装到 `%LOCALAPPDATA%\Programs\TortoiseSCM` 并注册当前用户右键菜单。
@@ -223,10 +238,10 @@ Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲
 添加、更新、历史、差异、设置和操作记录位于底部“操作”菜单。文件列表的右键菜单用于所选行操作。
 历史窗口使用“提交列表 / 提交说明 / 文件明细”三段布局，两个分隔条均可拖动；顶部筛选框过滤已加载记录。
 历史打开时先尝试原生快速预览（最多核对 10 条、预算 4 秒），再按提交区间批量读取明细，自动补齐所选范围的全部记录。预览不代表完整历史；窗口持续显示扫描进度，无需手动加载更早记录。“刷新全部”或 `F5` 也逐批显示新记录，同时保留原列表，全部成功后替换为完整结果；取消或失败会恢复原列表，首次加载则保留已显示记录。只有完整扫描结束才显示完成。旧客户端不支持批量查询或响应不完整时，自动使用兼容查询并在进度处提示，可能较慢。
-下方文件明细选中一项后，按 `Ctrl+D`、双击或点击比较按钮，直接打开 Beyond Compare，对比该提交与服务器记录的父版本，不再先打开版本选择窗口。新增/删除比较使用空的一侧，移动使用旧/新历史路径；不依赖该文件当前仍存在于本地。
+下方文件明细选中一项后，按 `Ctrl+D`、双击或点击比较按钮，直接打开所选比较工具，对比该提交与服务器记录的父版本，不再先打开版本选择窗口。新增/删除比较使用空的一侧，移动使用旧/新历史路径；不依赖该文件当前仍存在于本地。
 提交列表右键可复制变更集编号或提交说明，以及“标记为比较起点”。选择另一条提交后，在下方文件明细右键选择与标记版本比较，即可直接比较该文件的两个版本；也可清除标记。导出与手动选择版本保留为单独入口。
 比较整个仓库时，在提交列表标记起点，再选择目标提交，右键选择“与标记版本比较整个仓库”。新窗口列出两个快照之间的新增、删除、修改和移动项，可按状态、路径、原路径或类型筛选；支持取消加载、刷新和 F5。目录、符号链接和 Xlink 仅显示结构变更，目录移动不展开未修改子文件。
-双击文件可比较内容、调用 Beyond Compare，或分别导出起点/目标版本。移动项和移动目录下的修改文件使用旧、新两条历史路径；新增只可导出目标版本，删除只可导出起点版本，不把不存在的端点伪装成空文件。该窗口比较范围为整个仓库，包括在文件或子目录历史窗口中发起的比较。
+双击文件可比较内容、调用所选比较工具，或分别导出起点/目标版本。移动项和移动目录下的修改文件使用旧、新两条历史路径；新增只可导出目标版本，删除只可导出起点版本，不把不存在的端点伪装成空文件。该窗口比较范围为整个仓库，包括在文件或子目录历史窗口中发起的比较。
 文件明细右键可打开该路径的历史、复制路径或移动前路径；已从本地删除的历史路径仍可查询。`Ctrl+C` 复制当前焦点列表的变更集编号或路径，`F5` 刷新历史。
 文件/目录页面按路径事件筛选提交，能显示复用旧修订的回滚发布。重命名前的历史需查询旧路径；路径曾被删除再创建时，本页面会包含该路径的多次使用。
 设置使用左侧分类树和右侧设置页。所有窗口共用系统对话框字体、颜色和 Explorer 列表主题。
@@ -245,11 +260,11 @@ Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲
 | 差异 | 选择一个受控文件，比较工作区本地版本与其基础版本 |
 | 历史 | 上半部提交记录，下半部选中提交的完整文件明细；文件、目录（含子项内容修改）与整个仓库均可查询 |
 | 范围历史 / 恢复 | 固定使用打开窗口时的文件或目录范围；根目录分别提供“整仓回滚为待提交”和“切换历史快照” |
-| 历史文件 | 双击历史明细中的文件，输入两个变更集并用 Beyond Compare 比较，或分别导出起点/目标版本 |
+| 历史文件 | 双击历史明细中的文件，输入两个变更集并用所选工具比较，或分别导出起点/目标版本 |
 | 删除 / 重命名 | 生成待提交删除或移动；要求所选范围干净，不覆盖目标；可撤销后再决定是否提交 |
 | 加入忽略列表 | 将未版本控制项的精确路径追加到工作区 ignore.conf，保留已有规则 |
 | 打开 Gluon | 在官方客户端中打开当前工作区 |
-| 设置 | 配置 cm.exe、gluon.exe、Plastic 命令超时及共用 Beyond Compare 路径 |
+| 设置 | 配置 cm.exe、gluon.exe、Plastic 命令超时及共用工具选择及 BC 路径 |
 
 目录操作递归包含子项。签入/撤销一个有更改的目录前应核对其子项。
 勾选目录会勾选其可见后代；取消某个子项会取消父目录的递归选择，避免把该子项隐式提交。
@@ -269,7 +284,7 @@ Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲
 
 待提交列表按当前路径过滤，移动到范围外的条目不会显示在原目录内。
 CLI 命令根据实际退出码报告结果，GUI 错误可在“操作 → 操作记录”查看；失败时不会清空签入说明。
-Gluon 独立运行，TortoiseSCM 仅确认进程启动。Beyond Compare 则等待本次窗口关闭，期间保留贡献文件且不受 Plastic 命令超时限制。
+Gluon 独立运行，TortoiseSCM 仅确认进程启动。比较工具则等待本次窗口关闭，期间保留贡献文件且不受 Plastic 命令超时限制。
 命令超时后请刷新核对工作区状态。
 
 ## 无界面 CLI
@@ -338,7 +353,7 @@ Partial 目录恢复仅支持目录结构一致的历史内容；涉及增删或
 
 `--item` 是以 `/` 开头的仓库路径，与本机工作区是否已加载该文件无关；可导出当前已被删除的文件的旧版本。
 文件比较默认双方使用同一路径；`--from-item` 可单独指定起点路径，也适用于 `--external`。缺失端点明确报错，不伪装为空文件。
-GUI 从“比较整个仓库”的固定快照差异列表打开新增/删除项时，Beyond Compare 可以显示明确空侧；启动前会重新读取该版本对的原生差异确认状态。移动项使用旧路径和新路径，标题标明各自版本。直接输入两个版本的普通历史比较仍要求两侧存在，不能据下载失败推断新增或删除。
+GUI 从“比较整个仓库”的固定快照差异列表打开新增/删除项时，比较工具可以显示明确空侧；启动前会重新读取该版本对的原生差异确认状态。移动项使用旧路径和新路径，标题标明各自版本。直接输入两个版本的普通历史比较仍要求两侧存在，不能据下载失败推断新增或删除。
 `diff-changesets.data.files` 提供 `status/path/oldPath/itemType`；状态 A/C/D/M 分别为新增、修改、删除、移动，移动兼修改可返回两行，修改行也携带推导出的旧路径。`--path` 仅定位工作区，不限制差异范围；该命令只读，支持 Standard/Partial，无需下载工作树或 `--yes`。
 比较使用 [原生 cm diff 的两个变更集参数](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/diff)，不是把期间每次提交明细相加：中间新增后删除的项不会出现。C 表示修订发生变化，最终文件字节仍可能相同，以打开文件后的内容比较为准。起点可晚于目标；同一变更集返回空列表。无法安全解析的路径或输出会报错，不返回不完整列表。
 导出先下载并验证，再替换目标，服务器错误不会截断旧文件。目录、元数据和符号链接不作为文件导出。
@@ -411,34 +426,35 @@ GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件�
 忽略配置采用 [Plastic 原生 ignore.conf 精确路径规则](https://docs.unity.com/en-us/unity-version-control/config-files/filter-pattern)，
 目录规则覆盖后代，已有受控文件不会因此取消跟踪。需要共享规则时可自行添加、提交 ignore.conf。
 
-### Beyond Compare 比较与合并
+### 比较与合并工具
 
-图形比较与合并工具统一使用 Windows Beyond Compare 4/5。三方文本合并需要 Pro 授权。安装包可通过 `-BeyondCompareDirectory` 携带用户提供的 BC 运行文件及其独立许可说明，个人授权文件不随包分发。程序不修改 BC 全局设置；自动模式先查找当前程序目录的 `Tools\BeyondCompare`，再查找常见安装目录和注册表，也可在设置的“差异查看器”或“合并工具”中选择 BComp.exe；两页共用同一路径，留空或点击“自动检测”保持自动模式，升级后使用新版本目录中的 BC。显式自定义路径仍优先，失效时会提示。选择 BCompare.exe 时会转为同目录的 BComp.exe。找不到程序会明确提示，不回退到其他编辑器；状态、历史查询和提交等不依赖 BC 的操作仍可使用。
+默认使用包内 **TortoiseGitMerge**，同时提供 **TortoiseGitUDiff** 查看统一差异。设置 → 差异查看器或合并工具中的下拉框可切换 **Beyond Compare**；两页共用选择。BC 路径留空时先检测包内程序，再查找系统安装。选择 BCompare.exe 会使用同目录的 BComp.exe；BC 三方合并需 Pro 许可证。TortoiseGitMerge 不需要 BC 许可证。
 
-工作文件基线按 Plastic ItemId 定位，支持受控文件本地改名后的比较；启动前重新核对工作区 selector、仓库和文件身份。历史主“Beyond Compare”按钮下载固定端点，暂存集逐文件比较下载父版本和暂存版本。比较两侧只读；三方左侧为本地、右侧为远程、祖先为基线，输出为独立结果文件。参数由程序固定管理，无需填写模板。输入角色及等待方式依据 [Beyond Compare 官方集成说明](https://www.scootersoftware.com/kb/vcs) 和 [命令行文档](https://www.scootersoftware.com/v5help/command_line_reference.html)。
+打包使用 `-TortoiseToolsDirectory` 指定完整原生工具目录。工具保留官方名称与许可证，原生版本 2.19.0.0；所需 DLL、Microsoft VC++ 运行库及包含固定版本子模块的完整对应源码 `Tools/TortoiseGit/TortoiseGit-source.zip` 一并携带。`SOURCE.txt` 记录来源，工具文件进入逐文件 SHA-256 清单，随安装/升级/卸载维护。不注册 TortoiseGit 自己的 Shell 扩展。
 
-每次启动采用 BComp.exe 与独立实例选项，等待本次窗口关闭后才清理比较临时文件。人工编辑不受 Plastic 命令超时限制；若请求取消，先在 BC 中保存或放弃并关闭窗口，TortoiseSCM 才结束等待，避免杀掉未保存编辑。等待器异常（102）会报告并保留贡献目录；此时先关闭对应 BC 窗口再重试，不要同时应用或重新编辑结果。
+工作文件基线按 Plastic ItemId 定位，支持受控文件本地改名后的比较；启动前重新核对工作区 selector、仓库和文件身份。历史主“比较工具”按钮下载固定端点，暂存集逐文件比较下载父版本和暂存版本。比较两侧只读；三方角色为本地、远程和祖先基线，输出为独立结果文件。TortoiseGitMerge 左侧为远程、右侧为本地；BC 左侧为本地、右侧为远程。参数由程序固定管理，无需填写模板。输入角色及等待方式依据 [Beyond Compare 官方集成说明](https://www.scootersoftware.com/kb/vcs) 和 [命令行文档](https://www.scootersoftware.com/v5help/command_line_reference.html)。
 
-保存并关闭 BC 后，必须回到 Standard 或 Partial 冲突窗口核查并明确应用，最后另行签入。工具正常退出只表示窗口关闭，不证明已保存或已解决冲突；不根据退出码自动应用。原有备份、身份校验、输入/输出别名保护和恢复流程继续有效。
+每次启动等待本次工具窗口关闭后才清理比较临时文件；BC 使用 BComp.exe 与独立实例选项。人工编辑不受 Plastic 命令超时限制；若请求取消，先在工具中保存或放弃并关闭窗口，TortoiseSCM 才结束等待，避免杀掉未保存编辑。BC 等待器异常（102）会报告并保留贡献目录；此时先关闭对应窗口再重试，不要同时应用或重新编辑结果。
+
+保存并关闭工具后，必须回到 Standard 或 Partial 冲突窗口核查并明确应用，最后另行签入。工具正常退出只表示窗口关闭，不证明已保存或已解决冲突；不根据退出码自动应用。原有备份、身份校验、输入/输出别名保护和恢复流程继续有效。
 
 重新启动 BC 三方合并会从三个贡献文件重新组合输出，不会像旧内置编辑器那样直接载入此前手工保存的结果。已有满意结果可直接在冲突窗口确认应用；再次启动并保存之前，请另存需要保留的手工结果。此行为见 [Scooter Software 关于合并输出恢复的说明](https://forum.scootersoftware.com/forum/beyond-compare-discussion/general-aa/92039-text-merge-potential-improvements-options-for-vcs-purposes)。
 
 工作文件比较支持已添加（AD）、受控删除（DE）和本地删除（LD）的空侧：新增时左侧为空，删除时右侧为空，窗口标题标明对应状态。启动前重新核对原生状态、基线版本、工作区和文件身份。DE 已从本地树移除，只有已加载版本与内容哈希能唯一定位历史文件时才比较；同版本同内容的多个文件、待定父目录结构变化、删除路径重新出现文件等情况会拒绝并提示核对。私有、忽略、目录和链接不作为文件比较；下载失败不会被解释为空侧。Standard 与 Partial 均使用这些规则。
 
-BC 自身负责文本编码、行尾、差异显示和交互合并；旧内置编辑器的 2 MiB / 20,000 行限制不套用到 BC，Plastic 内容准备及操作范围限制仍然有效。内置编辑器源码和回归资产保留，但设置、历史主比较和暂存集逐文件比较入口均使用 BC。真实 BC 保存/放弃及工具并行会话验收见路线图；多 DPI 已排除。
+所选工具负责文本编码、行尾、差异显示和交互合并；旧内置编辑器的 2 MiB / 20,000 行限制不套用到外部工具，Plastic 内容准备及操作范围限制仍然有效。内置编辑器源码和回归资产保留，设置、历史主比较和暂存集逐文件比较使用所选工具。真实工具保存/放弃及并行会话需单独桌面验收；多 DPI 已排除。
 
-旧配置加载后统一使用 BC，原内置/外部字段保留为停用配置。已有明确 BC 路径优先迁移（先旧合并路径、再旧比较路径），失效路径会报告，不偷偷替换安装位置。CLI `settings` 报告 `toolProvider=BeyondCompare`；`--beyond-compare` 配置共用路径，旧的独立工具/参数选项会提示迁移，不能切回其他工具。普通 CLI `diff` 继续输出文本，`--external` 才打开 BC：
+配置保存 `ToolProvider=TortoiseMerge|BeyondCompare`。新配置和旧的自动工具配置默认使用包内 TortoiseGitMerge；已有明确外部 BC 路径保留，显式选择的 BC 自动检测模式也会保留。选择 TortoiseGitMerge 后，每次按当前应用版本目录查找，不记录旧安装路径。缺少包内工具会提示重装或选择 BC，不会静默启动另一个编辑器。
 
 ```powershell
-& $exe --cli --command settings --json | ConvertFrom-Json
-& $exe --cli --command settings --beyond-compare 'C:\Program Files\Beyond Compare 5\BComp.exe' --yes --json | ConvertFrom-Json
-& $exe --cli --command diff --path 'D:\workspace\file.txt' --external --json | ConvertFrom-Json
-& $exe --cli --command merge --base 'D:\tmp\base.txt' --local 'D:\tmp\local.txt' --remote 'D:\tmp\remote.txt' --output 'D:\tmp\merged.txt' --yes --json | ConvertFrom-Json
+# 默认原生工具
+& $exe --cli --command settings --tool-provider TortoiseMerge --yes --json
+# BC 备选；空路径自动检测包内和系统安装
+& $exe --cli --command settings --tool-provider BeyondCompare --yes --json
+& $exe --cli --command settings --beyond-compare 'C:\Program Files\Beyond Compare 5\BComp.exe' --yes --json
 ```
 
-设置窗口的“打开合并工具”允许选择三个输入和独立输出，此入口只编辑文件。
-待定更改窗口的“操作 → 合并变更集 / 解决冲突”提供完整工作区的分支合并流程：预检、开始、三方编辑、确认解决，然后返回待定更改提交。工具退出本身不会标记冲突解决。
-工具通过独立参数调用，不经过命令解释器。`--settings-file <文件>` 可使用隔离配置；进行分支合并或准备 Partial 冲突时，该配置文件及相邻会话目录必须放在工作区外，避免操作影响自身的恢复资料或将备份误加入提交。
+普通 CLI `diff` 继续输出文本；`--external` 才打开所选图形工具。参数模板由程序固定管理。TortoiseGitUDiff 可直接打开统一差异文件（`/patchfile:<文件>`）；双文件比较与三方合并由 TortoiseGitMerge 完成。
 
 ### 分支合并与锁
 
@@ -469,7 +485,7 @@ Standard 目录结构冲突先建立规划会话，在“结构冲突…”中�
 & $exe --cli --command merge-directory-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
 
-Partial 工作区通过“操作 → Partial 传入冲突…”处理已加载文件的本地内容修改与服务器新版本冲突。预检后准备基础、本地、传入三方文件，调用 Beyond Compare；审核结果后单独确认应用。后端只更新该文件的基础修订，再写入审核结果，保持 Partial 模式、分支和加载规则，不自动提交。
+Partial 工作区通过“操作 → Partial 传入冲突…”处理已加载文件的本地内容修改与服务器新版本冲突。预检后准备基础、本地、传入三方文件，调用所选比较工具；审核结果后单独确认应用。后端只更新该文件的基础修订，再写入审核结果，保持 Partial 模式、分支和加载规则，不自动提交。
 
 ```powershell
 & $exe --cli --command partial-conflicts --path 'D:\workspace' --json | ConvertFrom-Json
@@ -577,7 +593,7 @@ Explorer
             └─ src/TortoiseSCM/Program.cs      独立程序入口
                  ├─ MainForm.cs               中文待定更改与操作窗口
                  ├─ HistoryForm.cs            提交 / 文件明细与历史恢复
-                 ├─ SettingsForm.cs           客户端与 Beyond Compare 设置
+                 ├─ SettingsForm.cs           客户端与比较/合并工具设置
                  ├─ ToolLaunchForm.cs         外部三方合并入口
                  ├─ MergeForm.cs              分支合并预检与文件冲突处理
                  ├─ LocksForm.cs              仓库锁列表与自己持有锁的释放
@@ -636,7 +652,7 @@ Explorer “TortoiseSCM → 暂存集…”及主窗口“操作 → 暂存集�
 列表返回 `data.shelves`（`shelveId` 为公开的 `sh:` 编号，`objectId` 为服务器内部对象编号），详情返回 `data.files`。
 加载文件明细后，GUI 底部按钮和右键菜单提供应用、删除、比较、导出。写入必须确认，进行中不能关闭或重复提交。应用前要求仓库及选择器匹配、Standard 工作区、无待定更改（包括私有/忽略项）；Partial/Gluon 应用明确拒绝。GUI 确认显示目标工作区；CLI 写操作必须显式 `--yes`，失败或验证不确定时要求检查状态。应用不会自动删除暂存集，也不会自动解决冲突。
 
-GUI 选择下方的普通文件或二进制文件后，点击“比较”、双击或使用右键即可打开 Beyond Compare。左侧为暂存集父变更集，右侧为暂存内容；新增/删除以原生状态证明的空侧显示，移动兼修改使用旧/新路径。目录和链接不能作为单个文件比较。启动前复核暂存集身份、父版本、文件明细和工作区；工具关闭前不能关闭所属窗口，取消也要等待工具结束。CLI 的文本差异输出保留，Standard/Partial 均支持只读访问。
+GUI 选择下方的普通文件或二进制文件后，点击“比较”、双击或使用右键即可打开所选比较工具。左侧为暂存集父变更集，右侧为暂存内容；新增/删除以原生状态证明的空侧显示，移动兼修改使用旧/新路径。目录和链接不能作为单个文件比较。启动前复核暂存集身份、父版本、文件明细和工作区；工具关闭前不能关闭所属窗口，取消也要等待工具结束。CLI 的文本差异输出保留，Standard/Partial 均支持只读访问。
 
 导出只保存暂存集中存在的更改文件，保留仓库相对路径，并写入 `shelveset.manifest`（含删除记录）；不是完整仓库快照或可直接应用的补丁。目录新增/移动、链接等尚不支持导出。输出目录必须位于 Plastic 工作区之外，父目录须存在；已有文件默认拒绝覆盖，CLI 必须额外提供 `--overwrite`，GUI 会再次说明覆盖。下载完成后才写目标；新目录整体移动，已有目录逐文件替换，中途失败可能已写出部分文件，需检查后再重试。
 
@@ -648,7 +664,7 @@ GUI 选择下方的普通文件或二进制文件后，点击“比较”、双�
 | 整仓更新、历史、历史版本 | 根目录打开，历史内分别回滚待提交和切换快照 | 根路径 `update`、`history`、`rollback`、`switch` | 整仓待提交回滚仅 Standard；Partial 快照仅处理已加载项 |
 | 目录范围提交、勾选及右键 | 按范围显示，勾选签入，右键历史 / 差异 / 丢弃 | `status --path` 获取范围，重复 `--path` 提交所选项，`history` / `undo` | 目录递归操作包含后代；私有文件需先添加 |
 | 上下窗格历史明细 | 上方自动完整加载提交、下方完整提交文件清单 | `history-page` / `history` + `changeset --changeset` | GUI 自动查询至全部；CLI 路径过滤分页可能为空，需继续至 hasMore=false |
-| Beyond Compare 比较 / 合并 | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 三方文本合并需 BC Pro；分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
+| TortoiseGitMerge / BC 比较与合并 | 设置窗口、差异按钮、结构选择、三方编辑与确认解决 | `settings`、`diff --external`、`merge`、`merge-*`、`partial-conflict-*` | 选择 BC 三方文本合并需 Pro；分支合并仅 Standard；Partial 内容冲突限同一文件身份 |
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
 更完整的逐项差距与推进顺序见 [TortoiseGit 功能对照](TortoiseSCM-parity.md)。

@@ -154,7 +154,7 @@ namespace TortoiseSCM
                 else CopyListSelection(e, true);
             };
             var fileMenu = new ContextMenuStrip();
-            var openFile = (ToolStripMenuItem)fileMenu.Items.Add("Beyond Compare 比较", null, async delegate { await CompareHistoricalFileAsync(false); });
+            var openFile = (ToolStripMenuItem)fileMenu.Items.Add("比较工具 比较", null, async delegate { await CompareHistoricalFileAsync(false); });
             openFile.ShortcutKeyDisplayString = "Ctrl+D";
             var exportFile = fileMenu.Items.Add("导出 / 自选版本…", null, delegate { OpenHistoricalFile(); });
             compareMarkedFile.Click += async delegate { await CompareHistoricalFileAsync(true); };
@@ -462,7 +462,7 @@ namespace TortoiseSCM
             long target = ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset;
             long? marked = useMarkedChangeset ? comparisonChangeset : null;
             comparingFile = true; UpdateFileAction();
-            status.Text = "正在准备历史文件比较；Beyond Compare 关闭前请勿重复打开…";
+            status.Text = "正在准备历史文件比较；比较工具 关闭前请勿重复打开…";
             try
             {
                 ValidateHistoryContext();
@@ -488,7 +488,7 @@ namespace TortoiseSCM
                     result = await openFileComparison(comparison, file, lifetime.Token);
                 }
                 if (!lifetime.IsCancellationRequested)
-                    status.Text = result.Succeeded ? "Beyond Compare 已关闭。" : "Beyond Compare 比较失败：" + result.Error;
+                    status.Text = result.Succeeded ? "比较工具 已关闭。" : "比较工具 比较失败：" + result.Error;
             }
             catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消历史文件比较。"; }
             catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "无法比较历史文件：" + ex.Message; }

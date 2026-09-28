@@ -105,7 +105,7 @@ namespace TortoiseSCM
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (config.UseBeyondCompare)
-                return await OpenPreparedDiffAsync(path, null, BeyondCompareTool.ResolveExecutable(config.BeyondComparePath), cancellationToken).ConfigureAwait(false);
+                return await OpenPreparedDiffAsync(path, null, ComparisonTool.ResolveExecutable(config), cancellationToken).ConfigureAwait(false);
             if (config.UseBuiltInDiff)
                 return await OpenPreparedDiffAsync(path, RequireToolHost(), null, cancellationToken).ConfigureAwait(false);
             if (String.IsNullOrWhiteSpace(config.DiffToolPath))
@@ -175,7 +175,7 @@ namespace TortoiseSCM
                 if (snapshot.Deleted) File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
                 token.ThrowIfCancellationRequested();
                 if (host != null) return await host.ShowDiffAsync(before, after, token).ConfigureAwait(false);
-                return await BeyondCompareProcess.RunDiffAsync(beyondCompare,
+                return await ComparisonTool.RunDiffAsync(beyondCompare,
                     new[] { "/solo", "/readonly", before, after,
                         "/lefttitle=" + local + (snapshot.Added ? " (不存在 / empty)" : " (base cs:" + snapshot.Changeset.ToString(CultureInfo.InvariantCulture) + ")"),
                         "/righttitle=" + local + (snapshot.Deleted ? " (已删除 / empty)" : " (working)") }, temporary, token).ConfigureAwait(false);
@@ -250,7 +250,7 @@ namespace TortoiseSCM
 
         private async Task<PlasticCommandResult> RunMergeToolLockedAsync(string basePath, string localPath, string remotePath, string mergedPath, CancellationToken cancellationToken)
         {
-            string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
+            string beyondCompare = config.UseBeyondCompare ? ComparisonTool.ResolveExecutable(config) : null;
             var host = !config.UseBeyondCompare && config.UseBuiltInMerge ? RequireToolHost() : null;
             if (host == null && beyondCompare == null)
             {
@@ -268,7 +268,7 @@ namespace TortoiseSCM
             if (host != null)
                 return await host.ShowMergeAsync(inputs[0], inputs[1], inputs[2], output, cancellationToken).ConfigureAwait(false);
             if (beyondCompare != null)
-                return await BeyondCompareProcess.RunAsync(beyondCompare,
+                return await ComparisonTool.RunMergeAsync(beyondCompare,
                     PlasticToolArguments.Expand(BeyondCompareTool.MergeArguments, new Dictionary<string, string> {
                         { "base", inputs[0] }, { "local", inputs[1] }, { "remote", inputs[2] }, { "merged", output } }, true),
                     Path.GetDirectoryName(output), cancellationToken).ConfigureAwait(false);

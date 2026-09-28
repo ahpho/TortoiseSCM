@@ -131,7 +131,7 @@ namespace TortoiseSCM
             long fromChangeset, long toChangeset, string expectedRepository, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
+            string beyondCompare = config.UseBeyondCompare ? ComparisonTool.ResolveExecutable(config) : null;
             var host = !config.UseBeyondCompare && config.UseBuiltInDiff ? RequireToolHost() : null;
             ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
             ValidateRepositoryFilePath(fromRepositoryPath); ValidateRepositoryFilePath(toRepositoryPath);
@@ -161,7 +161,7 @@ namespace TortoiseSCM
                 cancellationToken.ThrowIfCancellationRequested();
                 if (host != null) return await host.ShowDiffAsync(before, after, cancellationToken).ConfigureAwait(false);
                 if (beyondCompare != null)
-                    return await BeyondCompareProcess.RunDiffAsync(beyondCompare,
+                    return await ComparisonTool.RunDiffAsync(beyondCompare,
                         HistoricalBeyondCompareArguments(before, after,
                             HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset),
                             HistoricalSpec(context.Repository, toRepositoryPath, toChangeset)), temporary, cancellationToken).ConfigureAwait(false);
@@ -189,7 +189,7 @@ namespace TortoiseSCM
             string sourcePath = String.IsNullOrEmpty(oldPath) ? path : oldPath;
             ValidateRepositoryFilePath(sourcePath); ValidateRepositoryFilePath(path);
             ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
-            string executable = BeyondCompareTool.ResolveExecutable(config.BeyondComparePath);
+            string executable = ComparisonTool.ResolveExecutable(config);
             var context = await HistoricalContextAsync(workspacePath, sourcePath, fromChangeset, cancellationToken).ConfigureAwait(false);
             if (context.Repository != repository || String.IsNullOrWhiteSpace(root) || !SamePath(context.RootPath, root))
                 throw new InvalidOperationException("工作区或仓库与已查看的变更集比较不一致，请刷新后重试。");
@@ -215,7 +215,7 @@ namespace TortoiseSCM
                 string beforeTitle = HistoricalSpec(repository, sourcePath, fromChangeset) + (status == "A" ? " (不存在 / empty)" : "");
                 string afterTitle = HistoricalSpec(repository, path, toChangeset) + (status == "D" ? " (不存在 / empty)" : "");
                 cancellationToken.ThrowIfCancellationRequested();
-                return await BeyondCompareProcess.RunDiffAsync(executable, HistoricalBeyondCompareArguments(before, after, beforeTitle, afterTitle),
+                return await ComparisonTool.RunDiffAsync(executable, HistoricalBeyondCompareArguments(before, after, beforeTitle, afterTitle),
                     temporary, cancellationToken).ConfigureAwait(false);
             }
             catch (BeyondCompareWaitException) { preserve = true; throw; }

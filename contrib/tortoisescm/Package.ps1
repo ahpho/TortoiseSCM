@@ -3,13 +3,26 @@ param(
     [string]$BinaryDirectory = (Join-Path $PSScriptRoot '..\..\bin\TortoiseSCM\Release'),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\bin\TortoiseSCM\packages'),
     [string]$Version = ('0.1.0-dev-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
-    [string]$BeyondCompareDirectory
+    [string]$BeyondCompareDirectory,
+    [string]$TortoiseToolsDirectory
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Package.Common.ps1')
 if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Use a simple package version containing letters, digits, dot, underscore or hyphen.' }
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $binaries = Assert-TscmPlainPath $BinaryDirectory
+$tortoiseFiles = @()
+if (-not [string]::IsNullOrWhiteSpace($TortoiseToolsDirectory)) {
+    $native = Assert-TscmPlainPath $TortoiseToolsDirectory
+    # A complete, app-local runtime plus the corresponding sources and licenses.
+    foreach ($file in @('TortoiseGitMerge.exe', 'TortoiseGitUDiff.exe', 'gitdll.dll', 'libgit2_tgit.dll', 'zlib1_tgit.dll', 'SciLexer_tgit.dll',
+        'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll', 'mfc140u.dll',
+        'LICENSE.txt', 'apr License.txt', 'SOURCE.txt', 'TortoiseGit-source.zip')) {
+        $candidate = Assert-TscmPlainPath (Join-Path $native $file)
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "Incomplete Tortoise tool runtime: $file" }
+        $tortoiseFiles += $candidate
+    }
+}
 $beyondCompareFiles = @()
 if (-not [string]::IsNullOrWhiteSpace($BeyondCompareDirectory)) {
     $beyondCompare = Assert-TscmPlainPath $BeyondCompareDirectory
@@ -47,6 +60,11 @@ try {
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM.md') -Destination (Join-Path $stage 'doc\TortoiseSCM.md')
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM-parity.md') -Destination (Join-Path $stage 'doc\TortoiseSCM-parity.md')
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM-validation.md') -Destination (Join-Path $stage 'doc\TortoiseSCM-validation.md')
+    if ($tortoiseFiles.Count -gt 0) {
+        $nativeDestination = Join-Path $stage 'Tools\TortoiseGit'
+        [IO.Directory]::CreateDirectory($nativeDestination) | Out-Null
+        foreach ($file in $tortoiseFiles) { Copy-Item -LiteralPath (Assert-TscmPlainPath $file) -Destination $nativeDestination }
+    }
     if ($beyondCompareFiles.Count -gt 0) {
         $toolDirectory = Join-Path $stage 'Tools\BeyondCompare'
         [IO.Directory]::CreateDirectory($toolDirectory) | Out-Null
@@ -56,14 +74,14 @@ try {
             Copy-Item -LiteralPath $checkedFile -Destination (Join-Path $toolDirectory ([IO.Path]::GetFileName($checkedFile)))
         }
         $toolInstructions = @'
-Beyond Compare runtime is included in Tools/BeyondCompare and detected automatically.
+Beyond Compare runtime is included in Tools/BeyondCompare. Select Beyond Compare in Settings; an empty path detects it automatically.
 Beyond Compare is a separate third-party product governed by Tools/BeyondCompare/License.html, not the TortoiseSCM GPL license.
 Use your own valid Beyond Compare license or its permitted evaluation; three-way text merge requires Pro.
 Personal licenses and settings are not included, and the Beyond Compare shell extension is not registered.
 '@
     } else {
         $toolInstructions = @'
-Comparison and merge tools require a separately installed Beyond Compare 4 or 5; three-way text merge requires Pro.
+To use the Beyond Compare alternative, install Beyond Compare 4 or 5 and select it in Settings; three-way text merge requires Pro.
 TortoiseSCM detects BComp.exe automatically or accepts its path in Settings. Beyond Compare is not bundled in this package.
 '@
     }
@@ -103,6 +121,11 @@ package-manifest.json provides SHA-256 integrity checks. This package is not dig
 Source: https://github.com/ahpho/TortoiseSCM
 TortoiseSCM license: GPL-2.0-or-later; see LICENSE. See doc/TortoiseSCM.md for usage.
 '@
+    if ($tortoiseFiles.Count -gt 0) {
+        $toolInstructions = "Default diff and merge: Tools/TortoiseGit/TortoiseGitMerge.exe. TortoiseGitUDiff.exe views unified diff files.`r`n" +
+            "Select Beyond Compare in Settings to use the alternative. Explicit existing BC choices are preserved.`r`n" +
+            "TortoiseGit GPL license and complete corresponding sources are in Tools/TortoiseGit (LICENSE.txt, SOURCE.txt, TortoiseGit-source.zip).`r`n" + $toolInstructions
+    }
     $readme.Replace('{BEYOND_COMPARE_INSTRUCTIONS}', $toolInstructions) | Set-Content -LiteralPath (Join-Path $stage 'README-PACKAGE.txt') -Encoding UTF8
     $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
         [pscustomobject]@{ path = $_.FullName.Substring($stage.Length + 1).Replace('\', '/'); length = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -112,6 +135,11 @@ TortoiseSCM license: GPL-2.0-or-later; see LICENSE. See doc/TortoiseSCM.md for u
     $manifest = [ordered]@{ schemaVersion = 1; product = 'TortoiseSCM'; version = $Version; architecture = 'x64'; sourceCommit = $commit; createdUtc = [DateTime]::UtcNow.ToString('o'); files = $files }
     if ($beyondCompareFiles.Count -gt 0) {
         $manifest.bundledTools = @([ordered]@{ name = 'Beyond Compare'; directory = 'Tools/BeyondCompare'; executable = 'Tools/BeyondCompare/BComp.exe'; license = 'Tools/BeyondCompare/License.html' })
+    }
+    if ($tortoiseFiles.Count -gt 0) {
+        $bcMetadata = if ($manifest.Contains('bundledTools')) { @($manifest.bundledTools) } else { @() }
+        $manifest.bundledTools = @([ordered]@{ name = 'TortoiseGit tools'; directory = 'Tools/TortoiseGit'; executable = 'Tools/TortoiseGit/TortoiseGitMerge.exe';
+            license = 'Tools/TortoiseGit/LICENSE.txt'; source = 'Tools/TortoiseGit/TortoiseGit-source.zip' }) + $bcMetadata
     }
     Write-TscmJson (Join-Path $stage 'package-manifest.json') $manifest
     Read-TscmManifest $stage -VerifyFiles | Out-Null

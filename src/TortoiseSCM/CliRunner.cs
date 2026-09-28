@@ -90,7 +90,7 @@ namespace TortoiseSCM
             "  partial-directory-cancel|partial-directory-recover --path <root> --yes\r\n" +
             "Merge results remain pending; checkin is always a separate command.\r\n" +
             "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
-            "Settings: --beyond-compare <BComp.exe> (empty = auto-detect; shared diff/merge profile)\r\n" +
+            "Settings: --tool-provider TortoiseMerge|BeyondCompare; --beyond-compare <BComp.exe> (empty = auto-detect; shared diff/merge profile)\r\n" +
             "          --settings-file <file> (optional isolated configuration); no tool options reads settings.\r\n" +
             "Write commands require --yes. Checkin, create-branch, shelve-create and label-create require a nonempty comment.\r\n" +
             "Exit codes: 0 success; 1 SCM/runtime error; 2 invalid arguments; 124 timeout.\r\n" +
@@ -132,15 +132,16 @@ namespace TortoiseSCM
             if (options.Command == "settings")
             {
                 if (options.DiffTool != null || options.DiffArgs != null || options.MergeTool != null || options.MergeArgs != null)
-                    throw new ArgumentException("比较与合并统一使用 Beyond Compare；请使用 --beyond-compare <BComp.exe>，不再配置独立工具或参数模板。");
-                if (options.BeyondCompare != null) config.BeyondComparePath = options.BeyondCompare;
+                    throw new ArgumentException("请使用 --tool-provider TortoiseMerge|BeyondCompare 选择工具，或用 --beyond-compare <BComp.exe> 配置 BC；参数模板由程序管理。");
+                if (options.BeyondCompare != null) { config.BeyondComparePath = options.BeyondCompare; config.UseTortoiseMerge = false; }
+                if (options.ToolProvider != null) config.UseTortoiseMerge = options.ToolProvider == "TortoiseMerge";
                 if (options.ChangesSettings) config.Save();
                 response.data = new { settings = new { settingsFile = config.SettingsPath, cm = config.CmPath,
-                    timeout = config.Timeout.TotalSeconds, toolProvider = "BeyondCompare", beyondCompare = config.BeyondComparePath,
-                    diffTool = config.BeyondComparePath, diffArgs = BeyondCompareTool.DiffArguments,
-                    mergeTool = config.BeyondComparePath, mergeArgs = BeyondCompareTool.MergeArguments,
+                    timeout = config.Timeout.TotalSeconds, toolProvider = config.UseTortoiseMerge ? "TortoiseMerge" : "BeyondCompare", beyondCompare = config.BeyondComparePath,
+                    diffTool = config.UseTortoiseMerge ? "Tools/TortoiseGit/TortoiseGitMerge.exe" : config.BeyondComparePath, diffArgs = config.UseTortoiseMerge ? ComparisonTool.DiffArguments : BeyondCompareTool.DiffArguments,
+                    mergeTool = config.UseTortoiseMerge ? "Tools/TortoiseGit/TortoiseGitMerge.exe" : config.BeyondComparePath, mergeArgs = config.UseTortoiseMerge ? ComparisonTool.MergeArguments : BeyondCompareTool.MergeArguments,
                     useBuiltInDiff = false, useBuiltInMerge = false } };
-                response.output = "Beyond Compare: " + (String.IsNullOrWhiteSpace(config.BeyondComparePath) ? "自动检测" : config.BeyondComparePath) +
+                response.output = config.UseTortoiseMerge ? "TortoiseGitMerge (bundled)" : "Beyond Compare: " + (String.IsNullOrWhiteSpace(config.BeyondComparePath) ? "自动检测" : config.BeyondComparePath) +
                     "\r\n比较与合并共用固定配置；三方合并需要 Pro。关闭工具后仍需核查并明确应用结果。";
                 return;
             }
@@ -874,7 +875,7 @@ namespace TortoiseSCM
 
     internal sealed class CliOptions
     {
-        internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile, BeyondCompare;
+        internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile, BeyondCompare, ToolProvider;
         internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result, Branch, Filter, Ignore, Label;
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout, Limit, Conflict;
@@ -883,7 +884,7 @@ namespace TortoiseSCM
         internal Guid? LockId, BranchGuid;
         internal long? BranchId;
         internal string NewName;
-        internal bool ChangesSettings { get { return BeyondCompare != null || DiffTool != null || DiffArgs != null || MergeTool != null || MergeArgs != null; } }
+        internal bool ChangesSettings { get { return ToolProvider != null || BeyondCompare != null || DiffTool != null || DiffArgs != null || MergeTool != null || MergeArgs != null; } }
         internal readonly List<string> Paths = new List<string>();
 
         internal static bool RequestsJson(string[] args)
@@ -896,7 +897,7 @@ namespace TortoiseSCM
                     case "--json": return true;
                     case "--command": case "--path": case "--comment": case "--commentsfile": case "--cm": case "--timeout": ++i; break;
                     case "--changeset": case "--shelve": case "--label": case "--label-id": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
-                    case "--beyond-compare": case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
+                    case "--tool-provider": case "--beyond-compare": case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
                     case "--item": case "--from-item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
                     case "--conflict": case "--resolution": case "--rename": case "--branch": case "--filter": case "--ignore":
                     case "--branch-id": case "--branch-guid": case "--new-name": ++i; break;
@@ -932,6 +933,7 @@ namespace TortoiseSCM
                     case "--commentsfile": commentsFile = AbsolutePath(Value(args, ref i)); break;
                     case "--cm": options.Cm = AbsolutePath(Value(args, ref i)); break;
                     case "--settings-file": options.SettingsFile = AbsolutePath(Value(args, ref i)); break;
+                    case "--tool-provider": options.ToolProvider = Value(args, ref i); if (options.ToolProvider != "TortoiseMerge" && options.ToolProvider != "BeyondCompare") throw new ArgumentException("Unknown tool provider."); break;
                     case "--beyond-compare": options.BeyondCompare = Value(args, ref i); if (options.BeyondCompare.Length > 0) options.BeyondCompare = AbsolutePath(options.BeyondCompare); break;
                     case "--diff-tool": options.DiffTool = Value(args, ref i); if (options.DiffTool.Length > 0) options.DiffTool = AbsolutePath(options.DiffTool); break;
                     case "--diff-args": options.DiffArgs = Value(args, ref i); break;

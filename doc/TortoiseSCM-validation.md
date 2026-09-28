@@ -1,5 +1,9 @@
 # TortoiseSCM 验证记录
 
+## 默认原生比较/合并工具（2026-09-29）
+
+- [实现、安装测试及截图](TortoiseSCM-tortoise-tools-20260929.md)：默认包内 TortoiseGitMerge，Beyond Compare 备选；完整回归、设置普通/最小尺寸、隔离安装升级卸载及真实 native diff 通过。保留第三方 GUI 手工编辑验收边界。
+
 ## 用户完整流程自动化（2026-09-29，后续复测）
 
 - [报告及截图](TortoiseSCM-gui-experience-20260929.md)：新增统一入口 `test/TortoiseSCM/Run-GuiExperienceTests.ps1`，17 个 GUI 流程/补充检查阶段最终均通过；真实服务器写入使用专用分支和隔离工作区。

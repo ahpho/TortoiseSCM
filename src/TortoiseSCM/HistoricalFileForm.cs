@@ -22,7 +22,7 @@ namespace TortoiseSCM
         private PlasticChangesetFile comparisonFile;
         private bool sourceExists = true;
         private bool targetExists = true;
-        private readonly Button compare = DialogStyle.Button("Beyond Compare");
+        private readonly Button compare = DialogStyle.Button("比较工具");
         private readonly Button external = DialogStyle.Button("比较工具…");
         private readonly Button export = DialogStyle.Button("导出目标版本…");
         private readonly Button exportSource = DialogStyle.Button("导出起点版本…");
@@ -76,7 +76,7 @@ namespace TortoiseSCM
             preview.Multiline = true; preview.ReadOnly = true; preview.WordWrap = false;
             preview.ScrollBars = ScrollBars.Both; preview.Dock = DockStyle.Fill;
             preview.Font = new Font("Consolas", 10F);
-            preview.Text = "选择两个变更集，使用 Beyond Compare 比较同一路径的历史内容，并可分别导出起点和目标版本。\r\n跨重命名比较请从历史窗口的“比较整个仓库”列表打开移动项。";
+            preview.Text = "选择两个变更集，使用 比较工具 比较同一路径的历史内容，并可分别导出起点和目标版本。\r\n跨重命名比较请从历史窗口的“比较整个仓库”列表打开移动项。";
             layout.Controls.Add(preview, 0, 2);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; status.UseMnemonic = false;
             layout.Controls.Add(status, 0, 3);
@@ -88,7 +88,7 @@ namespace TortoiseSCM
             external.Width = 115; external.Visible = false;
             compare.Width = 135;
             external.Click += async delegate { await CompareAsync(true); };
-            // Product comparison is always Beyond Compare. CompareAsync(false) remains an
+            // Product comparison is always 比较工具. CompareAsync(false) remains an
             // internal structured-preview path for regression/diagnostic callers only.
             compare.Click += async delegate { await CompareAsync(true); };
             buttons.Controls.Add(close); buttons.Controls.Add(export); buttons.Controls.Add(exportSource); buttons.Controls.Add(compare);
@@ -107,9 +107,9 @@ namespace TortoiseSCM
             comparisonFile = new PlasticChangesetFile { Status = file.Status, Path = file.Path, OldPath = file.OldPath, ItemType = file.ItemType };
             fixedPair = true; sourceExists = file.Status != "A"; targetExists = file.Status != "D";
             preview.Text = sourceExists && targetExists ?
-                "起点：" + fromRepositoryPath + " @ cs:" + comparison.FromChangeset + "\r\n目标：" + repositoryPath + " @ cs:" + comparison.ToChangeset + "\r\n使用 Beyond Compare 比较，或分别导出两个版本。" :
-                sourceExists ? "此文件在目标版本中已删除。Beyond Compare 将显示起点内容与空目标；可导出起点版本。" :
-                "此文件为新增项。Beyond Compare 将显示空起点与目标内容；可导出目标版本。";
+                "起点：" + fromRepositoryPath + " @ cs:" + comparison.FromChangeset + "\r\n目标：" + repositoryPath + " @ cs:" + comparison.ToChangeset + "\r\n使用 比较工具 比较，或分别导出两个版本。" :
+                sourceExists ? "此文件在目标版本中已删除。比较工具 将显示起点内容与空目标；可导出起点版本。" :
+                "此文件为新增项。比较工具 将显示空起点与目标内容；可导出目标版本。";
             SetBusy(false);
         }
 
@@ -132,7 +132,7 @@ namespace TortoiseSCM
         private async Task CompareAsync(bool external)
         {
             if (busy || (!external && (!sourceExists || !targetExists))) return;
-            SetBusy(true); status.Text = external ? "正在读取历史内容并等待 Beyond Compare 窗口关闭…" : "正在读取历史内容…";
+            SetBusy(true); status.Text = external ? "正在读取历史内容并等待 比较工具 窗口关闭…" : "正在读取历史内容…";
             try
             {
                 ValidateContext();
@@ -141,7 +141,7 @@ namespace TortoiseSCM
                     var result = fixedPair ?
                         await openChangesetTool(workspacePath, comparisonSnapshot, comparisonFile, lifetime.Token) :
                         await openRevisionTool(workspacePath, fromRepositoryPath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
-                    status.Text = result.Succeeded ? "Beyond Compare 操作完成。" : "比较失败：" + result.Error;
+                    status.Text = result.Succeeded ? "比较工具 操作完成。" : "比较失败：" + result.Error;
                     if (!result.Succeeded) preview.Text = result.Output + "\r\n" + result.Error;
                 }
                 else

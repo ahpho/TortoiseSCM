@@ -84,6 +84,7 @@ internal static class BeyondCompareTests
             Check(loaded.CmPath == config.CmPath && loaded.GluonPath == config.GluonPath && loaded.Timeout == config.Timeout, "Unrelated SCM configuration remains usable");
             Check(loaded.UseBuiltInDiff && loaded.UseBuiltInMerge && loaded.DiffToolPath == "removed.exe" && loaded.MergeToolPath == "removed-merge.exe" && loaded.DiffToolArguments == "old diff" && loaded.MergeToolArguments == "old merge", "Saving migrated configuration retains all dormant choices");
             Check(XDocument.Load(settings).Root.Element("UseBeyondCompare") == null, "No unsupported profile opt-out is emitted");
+            loaded.UseTortoiseMerge = false;
             loaded.BeyondComparePath = bcompare; loaded.Save();
             Check(PlasticClientConfig.Load(settings).BeyondComparePath == bcomp, "Selected BCompare persists normalized BComp path");
             string before = File.ReadAllText(settings);

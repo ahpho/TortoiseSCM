@@ -55,7 +55,7 @@ namespace TortoiseSCM
             var top = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             refresh.Width = 145; top.Controls.Add(refresh); structure.Width = 115; top.Controls.Add(structure);
             resolution.DropDownStyle = ComboBoxStyle.DropDownList; resolution.Width = 220;
-            resolution.Items.AddRange(new object[] { "文本：Beyond Compare 三方合并", "保留本地版本（准备独立结果）", "采用服务器版本（准备独立结果）" });
+            resolution.Items.AddRange(new object[] { "文本：比较工具 三方合并", "保留本地版本（准备独立结果）", "采用服务器版本（准备独立结果）" });
             resolution.SelectedIndex = 0; resolution.AccessibleName = "冲突处理方式";
             top.Controls.Add(resolution);
             top.Controls.Add(new Label { Text = "准备不改工作文件；需确认应用。", AutoSize = true, Padding = new Padding(4, 5, 0, 0) });

@@ -135,7 +135,7 @@ namespace TortoiseSCM
                         output.AppendText("[预检] 本次尚未执行更新。以下项目有传入冲突：" + Environment.NewLine +
                             String.Join(Environment.NewLine, blocked.Select(item => item.RepositoryPath + (item.IsBinary ? " [二进制]" : "") +
                                 (item.CanResolve ? "" : " — " + item.Reason))) + Environment.NewLine +
-                            "保留修改：点击“处理传入冲突”，文本可用 Beyond Compare 合并，二进制选择本地或服务器版本。" + Environment.NewLine +
+                            "保留修改：点击“处理传入冲突”，文本可用 比较工具 合并，二进制选择本地或服务器版本。" + Environment.NewLine +
                             "丢弃修改：点击“检查 / 丢弃修改”，仅选择确实不需要的文件，确认撤销后返回刷新范围并再次更新。" + Environment.NewLine);
                         status.Text = "发现传入冲突，尚未更新。请先处理或明确丢弃，再刷新范围。";
                         return;

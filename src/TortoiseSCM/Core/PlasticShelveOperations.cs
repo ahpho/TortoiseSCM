@@ -130,7 +130,7 @@ namespace TortoiseSCM
                 ShelveId = shelveId, ParentChangeset = shelve.ParentChangeset, Files = result };
         }
 
-        /// <summary>Open one shelveset file in the configured Beyond Compare profile.</summary>
+        /// <summary>Open one shelveset file in the configured comparison profile.</summary>
         public Task<PlasticCommandResult> OpenShelveDiffToolAsync(string root, long shelveId,
             string repositoryPath, CancellationToken cancellationToken)
         {
@@ -149,9 +149,9 @@ namespace TortoiseSCM
             if (expectedSelector == null) throw new ArgumentNullException("expectedSelector");
             var expected = new PlasticWorkspace { RootPath = Path.GetFullPath(root), Repository = expectedRepository, Selector = expectedSelector };
             ValidateShelveContext(expected);
-            string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
+            string beyondCompare = config.UseBeyondCompare ? ComparisonTool.ResolveExecutable(config) : null;
             if (String.IsNullOrEmpty(beyondCompare))
-                throw new InvalidOperationException("暂存集文件比较统一使用 Beyond Compare，请先安装并配置 BComp.exe。");
+                throw new InvalidOperationException("暂存集文件比较需要已配置的比较工具，请检查工具设置。");
             var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
             ValidateShelveContext(expected);
             var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
@@ -195,7 +195,7 @@ namespace TortoiseSCM
                     if (args[i].StartsWith("/righttitle=", StringComparison.Ordinal))
                         args[i] = "/righttitle=Shelve sh:" + shelveId.ToString(CultureInfo.InvariantCulture) + " " + change.Path + (change.Status == "D" ? " (empty: deleted)" : "");
                 }
-                return await BeyondCompareProcess.RunDiffAsync(beyondCompare, args, temporary, cancellationToken).ConfigureAwait(false);
+                return await ComparisonTool.RunDiffAsync(beyondCompare, args, temporary, cancellationToken).ConfigureAwait(false);
             }
             catch (BeyondCompareWaitException) { preserve = true; throw; }
             finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }
@@ -206,7 +206,7 @@ namespace TortoiseSCM
             var matches = changes.Where(item => String.Equals(item.Path, path, StringComparison.Ordinal)).ToList();
             if (matches.Count == 0) throw new ArgumentException("所选文件不在该暂存集中，请刷新文件明细。");
             if (matches.Any(item => item.ItemType != "F" && item.ItemType != "B"))
-                throw new ArgumentException("Beyond Compare 暂存集比较只支持普通文件；目录和链接请使用 Plastic 客户端。");
+                throw new ArgumentException("暂存集比较只支持普通文件；目录和链接请使用 Plastic 客户端。");
             // Native diff can emit both M and C for one renamed, edited file.
             // Both rows must agree on the exact original path and file type.
             if (matches.Count != 1 && !(matches.Count == 2 && matches.Count(item => item.Status == "M") == 1 &&

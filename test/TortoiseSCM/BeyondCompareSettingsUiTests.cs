@@ -25,11 +25,15 @@ namespace TortoiseSCM
                 var tree = Descendants(settings).OfType<TreeView>().Single();
                 var diff = Field<TextBox>(settings, "diffTool");
                 var merge = Field<TextBox>(settings, "mergeTool");
+                var provider = Field<ComboBox>(settings, "provider");
+                Require(provider.Items.Count == 2, "Both native default and BC alternative are available");
+                provider.SelectedIndex = 1; Application.DoEvents();
+                Require(Field<ComboBox>(settings, "mergeProvider").SelectedIndex == 1, "Tool provider is synchronized across pages");
                 Require(!Descendants(settings).OfType<CheckBox>().Any(), "Settings provide no built-in or custom editor choice");
                 Require(!Descendants(settings).Any(control => control.AccessibleName == "参数模板"), "Tool arguments are fixed instead of editable templates");
                 Require(Descendants(settings).Count(control => control.AccessibleName == "自动检测 Beyond Compare") == 2,
                     "Both editor pages offer Beyond Compare detection");
-                Require(Descendants(settings).Any(control => control.Text.Contains("不限制 Beyond Compare 编辑时间")),
+                Require(Descendants(settings).Any(control => control.Text.Contains("不限制比较/合并工具编辑时间")),
                     "Plastic timeout is distinct from the editor lifetime");
                 tree.SelectedNode = tree.Nodes[1]; Application.DoEvents();
                 Require(diff.Visible && !merge.Visible && !Field<TextBox>(settings, "cm").Visible, "Diff navigation shows the shared editor path");
@@ -61,13 +65,19 @@ namespace TortoiseSCM
                 Require(config.UseBeyondCompare && config.BeyondComparePath == String.Empty,
                     "Empty automatic path can be applied without requiring an installed editor or saving user settings");
                 string mergeText = String.Join("\n", Descendants(settings).Where(control => control.Visible).Select(control => control.Text));
-                Require(mergeText.Contains("Beyond Compare Pro") && mergeText.Contains("左侧：本地；右侧：远程；祖先：基线；输出：合并结果"),
+                Require(mergeText.Contains("Beyond Compare") && mergeText.Contains("Tortoise：左远程、右本地；BC：左本地、右远程"),
                     "Merge page describes the Pro requirement and fixed input roles");
                 Require(mergeText.Contains("不会自动解决冲突或签入"), "Merge page states the explicit apply boundary");
                 CheckVisibleBounds(settings);
                 Save(settings, Path.Combine(artifacts, "settings-merge-minimum.png"));
                 settings.ClientSize = new Size(800, 440); Application.DoEvents();
                 Save(settings, Path.Combine(artifacts, "settings-merge.png"));
+                provider.SelectedIndex = 0; Application.DoEvents();
+                typeof(SettingsForm).GetMethod("ApplyTools", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(settings, null);
+                Require(config.UseTortoiseMerge, "Native provider can be selected without persisting user settings");
+                Save(settings, Path.Combine(artifacts, "settings-native.png"));
+                settings.Size = settings.MinimumSize; Application.DoEvents(); CheckVisibleBounds(settings);
+                Save(settings, Path.Combine(artifacts, "settings-native-minimum.png"));
                 settings.Close();
             }
             Console.WriteLine("PASS: Beyond Compare settings UI (" + assertions + " assertions)");

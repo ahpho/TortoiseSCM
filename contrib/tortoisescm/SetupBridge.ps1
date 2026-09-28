@@ -77,12 +77,14 @@ try {
         [IO.Directory]::CreateDirectory($stage) | Out-Null
         Expand-SetupPackage $PackageArchive $stage
         $manifest = Read-TscmManifest $stage -VerifyFiles
-        foreach ($required in @('Tools/BeyondCompare/BComp.exe', 'Tools/BeyondCompare/BCompare.exe', 'Tools/BeyondCompare/License.html')) {
-            if (@($manifest.files | Where-Object path -EQ $required).Count -ne 1) { throw '此图形安装包缺少 Beyond Compare 运行文件，请使用完整安装包。' }
+        $hasNative = @($manifest.files | Where-Object path -eq 'Tools/TortoiseGit/TortoiseGitMerge.exe').Count -eq 1
+        $requiredTools = if ($hasNative) { @('Tools/TortoiseGit/TortoiseGitMerge.exe', 'Tools/TortoiseGit/TortoiseGitUDiff.exe', 'Tools/TortoiseGit/LICENSE.txt', 'Tools/TortoiseGit/TortoiseGit-source.zip') } else { @('Tools/BeyondCompare/BComp.exe', 'Tools/BeyondCompare/BCompare.exe', 'Tools/BeyondCompare/License.html') }
+        foreach ($required in $requiredTools) {
+            if (@($manifest.files | Where-Object path -EQ $required).Count -ne 1) { throw '此图形安装包缺少比较工具运行文件，请使用完整安装包。' }
         }
         $installed = & (Join-Path $stage 'Install.ps1') -PackageDirectory $stage -InstallRoot $rootPath -NoRegister:$NoRegister -EnableMachineOverlays:$overlays
         if (-not $installed -or [string]::IsNullOrWhiteSpace($installed.versionDirectory)) { throw '安装未返回成功结果。' }
-        $message = '安装成功。Beyond Compare 已随包安装，可直接用于比较和合并。'
+        $message = '安装成功。比较和合并工具已随包安装，可在设置中选择。'
         # Optional narrow migration of a previously selected bundled-tool path is
         # added by SetupBeyondCompare.ps1. External user tool choices stay intact.
         $migration = Join-Path $PSScriptRoot 'SetupBeyondCompare.ps1'

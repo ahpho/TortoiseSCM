@@ -1244,7 +1244,7 @@ namespace TortoiseSCM
                 Prepare(form); var shelves = (ListView)Field(form, "shelves"); var files = (ListView)Field(form, "files");
                 Require(shelves.Items.Count == 2 && files.Items.Count == 0, "Shelves list loads independently of workspace pending selection");
                 Require(shelves.ContextMenuStrip != null && shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Count() == 4 &&
-                    shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Any(item => item.Text.Contains("Beyond Compare")),
+                    shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Any(item => item.Text.Contains("比较工具")),
                     "Shelves list provides apply, delete, Beyond Compare and export actions");
                 shelves.Items[0].Selected = true; Application.DoEvents();
                 Require(files.Items.Count == 1 && files.Items[0].SubItems[2].Text == "/old.txt" && ((TextBox)Field(form, "description")).Text.Contains("多行"),

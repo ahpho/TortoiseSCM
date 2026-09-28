@@ -72,8 +72,9 @@ namespace TortoiseSCM
         public bool UseBuiltInDiff { get; set; }
         public bool UseBuiltInMerge { get; set; }
         public string BeyondComparePath { get; set; }
-        // Loaded application settings always use the supported profile. The internal setter
-        // keeps legacy adapters testable without offering an XML opt-out to users.
+        public bool UseTortoiseMerge { get; set; }
+        // External profiles share the same verified input preparation. Legacy adapters
+        // remain testable but are not exposed as application settings.
         public bool UseBeyondCompare { get; internal set; }
 
         public PlasticClientConfig()
@@ -95,6 +96,7 @@ namespace TortoiseSCM
         {
             var result = new PlasticClientConfig();
             result.UseBeyondCompare = true;
+            result.UseTortoiseMerge = true;
             if (!String.IsNullOrWhiteSpace(settingsPath)) result.SettingsPath = System.IO.Path.GetFullPath(settingsPath);
             if (!File.Exists(result.SettingsPath)) return result;
             XDocument doc = SafeXml.Load(File.ReadAllText(result.SettingsPath));
@@ -122,6 +124,11 @@ namespace TortoiseSCM
                     catch (ArgumentException) { }
                 }
             }
+            string provider = (string)doc.Root.Element("ToolProvider");
+            if (provider != null && provider != "TortoiseMerge" && provider != "BeyondCompare")
+                throw new InvalidDataException("Unknown comparison tool provider.");
+            // Preserve explicit older BC installations; automatic configurations adopt the bundled default.
+            result.UseTortoiseMerge = provider == null ? String.IsNullOrWhiteSpace(result.BeyondComparePath) : provider == "TortoiseMerge";
             result.UseBuiltInDiff = (bool?)doc.Root.Element("UseBuiltInDiff") ?? false;
             result.UseBuiltInMerge = (bool?)doc.Root.Element("UseBuiltInMerge") ?? false;
             double seconds;
@@ -135,7 +142,7 @@ namespace TortoiseSCM
             if (Timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException("Timeout");
             if (UseBeyondCompare)
             {
-                if (!String.IsNullOrWhiteSpace(BeyondComparePath)) BeyondComparePath = BeyondCompareTool.NormalizeExecutable(BeyondComparePath);
+                if (!UseTortoiseMerge && !String.IsNullOrWhiteSpace(BeyondComparePath)) BeyondComparePath = BeyondCompareTool.NormalizeExecutable(BeyondComparePath);
             }
             else
             {
@@ -144,6 +151,7 @@ namespace TortoiseSCM
             }
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SettingsPath));
             new XDocument(new XElement("TortoiseSCM", new XElement("CmPath", CmPath), new XElement("GluonPath", GluonPath),
+                new XElement("ToolProvider", UseTortoiseMerge ? "TortoiseMerge" : "BeyondCompare"),
                 new XElement("BeyondComparePath", BeyondComparePath),
                 new XElement("DiffToolPath", DiffToolPath), new XElement("DiffToolArguments", DiffToolArguments),
                 new XElement("MergeToolPath", MergeToolPath), new XElement("MergeToolArguments", MergeToolArguments),

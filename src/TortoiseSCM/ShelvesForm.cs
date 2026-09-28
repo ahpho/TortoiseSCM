@@ -93,7 +93,7 @@ namespace TortoiseSCM
             applyMenu = new ToolStripMenuItem("应用暂存集", null, async delegate { await ApplyAsync(); });
             deleteMenu = new ToolStripMenuItem("删除暂存集", null, async delegate { await DeleteAsync(); });
             compareMenu = new ToolStripMenuItem("暂存集摘要", null, async delegate { await CompareAsync(); });
-            compareToolMenu = new ToolStripMenuItem("用 Beyond Compare 比较文件", null, async delegate { await CompareToolAsync(); });
+            compareToolMenu = new ToolStripMenuItem("用 比较工具 比较文件", null, async delegate { await CompareToolAsync(); });
             exportMenu = new ToolStripMenuItem("导出暂存集", null, async delegate { await ExportAsync(); });
             shelfMenu.Items.AddRange(new ToolStripItem[] { applyMenu, deleteMenu, new ToolStripSeparator(), compareToolMenu, exportMenu });
             shelfMenu.Opening += delegate { UpdateButtons(); };
@@ -114,7 +114,7 @@ namespace TortoiseSCM
             files.SelectedIndexChanged += delegate { UpdateButtons(); };
             files.DoubleClick += async delegate { await CompareToolAsync(); };
             var fileMenu = new ContextMenuStrip();
-            var fileCompare = fileMenu.Items.Add("用 Beyond Compare 比较文件", null, async delegate { await CompareToolAsync(); });
+            var fileCompare = fileMenu.Items.Add("用 比较工具 比较文件", null, async delegate { await CompareToolAsync(); });
             fileMenu.Opening += delegate { UpdateButtons(); fileCompare.Enabled = compare.Enabled; };
             files.ContextMenuStrip = fileMenu;
             files.MouseUp += delegate(object sender, MouseEventArgs args) {
@@ -124,7 +124,7 @@ namespace TortoiseSCM
             };
             files.Columns.Add("路径", 470); files.Columns.Add("状态", 85); files.Columns.Add("原路径", 350); files.AccessibleName = "暂存集更改文件";
             detail.Controls.Add(files, 0, 1); split.Panel2.Controls.Add(detail); layout.Controls.Add(split, 0, 2);
-            layout.Controls.Add(new Label { Text = "选择下方文件后点击比较或双击，用 Beyond Compare 查看父版本与暂存内容。\r\n新增/删除使用明确空侧；应用暂存集要求 Standard 工作区干净，写入操作须确认。", Dock = DockStyle.Fill }, 0, 3);
+            layout.Controls.Add(new Label { Text = "选择下方文件后点击比较或双击，用 比较工具 查看父版本与暂存内容。\r\n新增/删除使用明确空侧；应用暂存集要求 Standard 工作区干净，写入操作须确认。", Dock = DockStyle.Fill }, 0, 3);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; status.UseMnemonic = false; status.TextAlign = ContentAlignment.MiddleLeft; layout.Controls.Add(status, 0, 4);
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -137,7 +137,7 @@ namespace TortoiseSCM
             close.Click += delegate { Close(); }; CancelButton = close;
             Shown += async delegate { await LoadAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs args) {
-                if (writing || toolRunning) { args.Cancel = true; status.Text = toolRunning ? "请先关闭本次 Beyond Compare 窗口。" : "写入操作正在进行，完成前不能关闭窗口。"; return; }
+                if (writing || toolRunning) { args.Cancel = true; status.Text = toolRunning ? "请先关闭本次 比较工具 窗口。" : "写入操作正在进行，完成前不能关闭窗口。"; return; }
                 lifetime.Cancel(); if (request != null) request.Cancel();
             };
             UpdateButtons();
@@ -361,9 +361,9 @@ namespace TortoiseSCM
             try { await WorkAsync(async token =>
             {
                 ValidateApplyContext();
-                status.Text = "Beyond Compare：" + file.Path + "；取消后仍须关闭工具窗口。";
+                status.Text = "比较工具：" + file.Path + "；取消后仍须关闭工具窗口。";
                 var result = await compareFile(root, selected.ShelveId, file.Path, token);
-                status.Text = result.Succeeded ? "Beyond Compare 已关闭；结果仅供比较，暂存集未改变。" : "Beyond Compare 失败：" + result.Error;
+                status.Text = result.Succeeded ? "比较工具 已关闭；结果仅供比较，暂存集未改变。" : "比较工具 失败：" + result.Error;
             }); }
             finally { toolRunning = false; UpdateButtons(); }
         }

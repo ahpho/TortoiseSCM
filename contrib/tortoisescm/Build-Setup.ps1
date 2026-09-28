@@ -2,6 +2,7 @@
 param(
     [string]$PackageArchive,
     [string]$BeyondCompareDirectory,
+    [string]$TortoiseToolsDirectory,
     [string]$BinaryDirectory = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/Release'),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/packages'),
     [string]$Version = ('0.1.0-dev-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
@@ -13,8 +14,8 @@ $ErrorActionPreference = 'Stop'
 $output = Assert-TscmPlainPath $OutputDirectory
 [IO.Directory]::CreateDirectory($output) | Out-Null
 if ([string]::IsNullOrWhiteSpace($PackageArchive)) {
-    if ([string]::IsNullOrWhiteSpace($BeyondCompareDirectory)) { throw 'BeyondCompareDirectory is required when creating an installer without an existing bundled ZIP.' }
-    $PackageArchive = & (Join-Path $PSScriptRoot 'Package.ps1') -BinaryDirectory $BinaryDirectory -OutputDirectory $output -Version $Version -BeyondCompareDirectory $BeyondCompareDirectory
+    if ([string]::IsNullOrWhiteSpace($BeyondCompareDirectory) -and [string]::IsNullOrWhiteSpace($TortoiseToolsDirectory)) { throw 'Provide bundled Tortoise tools or Beyond Compare runtime.' }
+    $PackageArchive = & (Join-Path $PSScriptRoot 'Package.ps1') -BinaryDirectory $BinaryDirectory -OutputDirectory $output -Version $Version -BeyondCompareDirectory $BeyondCompareDirectory -TortoiseToolsDirectory $TortoiseToolsDirectory
 }
 $archivePath = Assert-TscmPlainPath $PackageArchive
 $stage = Join-Path $output ('.setup-verify-' + [Guid]::NewGuid().ToString('N'))
@@ -34,9 +35,11 @@ try {
         }
     } finally { $archive.Dispose() }
     $manifest = Read-TscmManifest $stage -VerifyFiles
-    foreach ($file in @('BCompare.exe', 'BComp.exe', 'License.html')) {
-        $relative = 'Tools/BeyondCompare/' + $file
-        if (@($manifest.files | Where-Object path -eq $relative).Count -ne 1) { throw ('Installer must contain verified Beyond Compare runtime: ' + $relative) }
+    $hasNative = @($manifest.files | Where-Object path -eq 'Tools/TortoiseGit/TortoiseGitMerge.exe').Count -eq 1
+    $requiredTools = if ($hasNative) { @('Tools/TortoiseGit/TortoiseGitMerge.exe', 'Tools/TortoiseGit/TortoiseGitUDiff.exe', 'Tools/TortoiseGit/LICENSE.txt', 'Tools/TortoiseGit/TortoiseGit-source.zip') }
+        else { @('Tools/BeyondCompare/BCompare.exe', 'Tools/BeyondCompare/BComp.exe', 'Tools/BeyondCompare/License.html') }
+    foreach ($relative in $requiredTools) {
+        if (@($manifest.files | Where-Object path -eq $relative).Count -ne 1) { throw ('Installer must contain verified tool runtime: ' + $relative) }
     }
     $Version = [string]$manifest.version
     if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Package version cannot be used as an installer version.' }

@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$BeyondCompareDirectory,
+    [string]$TortoiseToolsDirectory,
     [string]$BinaryDirectory = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/Release'),
     [string]$IsccPath
 )
@@ -37,7 +38,7 @@ $lock = $null
 try {
     $setups = @()
     foreach ($version in $versions) {
-        $setups += & (Join-Path $scripts 'Build-Setup.ps1') -BeyondCompareDirectory $BeyondCompareDirectory -BinaryDirectory $BinaryDirectory -OutputDirectory $fixture -Version $version -IsccPath $IsccPath -TestSetup
+        $setups += & (Join-Path $scripts 'Build-Setup.ps1') -BeyondCompareDirectory $BeyondCompareDirectory -TortoiseToolsDirectory $TortoiseToolsDirectory -BinaryDirectory $BinaryDirectory -OutputDirectory $fixture -Version $version -IsccPath $IsccPath -TestSetup
     }
     Assert ($setups.Count -eq 2) 'Two test installers with distinct package versions compiled.'
     Assert (@($setups | Where-Object { $_ -notlike '*-Setup-Test.exe' }).Count -eq 0) 'Only test installer executable names may execute.'
@@ -50,6 +51,42 @@ try {
     Assert ((Get-ItemProperty $testArp).DisplayName -like 'TortoiseSCM Installer Test *') 'Test Apps entry is visibly distinguished from production.'
     Assert (Test-Path -LiteralPath $uninstaller) 'Windows Apps uninstaller is present.'
     Assert (Test-Path -LiteralPath (Join-Path $first.versionDirectory 'Tools/BeyondCompare/BComp.exe')) 'Beyond Compare is installed with the payload.'
+    if ($TortoiseToolsDirectory) {
+        foreach ($file in @('TortoiseGitMerge.exe', 'TortoiseGitUDiff.exe', 'LICENSE.txt', 'TortoiseGit-source.zip', 'mfc140u.dll')) {
+            $installedFile = Join-Path $first.versionDirectory ('Tools/TortoiseGit/' + $file)
+            Assert ((Get-FileHash -LiteralPath $installedFile).Hash -eq (Get-FileHash -LiteralPath (Join-Path $TortoiseToolsDirectory $file)).Hash) "Native tool payload matches source: $file"
+        }
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = Join-Path $first.versionDirectory 'TortoiseSCM.exe'
+        $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+        $config = Join-Path $fixture 'isolated-settings.xml'
+        foreach ($provider in @('', 'BeyondCompare', 'TortoiseMerge')) {
+            $start.Arguments = '--cli --command settings --settings-file "' + $config + '" --json'
+            if ($provider) { $start.Arguments += ' --tool-provider ' + $provider + ' --yes' }
+            $process = [Diagnostics.Process]::Start($start)
+            try {
+                $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
+                if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Installed profile query timed out.' }
+                $json = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json
+                $expected = if ($provider) { $provider } else { 'TortoiseMerge' }
+                Assert ($process.ExitCode -eq 0 -and $json.data.settings.toolProvider -eq $expected) "Installed app selects profile: $expected"
+            } finally { $process.Dispose() }
+        }
+        # Real native CLI operation loads the app-local runtime without any tool installation or GUI editing.
+        $before = Join-Path $fixture 'before.txt'; $after = Join-Path $fixture 'after.txt'; $patch = Join-Path $fixture 'native.diff'
+        [IO.File]::WriteAllText($before, "before`n"); [IO.File]::WriteAllText($after, "after`n")
+        $native = Join-Path $first.versionDirectory 'Tools/TortoiseGit/TortoiseGitMerge.exe'
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = $native; $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+        $start.Arguments = '/createunifieddiff /origfile:"' + $before + '" /modifiedfile:"' + $after + '" /outfile:"' + $patch + '"'
+        $process = [Diagnostics.Process]::Start($start)
+        try {
+            if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Native diff smoke test timed out.' }
+            Assert ($process.ExitCode -eq 0 -and (Test-Path -LiteralPath $patch)) 'Installed native executable creates an actual unified diff.'
+            Assert ([IO.File]::ReadAllText($patch).Contains('-before') -and [IO.File]::ReadAllText($patch).Contains('+after')) 'Installed native diff contains expected source and target lines.'
+        } finally { $process.Dispose() }
+    }
     $oldDll = Join-Path $first.versionDirectory 'TortoiseSCMShell.dll'
     $lock = [IO.File]::Open($oldDll, 'Open', 'Read', 'Read')
     Assert ((Run-Installer $setups[1] 'upgrade-b' $true) -eq 0) 'A newer installer upgrades while the old shell DLL is locked.'
