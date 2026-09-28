@@ -29,6 +29,14 @@ namespace TortoiseSCM
                 uiContext = new WindowsFormsSynchronizationContext();
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 2 && args[0] == "--repository-browser-ui")
+                {
+                    Directory.CreateDirectory(args[1]); CheckRepositoryBrowser(args[1]); return 0;
+                }
+                if (args.Length == 3 && args[0] == "--repository-browser-live")
+                {
+                    Directory.CreateDirectory(args[1]); CheckLiveRepositoryBrowser(args[1], args[2]); return 0;
+                }
                 if (args.Length == 3 && args[0] == "--branches-live")
                 {
                     Directory.CreateDirectory(args[1]);
@@ -82,8 +90,10 @@ namespace TortoiseSCM
                 CheckBranchTree(artifacts);
                 CheckShelvesDialogs(artifacts);
                 CheckBlameDialog(artifacts);
+                CheckRepositoryBrowser(artifacts);
                 if (args.Length > 1)
                 {
+                    CheckLiveRepositoryBrowser(artifacts, args[1]);
                     CheckBranches(artifacts, args[1]);
                     using (var merge = new MergeForm(new PlasticClient(PlasticClientConfig.Load()), args[1]))
                     {
@@ -165,7 +175,9 @@ namespace TortoiseSCM
                             var list = (ListView)typeof(MainForm).GetField("files", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
                             Require(list.Items.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).Path.Equals(sample, StringComparison.OrdinalIgnoreCase)), "Live private UTF-8 file is displayed");
                             Require(list.CheckedItems.Count == 0, "No unreviewed changes selected automatically");
-                            Require(list.ContextMenuStrip != null && list.ContextMenuStrip.Items.Cast<ToolStripItem>().Count(item => item is ToolStripMenuItem) == 6, "Pending context menu provides history, diff, discard, move, remove and ignore");
+                            Require(list.ContextMenuStrip != null && list.ContextMenuStrip.Items.Cast<ToolStripItem>().Count(item => item is ToolStripMenuItem) == 7 &&
+                                list.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text.Contains("Blame")),
+                                "Pending context menu provides history, blame, diff, discard, move, remove and ignore");
                             var message = (TextBox)Field(form, "comment");
                             Require(message.PointToScreen(Point.Empty).Y < list.PointToScreen(Point.Empty).Y, "Tortoise commit layout places message above changed files");
                             Require(!list.GridLines && list.Columns[0].Text == "路径", "Pending list uses native path-first layout without a grid");
@@ -1397,6 +1409,140 @@ namespace TortoiseSCM
                     "Blame dialog starts idle with refresh enabled");
                 form.Size = form.MinimumSize; form.CreateControl(); Application.DoEvents();
                 Save(form, Path.Combine(artifacts, "blame-minimum.png"));
+            }
+        }
+
+        private static void CheckRepositoryBrowser(string artifacts)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            Require(LaunchRequest.Parse(new[] { "--command", "repository-browser", "--changeset", "0" }).Changeset == 0, "Repository browser launch accepts initial changeset zero");
+            foreach (var value in new[] { "-1", "+1", "1.2", "9223372036854775808" })
+            {
+                try { LaunchRequest.Parse(new[] { "--command", "repository-browser", "--changeset", value }); throw new Exception("Invalid changeset accepted"); }
+                catch (ArgumentException) { }
+            }
+            string root = Path.GetFullPath(Path.Combine(artifacts, "repository-fixture-" + Guid.NewGuid().ToString("N")));
+            string metadata = Path.Combine(root, ".plastic"); Directory.CreateDirectory(metadata);
+            File.WriteAllText(Path.Combine(metadata, "plastic.workspace"), "ui-repository\nunused\nPartial\n");
+            string selectorFile = Path.Combine(metadata, "plastic.selector");
+            string selector = "repository \"ui-repository@local\"\n  path \"/\"\n    branch \"/main\"\n";
+            File.WriteAllText(selectorFile, selector);
+            int calls = 0; long requestedCs = -1; string requestedPath = null;
+            bool fail = false, wait = false;
+            Func<string, string, long, CancellationToken, System.Threading.Tasks.Task<PlasticRepositoryListing>> load = async delegate(string workspace, string path, long cs, CancellationToken token)
+            {
+                calls++; requestedCs = cs; requestedPath = path;
+                await System.Threading.Tasks.Task.Yield();
+                if (wait) await System.Threading.Tasks.Task.Delay(30000, token);
+                if (fail) throw new InvalidDataException("fixture read failure");
+                return new PlasticRepositoryListing { Repository = "ui-repository@local", RootPath = root, DirectoryPath = path, Changeset = cs,
+                    Entries = path == "/" ? new[] {
+                        new PlasticRepositoryEntry { Name = "未加载 中文目录", Path = "/未加载 中文目录", IsDirectory = true, ItemId = 1 },
+                        new PlasticRepositoryEntry { Name = "readme.txt", Path = "/readme.txt", Size = 30, ItemId = 2 },
+                        new PlasticRepositoryEntry { Name = "link", Path = "/link", IsSymbolicLink = true, ItemId = 3 }
+                    } : new[] { new PlasticRepositoryEntry { Name = "historical.txt", Path = path + "/historical.txt", Size = 10, ItemId = 4 } } };
+            };
+            using (var form = new RepositoryBrowserForm(new PlasticClient(PlasticClientConfig.Load()), root, 17, "ui-repository@local"))
+            {
+                typeof(RepositoryBrowserForm).GetField("loadDirectory", flags).SetValue(form, load);
+                Prepare(form); WaitUntil(() => !(bool)Field(form, "busy"), "Repository root listing completes");
+                var rows = (ListView)Field(form, "files"); var tree = (TreeView)Field(form, "directories");
+                Require(calls == 1 && requestedCs == 17 && requestedPath == "/" && rows.Items.Count == 3 && tree.Nodes[0].Nodes.Count == 1,
+                    "Repository browser lazily loads one snapshot directory including unloaded paths");
+                rows.Items.Cast<ListViewItem>().Single(row => row.Text == "link").Selected = true; Application.DoEvents();
+                Require(!((Button)Field(form, "view")).Enabled && !((Button)Field(form, "export")).Enabled, "Symbolic links cannot be followed or exported as ordinary files");
+                foreach (ListViewItem row in rows.Items) row.Selected = false;
+                rows.Items.Cast<ListViewItem>().Single(row => row.Text == "readme.txt").Selected = true; Application.DoEvents();
+                Func<string, string, long, CancellationToken, System.Threading.Tasks.Task<PlasticHistoricalFile>> read = delegate(string workspace, string path, long cs, CancellationToken token)
+                {
+                    Require(path == "/readme.txt" && cs == 17, "Preview uses displayed snapshot file and changeset");
+                    return System.Threading.Tasks.Task.FromResult(new PlasticHistoricalFile { RepositoryPath = path, Changeset = cs, Content = System.Text.Encoding.UTF8.GetBytes("中文第一行\n\nthird line\rfinal") });
+                };
+                typeof(RepositoryBrowserForm).GetField("readFile", flags).SetValue(form, read);
+                ((Button)Field(form, "view")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Repository file preview completes");
+                Require(((TextBox)Field(form, "preview")).Text == "中文第一行\r\n\r\nthird line\r\nfinal", "Repository UTF-8 preview preserves blank lines and normalizes native newlines");
+                Save(form, Path.Combine(artifacts, "repository-browser.png"));
+                form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (var field in new[] { "browse", "up", "refresh", "cancel", "view", "export", "files", "directories" })
+                {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Repository " + field + " fits at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "repository-browser-minimum.png"));
+                tree.SelectedNode = tree.Nodes[0].Nodes[0]; WaitUntil(() => !(bool)Field(form, "busy"), "Repository child navigation completes");
+                Require(requestedPath == "/未加载 中文目录" && calls == 2 && requestedCs == 17 && ((Button)Field(form, "up")).Enabled,
+                    "Repository navigation preserves snapshot and lazily reads selected directory");
+                ((Button)Field(form, "up")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Repository up navigation completes");
+                Require(requestedPath == "/" && !((Button)Field(form, "up")).Enabled, "Repository parent navigation reaches root");
+                ((NumericUpDown)Field(form, "revision")).Value = 0;
+                Require(rows.Items.Count == 0 && !((Button)Field(form, "export")).Enabled, "Editing snapshot invalidates old file actions immediately");
+                Require((string)Field(form, "requestedDirectory") == "/" && ((Label)Field(form, "location")).Text.Contains("cs:0（尚未加载）"), "Editing snapshot resets root navigation and labels the unloaded requested snapshot");
+                ((Button)Field(form, "browse")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Repository changeset zero browsing completes");
+                Require(requestedCs == 0 && rows.Items.Count == 3, "Repository browser supports empty-root initial changeset identifier");
+                fail = true; ((Button)Field(form, "refresh")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Repository failed refresh completes");
+                Require(rows.Items.Count == 0 && tree.Nodes.Count == 0 && ((Label)Field(form, "status")).Text.Contains("fixture read failure"), "Failed refresh clears stale snapshot rows and directory tree");
+                fail = false; wait = true; ((Button)Field(form, "browse")).PerformClick(); Application.DoEvents();
+                Require(((Button)Field(form, "cancel")).Enabled && !((Button)Field(form, "export")).Enabled, "Pending repository request exposes cancellation and blocks file actions");
+                ((Button)Field(form, "cancel")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Repository cancelled request completes");
+                Require(rows.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("取消"), "Cancelled listing cannot repopulate stale rows");
+                wait = false; int before = calls; File.WriteAllText(selectorFile, selector.Replace("ui-repository@local", "other@local"));
+                ((Button)Field(form, "browse")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Repository context change is rejected");
+                Require(calls == before && rows.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("仓库已改变"), "Repository mismatch prevents a read from another repository");
+                form.Close();
+            }
+        }
+
+        private static void CheckLiveRepositoryBrowser(string artifacts, string workspacePath)
+        {
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            var branchesTask = client.GetBranchesAsync(workspacePath, CancellationToken.None);
+            WaitUntil(() => branchesTask.IsCompleted, "Live browser current branch lookup completes");
+            var current = branchesTask.GetAwaiter().GetResult().Single(item => item.IsCurrent);
+            using (var form = new RepositoryBrowserForm(client, workspacePath, null, current.Repository))
+            {
+                Prepare(form); WaitUntil(() => !(bool)Field(form, "busy"), "Live repository default snapshot loads");
+                var listing = (PlasticRepositoryListing)Field(form, "listing");
+                Require(listing != null && listing.Changeset == current.HeadChangeset && listing.DirectoryPath == "/", "Live browser defaults to current branch head even for Partial workspace");
+                var rows = (ListView)Field(form, "files");
+                var file = rows.Items.Cast<ListViewItem>().FirstOrDefault(row => {
+                    var entry = (PlasticRepositoryEntry)row.Tag;
+                    return !entry.IsDirectory && !entry.IsSymbolicLink && entry.Size <= 2 * 1024 * 1024 &&
+                        new[] { ".md", ".txt", ".cs" }.Contains(Path.GetExtension(entry.Name).ToLowerInvariant());
+                });
+                if (file != null)
+                {
+                    file.Selected = true; Application.DoEvents(); ((Button)Field(form, "view")).PerformClick();
+                    WaitUntil(() => !(bool)Field(form, "busy"), "Live repository file preview completes");
+                    Require(((Label)Field(form, "status")).Text.Contains("只读 UTF-8 预览"), "Live historical file preview reads selected fixed snapshot");
+                }
+                Save(form, Path.Combine(artifacts, "repository-browser-live.png"));
+                form.Size = form.MinimumSize; Application.DoEvents(); Save(form, Path.Combine(artifacts, "repository-browser-live-minimum.png"));
+                var tree = (TreeView)Field(form, "directories");
+                if (tree.Nodes[0].Nodes.Count > 0)
+                {
+                    string path = (string)tree.Nodes[0].Nodes[0].Tag; tree.SelectedNode = tree.Nodes[0].Nodes[0];
+                    WaitUntil(() => !(bool)Field(form, "busy"), "Live repository child loads");
+                    var child = (PlasticRepositoryListing)Field(form, "listing");
+                    Require(child != null && child.DirectoryPath == path && child.Changeset == listing.Changeset, "Live directory navigation retains explicit snapshot");
+                    if (file == null)
+                    {
+                        var childFile = rows.Items.Cast<ListViewItem>().FirstOrDefault(row => {
+                            var entry = (PlasticRepositoryEntry)row.Tag;
+                            return !entry.IsDirectory && !entry.IsSymbolicLink && entry.Size <= 2 * 1024 * 1024 &&
+                                new[] { ".md", ".txt", ".cs" }.Contains(Path.GetExtension(entry.Name).ToLowerInvariant());
+                        });
+                        if (childFile != null)
+                        {
+                            childFile.Selected = true; Application.DoEvents(); ((Button)Field(form, "view")).PerformClick();
+                            WaitUntil(() => !(bool)Field(form, "busy"), "Live repository child file preview completes");
+                            Require(((Label)Field(form, "status")).Text.Contains("只读 UTF-8 预览"), "Live child preview reads selected fixed snapshot");
+                            Save(form, Path.Combine(artifacts, "repository-browser-live-child-preview.png"));
+                        }
+                    }
+                    ((Button)Field(form, "up")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Live repository parent loads");
+                    Require(((PlasticRepositoryListing)Field(form, "listing")).DirectoryPath == "/", "Live repository parent returns to root");
+                }
+                form.Close();
             }
         }
 

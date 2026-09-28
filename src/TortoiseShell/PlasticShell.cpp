@@ -49,7 +49,8 @@ constexpr Command commands[] = {
     {L"recover", L"Recover historical version...", L"\u6062\u590d\u5386\u53f2\u7248\u672c..."},
     {L"branches", L"Branches...", L"分支..."},
     {L"shelves", L"Shelvesets...", L"暂存集..."},
-    {L"blame", L"Annotate / Blame...", L"Annotate / Blame..."}
+    {L"blame", L"Annotate / Blame...", L"Annotate / Blame..."},
+    {L"repository-browser", L"Repository browser...", L"仓库浏览器..."}
 };
 
 const wchar_t* Label(const Command& command)

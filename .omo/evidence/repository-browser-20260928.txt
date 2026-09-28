@@ -1,0 +1,19 @@
+Historical repository browser milestone, 2026-09-28
+Release application SHA256: 50616177CB13BE95189E7A3B8CABF20272BAF22E04823DE304F226E91B4EB716
+Build: build-tortoisescm.ps1 -Configuration Release -Test -Workspace <isolated consumer>.
+Application/Shell build and all Core, 2068 existing CLI, 5 blame CLI, 21 shelveset content CLI, 21 repository browser CLI and Shell tests passed.
+New Core browser tests: 37. Historical file suite including context races: 47.
+Initial full GUI failed on an old six-item pending-menu assertion that omitted Blame. Updated assertion to verify seven items including Blame.
+Recompiled full UiTests, reran with isolated consumer: exit 0, 393 PASS lines.
+Final Partial live GUI: exit 0, 9 PASS lines, current branch head/preview/directory navigation verified.
+Native integration: RepositoryBrowserIntegrationTests.ps1, exit 0, 35 assertions.
+Fixture: bin/TortoiseSCM/qa/integration-20260928-011857-5cfb79d9/manifest.json
+Native evidence: same fixture/repository-browser-c7182b146351458fb1485b85a6c1a2e1/results.json
+Verified native XML path/identity/size, Chinese directories, empty/missing snapshots, unsafe scopes, fixed Standard/Partial results, cat/export byte hashes, unchanged status/selector/wktree.
+Native status row ordering is nondeterministic; test sorts complete rows before comparison. Missing directory preserves native exit 1.
+Package/isolated install/uninstall: 44 assertions, exit 0; actual Explorer registration unchanged.
+Logs: bin/TortoiseSCM/qa/repository-browser-full-build.log, repository-browser-ui-final.log, repository-browser-partial-ui.log, repository-browser-live.log, repository-browser-package.log.
+Visual review: qa/Release/repository-browser*.png and qa/repository-browser-partial-ui/repository-browser-live-minimum.png. Native WinForms rendering, normal/minimum sizes; no claim of desktop Explorer click or multiple-DPI testing.
+Original TestSCM: no pending entries, selector remains /main. Isolated consumer finishes clean.
+Built application was not installed over the current system installation.
+Limits: single-file export, UTF-8 text preview <=2 MiB; symbolic links shown but not followed, cross-repository links rejected. No recursive directory export.

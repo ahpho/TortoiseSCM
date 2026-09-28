@@ -1,5 +1,16 @@
 # TortoiseSCM 验证记录
 
+## 固定快照仓库浏览器（2026-09-28）
+
+- 新增原生目录树、文件列表、只读预览和单文件导出，入口包括 Explorer、主窗口及历史记录右键；CLI 新增 `repository-list`。默认使用当前分支头，可指定 cs:0。目录读取固定仓库/变更集，不依赖本地加载范围。
+- 新增目录后端 37 项、CLI 21 项检查；历史文件 47 项包含查询/下载期间仓库或 selector 改变时拒绝返回和导出、保留已有目标字节，以及显式绑定已浏览仓库。CLI 拒绝混合旧工作区信息与新仓库目录结果。
+- GUI 专项 30 项通过，覆盖延迟目录读取、符号链接禁用、快照切换、失败/取消清理、中文预览及换行、正常/最小尺寸；真实隔离 Standard 工作区 GUI 9 项通过，核对默认当前分支头、历史文本预览及子目录/上级导航。截图为程序内 WinForms 渲染并已目视检查，不代表真人 Explorer 点击或多 DPI 验收。
+- `RepositoryBrowserIntegrationTests.ps1` 复用 `qa/integration-20260928-011857-5cfb79d9/manifest.json`，35 项真实只读检查通过：Standard 有修改/干净及 Partial 三种工作区目录一致，中文路径身份与大小匹配 native XML、cs:0 空目录、缺失/文件/越界目录拒绝，导出与 native cat 字节哈希一致。待定条目、selector、wktree 保持不变；待定条目按行排序比较，因为原生输出顺序不固定。日志 `qa/repository-browser-live.log`。
+- 包/隔离安装/卸载 44 项通过，实际 Explorer 注册未改变（`qa/repository-browser-package.log`）。本轮构建产物位于 `bin/TortoiseSCM/Release`，没有替换系统已安装版本。
+- Release 构建及 Core、2068 项既有 CLI、5 项 blame CLI、21 项 shelveset 内容 CLI、新增浏览 CLI 与 Shell 检查通过（`qa/repository-browser-full-build.log`）。带真实工作区的完整 GUI 回归暴露了既有菜单测试仍假设 6 项；更新为包含 Blame 的 7 项后，重新编译并完整运行 GUI，393 条 PASS、退出 0（`qa/repository-browser-ui-final.log`）。未将首次含旧断言的 `-Test` 日志误记为全程成功。
+- 最终 Partial GUI 另有 9 项真实检查通过（`qa/repository-browser-partial-ui.log`），验证默认当前分支头、预览、目录导航；最小尺寸截图已检查。原始 TestSCM 最后仍无待定条目，selector 保持 `/main`，隔离 consumer 干净。
+- 边界：单文件导出；预览限 UTF-8 且不超过 2 MiB；符号链接只显示，跨仓库链接拒绝；尚无递归整目录导出。
+
 ## 原生分支层级浏览（2026-09-27）
 
 - 分支窗口新增列表/层级切换及定位当前分支，沿用原生 TreeView 与既有头提交、历史、创建、切换和合并操作。层级明确只表示服务器 `Parent` 的父子关系，不推断提交继承或合并边。视图切换按完整分支名保留真实对象，筛选清掉旧选择与详情，右键操作使用当前视图的选中分支。

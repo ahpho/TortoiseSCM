@@ -85,6 +85,37 @@ internal static class HistoricalFileTests
                 catch (OperationCanceledException) { cancelled = true; }
                 Check(cancelled && !File.Exists(Path.Combine(temporary, "cancelled")), "Cancellation does not create export target");
             }
+            string selectorPath = Path.Combine(workspace, ".plastic", "plastic.selector");
+            string originalSelector = File.ReadAllText(selectorPath);
+            string modePath = Path.Combine(workspace, ".plastic", "history-mode");
+            foreach (string mode in new[] { "ls-repository", "cat-repository", "cat-selector" })
+            {
+                File.WriteAllText(modePath, mode);
+                File.WriteAllText(exported, "preserve destination");
+                bool contextRejected = false;
+                try { client.ExportRevisionAsync(workspace, path, 1, exported, true, token).GetAwaiter().GetResult(); }
+                catch (InvalidOperationException) { contextRejected = true; }
+                Check(contextRejected && File.ReadAllText(exported) == "preserve destination", "Context race rejects export publication: " + mode);
+                File.WriteAllText(selectorPath, originalSelector);
+            }
+            File.WriteAllText(modePath, "cat-selector");
+            bool previewRejected = false;
+            try { client.GetHistoricalFileAsync(workspace, path, 1, token).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { previewRejected = true; }
+            Check(previewRejected, "Historical preview rejects selector changes during download");
+            File.WriteAllText(selectorPath, originalSelector);
+            File.Delete(modePath);
+            Check(!Directory.GetFiles(temporary, ".tortoisescm-export-*").Any(), "Context race leaves no staged output");
+            bool expectedRejected = false;
+            try { client.ExportRevisionAsync(workspace, path, 1, exported, true, "reviewed-other@server:8087", token).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { expectedRejected = true; }
+            Check(expectedRejected && File.ReadAllText(exported) == "preserve destination", "Browser export rejects repository different from reviewed snapshot");
+            expectedRejected = false;
+            try { client.GetHistoricalFileAsync(workspace, path, 1, "reviewed-other@server:8087", token).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException) { expectedRejected = true; }
+            Check(expectedRejected, "Browser preview rejects repository different from reviewed snapshot");
+            Check(client.GetHistoricalFileAsync(workspace, path, 1, "test@server:8087", token).GetAwaiter().GetResult().Content.Length > 0,
+                "Browser preview accepts matching reviewed repository");
             Console.WriteLine("PASS: " + assertions + " historical file assertions"); return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
@@ -94,6 +125,14 @@ internal static class HistoricalFileTests
     private static int FakeCm(string[] args)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
+        string modePath = Path.Combine(Environment.CurrentDirectory, ".plastic", "history-mode");
+        string mode = File.Exists(modePath) ? File.ReadAllText(modePath) : "";
+        if ((args[0] == "ls" && mode == "ls-repository") || (args[0] == "cat" && mode.StartsWith("cat-")))
+        {
+            string selectorPath = Path.Combine(Environment.CurrentDirectory, ".plastic", "plastic.selector");
+            if (mode.EndsWith("repository")) File.WriteAllText(selectorPath, File.ReadAllText(selectorPath).Replace("test@server:8087", "other@server:8087"));
+            else File.AppendAllText(selectorPath, "\n changeset \"2\"\n");
+        }
         if (args[0] == "ls")
         {
             if (args.Any(a => a.StartsWith("--tree=cs:99"))) { Console.Error.WriteLine("Deliberate server error"); return 8; }

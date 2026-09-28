@@ -19,6 +19,20 @@ cd D:\Work\Juscent\SCM_Study\TortoiseSCM
 运行时复用 Plastic 客户端现有的用户配置和认证。新程序不储存密码，也不要求安装 Git。
 首次使用会发现标准安装目录和本机 `D:\Program Files\PlasticSCM5\client`；也可在“设置”中指定路径。
 
+### 历史仓库浏览器
+
+Explorer 单选文件、目录或工作区背景右键的“仓库浏览器”，以及主窗口操作菜单，可打开原生目录树/文件列表窗口。历史窗口右键选中提交，可浏览该提交的整个仓库快照。没有指定版本时，使用当前分支头变更集；无法确定当前分支时需输入编号。
+
+浏览器显示服务器在固定变更集下的目录内容，与本地是否加载该目录无关，适用于 Standard 和 Partial 工作区。切换快照会清空旧列表及预览。双击目录进入下一级；选中文件后可只读预览 UTF-8 文本（最多 2 MiB）或导出原始字节。导出同名文件前确认覆盖。符号链接仅显示，不跟随；跨仓库链接明确拒绝。当前仅支持单文件导出。
+
+```powershell
+.\bin\TortoiseSCM\Release\TortoiseSCM.exe --command repository-browser --path 'D:\Work\Juscent\SCM_Study\TestSCM' --changeset 1
+.\bin\TortoiseSCM\Release\TortoiseSCM.exe --cli --json --command repository-list --path 'D:\Work\Juscent\SCM_Study\TestSCM' --changeset 1 --item /
+.\bin\TortoiseSCM\Release\TortoiseSCM.exe --cli --json --command export --path 'D:\Work\Juscent\SCM_Study\TestSCM' --changeset 1 --item /path/file.txt --output 'D:\Temp\file.txt' --yes
+```
+
+`repository-list` 必须显式指定变更集，`--item` 默认为 `/`，返回直接子项的仓库路径、ItemId、类型及字节数。目录或文件在该快照不存在时报告错误。所有浏览操作不会切换分支、更新、签入或回滚工作区；导出仅写入指定目标。
+
 ### 可安装包
 
 ```powershell

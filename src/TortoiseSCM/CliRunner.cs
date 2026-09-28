@@ -18,7 +18,7 @@ namespace TortoiseSCM
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
-            "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame\r\n" +
+            "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame, repository-list\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -44,6 +44,8 @@ namespace TortoiseSCM
             "  shelve-diff --path <workspace> --shelve N (parent changeset versus shelveset content)\r\n" +
             "  shelve-export --path <workspace> --shelve N --output <directory> --yes [--overwrite]\r\n" +
             "  Export writes a repository-shaped directory and shelveset.manifest; output stays outside the workspace.\r\n" +
+            "Repository browser: repository-list --path <workspace> --changeset N [--item </directory>]\r\n" +
+            "  Read-only immediate children of a fixed historical directory (default /); never switches or downloads the workspace.\r\n" +
             "Blame: blame --path <one existing controlled file> [--ignore none|eol|whitespaces|eol&whitespaces]\r\n" +
             "  Read-only line ownership; --ignore is passed to cm annotate and binary files are rejected by Plastic.\r\n" +
             "Export: export --path <workspace> --item </repository/file> --changeset N --output <file> --yes [--overwrite]\r\n" +
@@ -142,6 +144,23 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "repository-list")
+            {
+                var listing = client.GetRepositoryDirectoryAsync(options.Paths[0], options.Item ?? "/", options.Changeset.Value,
+                    CancellationToken.None).GetAwaiter().GetResult();
+                if (listing.Repository != workspace.Repository || !String.Equals(listing.RootPath.TrimEnd('\\', '/'),
+                    workspace.RootPath.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The workspace repository changed during repository listing preparation. Refresh before continuing.");
+                response.data = new { workspace = workspaceData, repository = listing.Repository, rootPath = listing.RootPath,
+                    directoryPath = listing.DirectoryPath, changeset = listing.Changeset,
+                    entries = listing.Entries.Select(entry => new { name = entry.Name, path = entry.Path, itemId = entry.ItemId,
+                        isDirectory = entry.IsDirectory, isSymbolicLink = entry.IsSymbolicLink, size = entry.Size }).ToArray() };
+                response.output = "cs:" + listing.Changeset.ToString(CultureInfo.InvariantCulture) + " " + listing.DirectoryPath +
+                    Environment.NewLine + String.Join(Environment.NewLine, listing.Entries.Select(entry =>
+                        (entry.IsSymbolicLink ? "link" : entry.IsDirectory ? "dir" : "file") + "\t" +
+                        entry.Size.ToString(CultureInfo.InvariantCulture) + "\t" + entry.Path));
+                return;
+            }
             if (options.Command == "blame")
             {
                 var lines = client.GetBlameAsync(options.Paths[0], new PlasticBlameOptions { Ignore = options.Ignore },
@@ -810,7 +829,7 @@ namespace TortoiseSCM
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch",
-                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
+                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
@@ -835,6 +854,8 @@ namespace TortoiseSCM
             if ((options.Command == "branches" || options.Command == "branch-tree" || options.Command == "branch-head") && yes) throw new ArgumentException("Read-only branch commands do not accept --yes.");
             if (options.Command == "blame" && (options.Paths.Count != 1 || yes))
                 throw new ArgumentException("Blame requires exactly one file path and does not accept --yes.");
+            if (options.Command == "repository-list" && (options.Paths.Count != 1 || yes))
+                throw new ArgumentException("repository-list requires exactly one workspace path and does not accept --yes.");
             bool partialWorkflow = options.Command.StartsWith("partial-conflict", StringComparison.Ordinal);
             bool structureWorkflow = options.Command.StartsWith("partial-structure-", StringComparison.Ordinal);
             bool structureResolution = options.Command == "partial-structure-resolve";
@@ -865,7 +886,7 @@ namespace TortoiseSCM
             if ((options.Command == "locks" || options.Command == "unlock") && options.Paths.Count != 1) throw new ArgumentException("Lock operations require exactly one workspace root.");
             bool mergeWorkflow = options.Command.StartsWith("merge-", StringComparison.Ordinal);
             bool conflictFile = partialFile || options.Command == "partial-structure-prepare" || options.Command == "partial-directory-prepare" || options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
-            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "export", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
+            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "export", "repository-list", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
             if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("This command " + (needsChangeset ? "requires" : "does not accept") + " --changeset.");
             if (needsChangeset && options.Paths.Count != 1) throw new ArgumentException("Select exactly one file or directory scope for this command.");
             if (mergeWorkflow && options.Paths.Count != 1) throw new ArgumentException("Workspace merge operations require exactly one explicit workspace root.");
@@ -874,7 +895,7 @@ namespace TortoiseSCM
             if (options.External && ((options.Command != "diff" && options.Command != "diff-history") || options.Paths.Count != 1)) throw new ArgumentException("--external requires diff or diff-history with exactly one scope.");
             bool historyFile = options.Command == "export" || options.Command == "diff-history";
             if (historyFile && (options.Paths.Count != 1 || String.IsNullOrWhiteSpace(options.Item))) throw new ArgumentException("Historical file operations require one --path and a repository --item path.");
-            if (options.Item != null && !historyFile && !conflictFile) throw new ArgumentException("--item is valid only for historical file or merge conflict operations.");
+            if (options.Item != null && !historyFile && !conflictFile && options.Command != "repository-list") throw new ArgumentException("--item is valid only for historical file, repository browser or merge conflict operations.");
             bool comparison = options.Command == "diff-history" || options.Command == "diff-changesets";
             if (comparison && (!options.From.HasValue || !options.To.HasValue)) throw new ArgumentException("Comparison requires --from and --to changeset numbers.");
             if (!comparison && (options.From.HasValue || options.To.HasValue)) throw new ArgumentException("--from and --to are valid only for diff-history and diff-changesets.");

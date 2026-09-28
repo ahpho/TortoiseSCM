@@ -111,6 +111,7 @@ namespace TortoiseSCM
             var revisionMenu = new ContextMenuStrip();
             revisionMenu.Items.Add("复制变更集编号", null, delegate { CopyText(SelectedRevisionText(false)); });
             revisionMenu.Items.Add("复制提交说明", null, delegate { CopyText(SelectedRevisionText(true)); });
+            revisionMenu.Items.Add("浏览此版本的完整仓库…", null, delegate { OpenRepositoryBrowser(); });
             revisionMenu.Items.Add(new ToolStripSeparator());
             revisionMenu.Items.Add("标记为比较起点", null, delegate { MarkComparisonChangeset(); });
             compareMarkedChangeset.Click += delegate { OpenChangesetComparison(); };
@@ -390,6 +391,22 @@ namespace TortoiseSCM
             if (!compareMarkedChangeset.Enabled) return;
             try { using (var dialog = CreateChangesetComparison()) dialog.ShowDialog(this); }
             catch (Exception ex) { status.Text = "无法打开变更集比较：" + ex.Message; }
+        }
+
+        private void OpenRepositoryBrowser()
+        {
+            if (writing || revisions.SelectedItems.Count != 1) return;
+            try
+            {
+                using (var dialog = CreateRepositoryBrowser()) dialog.ShowDialog(this);
+            }
+            catch (Exception ex) { status.Text = "无法打开仓库浏览器：" + ex.Message; }
+        }
+
+        private RepositoryBrowserForm CreateRepositoryBrowser()
+        {
+            ValidateHistoryContext();
+            return new RepositoryBrowserForm(client, workspaceRoot, ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset, historyRepository);
         }
 
         private string SelectedRevisionText(bool comment)

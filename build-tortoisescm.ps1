@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -61,6 +61,13 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Shelveset content CLI test compilation failed.' }
     & $shelveContentOutput (Join-Path $out 'TortoiseSCM.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Shelveset content CLI tests failed.' }
+    $browserCliOutput = Join-Path $out 'RepositoryBrowserCliTests.exe'
+    $browserCliSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+    $browserCliSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\RepositoryBrowserCliTests.cs'
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$browserCliOutput" $browserCliSources
+    if ($LASTEXITCODE -ne 0) { throw 'Repository browser CLI test compilation failed.' }
+    & $browserCliOutput (Join-Path $out 'TortoiseSCM.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Repository browser CLI tests failed.' }
     & $msbuild (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShellTests.vcxproj') /nologo /verbosity:minimal "/p:Configuration=$Configuration" /p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw 'Shell test compilation failed.' }
     & (Join-Path $out 'ShellTests.exe')
@@ -103,6 +110,7 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-shelves-cli.txt'), $shelvesManifest)
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShelvesIntegrationTests.ps1') -Manifest $shelvesManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShelveContentIntegrationTests.ps1') -Manifest $shelvesManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\RepositoryBrowserIntegrationTests.ps1') -Manifest $shelvesManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         $mergeIntegrationOutput = Join-Path $out 'MergeIntegrationTests.exe'
         & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$mergeIntegrationOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\MergeIntegrationTests.cs')
         if ($LASTEXITCODE -ne 0) { throw 'Merge integration test compilation failed.' }

@@ -14,7 +14,7 @@
 | Stash | shelveset 保存、列表、文件明细、应用、删除、内容比较和导出均有 GUI/CLI | 应用仅允许干净 Standard 工作区；Partial 可保存/比较/导出但不能应用；未实现应用冲突向导和自动 pop；目录/链接导出仍受限 |
 | 标签 | 无专用 GUI/CLI | 需实现 Plastic labels 的列表、创建、历史定位与生命周期 |
 | Blame | blame CLI, Annotate/Blame GUI, Explorer single-file entry | Implemented Plastic native annotate line, owner, changeset, date, branch and content; read-only, directories and binaries are rejected |
-| Repository browser | 历史提交文件明细；单文件导出 | 尚不能浏览某个快照的完整仓库目录树 |
+| Repository browser | 固定变更集目录树、目录文件列表、只读文本预览、单文件导出；`repository-list` 与 `export` | 尚无递归整目录导出、跨仓库链接浏览；文本预览限 UTF-8 / 2 MiB |
 | Clone / Create repository | 选择已有 Plastic 工作区 | 缺少服务器/仓库浏览、新建工作区/仓库向导 |
 | 批量文件操作、拖放 | 多路径提交/撤销/添加；单路径移动、删除、忽略 | 缺少拖放移动、批量删除/忽略及整批预检 |
 | Patch | 历史文件导出 | 尚无创建、预览、应用补丁的工作流 |
@@ -24,7 +24,7 @@
 
 1. 已完成暂存集保存/浏览、GUI 应用和删除确认，以及内容比较/导出。保持应用前检查和失败后的显式状态核对。
 2. 后续补暂存集应用冲突向导与目录/链接导出；不能以保存成功推断可以安全撤销本地工作。
-3. 下一项优先补只读仓库浏览：按快照浏览完整目录树，提供历史文件选择和导出入口；逐行追溯已交付，GUI/CLI 共享后端。
+3. 已补只读仓库浏览：按固定快照逐层读取完整目录树，提供历史文件预览与导出，GUI/CLI 共享后端。后续完善递归目录导出和历史路径身份跟踪。
 4. Windows 11 现代右键菜单与现有经典菜单保持命令一致，保留旧系统兼容路径。
 5. 变更集/合并关系图、标签管理，再补分支重命名/删除与 Partial 切换。图必须使用服务器真实父关系和合并边，不能用时间或分支名称猜测。
 6. Changelist、提交说明历史/模板、批量操作、补丁及发布平台完善。
