@@ -69,6 +69,8 @@ namespace TortoiseSCM
         public string DiffToolArguments { get; set; }
         public string MergeToolPath { get; set; }
         public string MergeToolArguments { get; set; }
+        public bool UseBuiltInDiff { get; set; }
+        public bool UseBuiltInMerge { get; set; }
 
         public PlasticClientConfig()
         {
@@ -97,6 +99,8 @@ namespace TortoiseSCM
             result.DiffToolArguments = (string)doc.Root.Element("DiffToolArguments") ?? result.DiffToolArguments;
             result.MergeToolPath = (string)doc.Root.Element("MergeToolPath") ?? result.MergeToolPath;
             result.MergeToolArguments = (string)doc.Root.Element("MergeToolArguments") ?? result.MergeToolArguments;
+            result.UseBuiltInDiff = (bool?)doc.Root.Element("UseBuiltInDiff") ?? false;
+            result.UseBuiltInMerge = (bool?)doc.Root.Element("UseBuiltInMerge") ?? false;
             double seconds;
             if (Double.TryParse((string)doc.Root.Element("TimeoutSeconds"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out seconds) && seconds > 0)
                 result.Timeout = TimeSpan.FromSeconds(seconds);
@@ -106,12 +110,13 @@ namespace TortoiseSCM
         public void Save()
         {
             if (Timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException("Timeout");
-            PlasticToolArguments.ValidateConfiguration(DiffToolPath, DiffToolArguments, false);
-            PlasticToolArguments.ValidateConfiguration(MergeToolPath, MergeToolArguments, true);
+            if (!UseBuiltInDiff) PlasticToolArguments.ValidateConfiguration(DiffToolPath, DiffToolArguments, false);
+            if (!UseBuiltInMerge) PlasticToolArguments.ValidateConfiguration(MergeToolPath, MergeToolArguments, true);
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SettingsPath));
             new XDocument(new XElement("TortoiseSCM", new XElement("CmPath", CmPath), new XElement("GluonPath", GluonPath),
                 new XElement("DiffToolPath", DiffToolPath), new XElement("DiffToolArguments", DiffToolArguments),
                 new XElement("MergeToolPath", MergeToolPath), new XElement("MergeToolArguments", MergeToolArguments),
+                new XElement("UseBuiltInDiff", UseBuiltInDiff), new XElement("UseBuiltInMerge", UseBuiltInMerge),
                 new XElement("TimeoutSeconds", Timeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)))).Save(SettingsPath);
         }
 

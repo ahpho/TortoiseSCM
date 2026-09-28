@@ -128,18 +128,23 @@ namespace TortoiseSCM
             if (options.Timeout.HasValue) config.Timeout = TimeSpan.FromSeconds(options.Timeout.Value);
             if (options.Command == "settings")
             {
-                if (options.DiffTool != null) config.DiffToolPath = options.DiffTool;
+                if (options.DiffTool != null) { config.DiffToolPath = options.DiffTool; config.UseBuiltInDiff = false; }
                 if (options.DiffArgs != null) config.DiffToolArguments = options.DiffArgs;
-                if (options.MergeTool != null) config.MergeToolPath = options.MergeTool;
+                if (options.MergeTool != null) { config.MergeToolPath = options.MergeTool; config.UseBuiltInMerge = false; }
                 if (options.MergeArgs != null) config.MergeToolArguments = options.MergeArgs;
                 if (options.ChangesSettings) config.Save();
                 response.data = new { settings = new { settingsFile = config.SettingsPath, cm = config.CmPath,
                     timeout = config.Timeout.TotalSeconds, diffTool = config.DiffToolPath, diffArgs = config.DiffToolArguments,
-                    mergeTool = config.MergeToolPath, mergeArgs = config.MergeToolArguments } };
+                    mergeTool = config.MergeToolPath, mergeArgs = config.MergeToolArguments,
+                    useBuiltInDiff = config.UseBuiltInDiff, useBuiltInMerge = config.UseBuiltInMerge } };
                 response.output = "Diff tool: " + config.DiffToolPath + "\r\nDiff arguments: " + config.DiffToolArguments +
-                    "\r\nMerge tool: " + config.MergeToolPath + "\r\nMerge arguments: " + config.MergeToolArguments;
+                    "\r\nMerge tool: " + config.MergeToolPath + "\r\nMerge arguments: " + config.MergeToolArguments +
+                    "\r\nGUI built-in diff: " + config.UseBuiltInDiff + "\r\nGUI built-in merge: " + config.UseBuiltInMerge;
                 return;
             }
+            // CLI tool commands explicitly launch the configured external tool.
+            // GUI preferences must never turn an automation command into a dialog.
+            config.UseBuiltInDiff = config.UseBuiltInMerge = false;
             var client = new PlasticClient(config);
             if (options.Command == "merge")
             {

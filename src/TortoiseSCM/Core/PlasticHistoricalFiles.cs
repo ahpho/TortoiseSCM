@@ -126,6 +126,8 @@ namespace TortoiseSCM
 
         public async Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var host = config.UseBuiltInDiff ? RequireToolHost() : null;
             ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
             ValidateRepositoryFilePath(fromRepositoryPath); ValidateRepositoryFilePath(toRepositoryPath);
             var context = await HistoricalContextAsync(workspacePath, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
@@ -134,11 +136,11 @@ namespace TortoiseSCM
             await ValidateHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
             await ValidateHistoricalFileAsync(context, toRepositoryPath, toChangeset, cancellationToken).ConfigureAwait(false);
             ValidateHistoricalContext(context);
-            if (String.IsNullOrWhiteSpace(config.DiffToolPath))
+            if (host == null && String.IsNullOrWhiteSpace(config.DiffToolPath))
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.CmPath, WorkingDirectory = context.RootPath, Interactive = true,
                     Arguments = new List<string> { "diff", HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset),
                         HistoricalSpec(context.Repository, toRepositoryPath, toChangeset) } }, cancellationToken).ConfigureAwait(false);
-            PlasticToolArguments.ValidateConfiguration(config.DiffToolPath, config.DiffToolArguments, false);
+            if (host == null) PlasticToolArguments.ValidateConfiguration(config.DiffToolPath, config.DiffToolArguments, false);
             string temporary = NewHistoricalTemporaryDirectory();
             string before = Path.Combine(temporary, "from-" + fromChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(fromRepositoryPath));
             string after = Path.Combine(temporary, "to-" + toChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(toRepositoryPath));
@@ -149,6 +151,8 @@ namespace TortoiseSCM
                 ValidateHistoricalContext(context);
                 File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
                 File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (host != null) return await host.ShowDiffAsync(before, after, cancellationToken).ConfigureAwait(false);
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.DiffToolPath, WorkingDirectory = temporary,
                     Arguments = PlasticToolArguments.Expand(config.DiffToolArguments,
                         new Dictionary<string, string> { { "base", before }, { "local", after } }, false) }, cancellationToken).ConfigureAwait(false);
@@ -173,7 +177,12 @@ namespace TortoiseSCM
         private void ValidateHistoricalContext(PlasticWorkspace expected)
         {
             var current = DiscoverWorkspace(expected.RootPath);
-            if (current == null || current.Repository != expected.Repository || current.IsPartial != expected.IsPartial ||
+            // A converted Gluon workspace can retain "Standard" in plastic.workspace.
+            // GetWorkspaceAsync obtains authoritative mode from cm status, so that
+            // value must not be compared with DiscoverWorkspace's legacy mode hint.
+            // Pinned historical reads require the same workspace and selector;
+            // mutation callers retain their own authoritative mode/load-rule guards.
+            if (current == null || !SamePath(current.RootPath, expected.RootPath) || current.Name != expected.Name || current.Repository != expected.Repository ||
                 NormalizeMergeSelector(current.Selector) != NormalizeMergeSelector(expected.Selector))
                 throw new InvalidOperationException("The workspace repository or selector changed during the historical file operation. Refresh before continuing.");
         }

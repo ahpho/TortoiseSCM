@@ -333,3 +333,15 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 新保留删除目录的后端矩阵显式/全量模式各 83 项通过（`qa/integration-20260925-200043-ae549e9e/partial-directory-keep-deleted-results.json`、`qa/integration-20260925-200049-f279dea7/partial-directory-keep-deleted-full-results.json`）：正常重建/空目录/新身份签入、添加前/部分添加/全部添加后中断、跨客户端恢复、未知私有后代拒绝及已知路径新编辑另存、服务器同名身份重现拒绝、目录外规则与内容保持。末次 AD 身份一致性检查使用最新 Core 的全部添加后故障定向回归，显式/全量各 19 项通过（`qa/integration-20260925-200952-676dc1af/`、`qa/integration-20260925-201012-4dc31efc/`），避免将较早矩阵误称为最终源码验证。
 - 旧会话兼容实测 21 项通过（`qa/keep-deleted-legacy-schema.txt`）：原存档缺少新增重建字段时按未重建状态加载，档案字节不变；临时读取标记已清理。
 - 最终主 EXE 的完整公开目录 CLI 在显式/全量模式各 78 项通过（`qa/integration-20260925-200955-7481ae51/partial-directory-cli-results.json`、`qa/integration-20260925-200955-9e215329/partial-directory-cli-results.json`），覆盖移动双选择、删除双选择、跨进程会话/取消、空目录与新身份、再次内容冲突、连续两次纯移动，以及真实签入和独立消费者；日志为 `qa/keep-deleted-final-cli-*.log`。最终程序 SHA-256 与构建/源码时间见 `qa/keep-deleted-release-record.json`。原 TestSCM 仍干净且保持 `/main`。
+
+# 内置文本比较与三方手工编辑器首版（2026-09-28）
+
+- 最终 `build-tortoisescm.ps1 -Test -Workspace D:\Work\Juscent\SCM_Study\TestSCM` 通过，完整日志 `qa/builtin-final-release-validation.log`，包括 2,076 项 CLI 断言、全部后端、Shell/现代菜单及 GUI 回归。
+- 新增可选内置左右 Diff、三方只读贡献文件及独立结果编辑、同步滚动、差异导航、长行完整内容查看。保留原外部工具配置；CLI 明确启动外部工具的语义保持不变。合并保存不改变 Plastic 冲突状态，确认应用及签入仍是独立动作。
+- 文本引擎 120 项、内置路由 58 项、外部工具 18 项及历史文件 47 项检查通过。文本检查覆盖 UTF-8/UTF-16/UTF-32、BOM、CRLF/LF/CR、混合行尾、空文件、二进制/无效编码、大小/行数上限、有界粗略对齐、取消、外部修改、只读、硬链接、junction 和长目录保存。最终磁盘校验到原子替换之间仍存在文件系统未提供 compare-and-swap 的竞争窗口，不声称能阻止所有跨进程极短竞态。
+- 新编辑器 61 项进程内 UI 检查通过，包括后台线程请求实际模态窗口、窗口关闭前任务保持未完成、保存/不保存结果区分、独立插入行对齐、首次上一差异，以及万字长行尾部查看。普通/最小渲染已查看：`qa/editors/text-diff*.png`、`text-merge*.png`、`text-line-inspector-minimum.png`；设置截图为 `qa/Release/settings-builtin-diff.png`、`settings-merge-minimum.png`。这些不是实际 Explorer 点击或多 DPI 验收。
+- 最终 Core 的真实服务器集成 37 项通过：`qa/integration-20260928-113850-1c5d8779/builtin-tools-results.json`，日志 `qa/builtin-final-live-validation.log`。覆盖工作文件/重命名/历史比较、Standard 贡献文件、结果保存后未解决、重新打开会话、明确应用、签入及独立消费者；Partial 覆盖加载基线、传入冲突、独立编辑结果、应用、selector/加载规则不变以及独立消费者精确字节。
+- 两轮早期实测分别发现深层会话目录临时文件名超长，以及转换后的 Partial 工作区仍保留 `Standard` 元数据而被历史读取误拒绝。已缩短原子保存临时名；历史读取保留仓库、工作区根/名称和 selector 验证，移除对不可靠模式提示的比较，写操作继续使用原生状态和加载规则保护。早期失败证据保留，未计入最终通过结果。
+- 安装包回归 44 项通过，日志 `qa/builtin-package-validation.log`；原 TestSCM 保持无待定更改和 `/main` selector。所有服务器写入位于独立 `tortoisescm-autotest-*` 分支。
+- 旧 Partial 内容冲突的真实回归 35 项通过，日志 `qa/builtin-partial-regression.log`，fixture 由 `qa/latest-builtin-partial-regression.txt` 指向；包括传入推进后重新准备、继续编辑、原生父修订、undo 后 update 故障恢复、未选中文件保护和同名添加拒绝。程序哈希与构建时间记录于 `qa/builtin-release-record.json`，发布包为 `packages/TortoiseSCM-0.1.0-dev-builtin-editor-20260928-final-windows-x64.zip`。
+- 当前边界：内置工具只处理支持的 Unicode 文本，最多 2 MiB / 20,000 行；尚无自动三方合并、按块采用或统一冲突列表编辑窗格。复杂行差异明确提示粗略对齐，新增/删除工作文件比较及更多编码仍在路线图中。

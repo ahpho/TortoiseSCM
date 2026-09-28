@@ -73,6 +73,7 @@ namespace TortoiseSCM
                 }
                 string artifacts = args[0];
                 Directory.CreateDirectory(artifacts);
+                TextEditorUiTests.Run(artifacts);
                 string pathfile = Path.Combine(Path.GetTempPath(), "tscm-ui-" + Guid.NewGuid() + ".paths");
                 File.WriteAllLines(pathfile, new[] { @"D:\中文 空格\file & name.txt", @"D:\中文 空格\two.txt" }, new System.Text.UTF8Encoding(false));
                 var request = LaunchRequest.Parse(new[] { "--command", "checkin", "--pathfile", pathfile });
@@ -91,11 +92,18 @@ namespace TortoiseSCM
                     Application.DoEvents();
                     Require(((TextBox)Field(settings, "diffTool")).Visible && !((TextBox)Field(settings, "cm")).Visible, "Settings navigation shows the selected diff page");
                     Save(settings, Path.Combine(artifacts, "settings-diff.png"));
+                    var builtInDiff = (CheckBox)Field(settings, "builtInDiff");
+                    builtInDiff.Checked = true;
+                    Require(!((TextBox)Field(settings, "diffTool")).Enabled && !((TextBox)Field(settings, "diffArgs")).Enabled,
+                        "Built-in diff selection disables external controls");
+                    Save(settings, Path.Combine(artifacts, "settings-builtin-diff.png"));
                     tree.SelectedNode = tree.Nodes[1].Nodes[0];
                     Application.DoEvents();
                     Require(((TextBox)Field(settings, "mergeTool")).Visible && !((TextBox)Field(settings, "diffTool")).Visible, "Settings navigation shows the selected merge page");
                     settings.Size = settings.MinimumSize;
+                    ((CheckBox)Field(settings, "builtInMerge")).Checked = true;
                     Application.DoEvents();
+                    Require(!((TextBox)Field(settings, "mergeTool")).Enabled, "Built-in merge selection disables external program");
                     Save(settings, Path.Combine(artifacts, "settings-merge-minimum.png"));
                     settings.Close();
                 }

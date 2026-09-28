@@ -196,7 +196,7 @@ namespace TortoiseSCM
             operations.Items.Add("操作记录…", null, delegate { ShowOutput(); });
             operations.Items.Add(new ToolStripSeparator());
             operations.Items.Add("打开 Gluon", null, async delegate { await ExecuteAsync(PlasticCommand.Gluon); });
-            operations.Items.Add("设置…", null, delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = new PlasticClient(PlasticClientConfig.Load()); });
+            operations.Items.Add("设置…", null, delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = WinFormsPlasticToolHost.CreateClient(PlasticClientConfig.Load(), this); });
             actions.Click += delegate { operations.Show(actions, new Point(0, actions.Height)); };
             left.Controls.Add(refresh);
             left.Controls.Add(actions);
@@ -296,7 +296,7 @@ namespace TortoiseSCM
             SetBusy(true, "正在识别工作区…");
             try
             {
-                client = new PlasticClient(PlasticClientConfig.Load());
+                client = WinFormsPlasticToolHost.CreateClient(PlasticClientConfig.Load(), this);
                 workspace = await client.GetWorkspaceAsync(launch.Paths[0], CancellationToken.None);
                 if (workspace == null) throw new InvalidOperationException("此路径不属于 Plastic SCM 工作区：" + launch.Paths[0]);
                 foreach (string path in launch.Paths)

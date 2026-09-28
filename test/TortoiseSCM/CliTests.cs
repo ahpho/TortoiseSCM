@@ -600,6 +600,12 @@ internal static class CliTests
         string previous = File.ReadAllText(settings);
         Run(2, "--command", "settings", "--settings-file", settings, "--yes", "--diff-args", "{unknown}");
         Check(File.ReadAllText(settings) == previous, "Invalid settings leave saved configuration intact");
+        var guiPreferences = XDocument.Load(settings);
+        guiPreferences.Root.SetElementValue("UseBuiltInDiff", true);
+        guiPreferences.Root.SetElementValue("UseBuiltInMerge", true);
+        guiPreferences.Save(settings);
+        var selected = (Dictionary<string, object>)Data(Run(0, "--command", "settings", "--settings-file", settings))["settings"];
+        Check((bool)selected["useBuiltInDiff"] && (bool)selected["useBuiltInMerge"], "CLI reports built-in GUI preferences");
         var diff = Run(0, "--command", "diff", "--external", "--path", controlled, "--cm", fakeCm, "--settings-file", settings);
         Check(Convert.ToBoolean(Data(diff)["external"]), "External diff mode reported");
         Check(diff["output"].ToString().Contains("literal & | % ! 中文"), "External diff argv preserves metacharacters without a shell");
@@ -611,8 +617,11 @@ internal static class CliTests
         Run(2, "--command", "merge", "--yes", "--base", basePath, "--local", localPath, "--remote", remotePath, "--output", basePath, "--settings-file", settings);
         Check(File.ReadAllText(basePath) == "base", "Merge output cannot overwrite an input");
         Run(2, "--command", "merge", "--base", basePath, "--local", localPath, "--remote", remotePath, "--output", mergedPath, "--settings-file", settings);
+        Check((bool)XDocument.Load(settings).Root.Element("UseBuiltInDiff") && (bool)XDocument.Load(settings).Root.Element("UseBuiltInMerge"),
+            "CLI external diff and merge ignore GUI preferences without overwriting them");
         Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--diff-tool", "", "--merge-tool", "");
         var cleared = (Dictionary<string, object>)Data(Run(0, "--command", "settings", "--settings-file", settings))["settings"];
+        Check(!(bool)cleared["useBuiltInDiff"] && !(bool)cleared["useBuiltInMerge"], "Explicit CLI external tool settings deselect built-in mode");
         Check(cleared["diffTool"].ToString() == "" && cleared["mergeTool"].ToString() == "", "Empty tool paths clear configuration");
         Run(1, "--command", "merge", "--yes", "--base", basePath, "--local", localPath, "--remote", remotePath, "--output", mergedPath, "--settings-file", settings);
         File.WriteAllText(settings, "<invalid-settings />");

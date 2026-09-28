@@ -21,7 +21,7 @@ namespace TortoiseSCM
         private bool sourceExists = true;
         private bool targetExists = true;
         private readonly Button compare = DialogStyle.Button("比较");
-        private readonly Button external = DialogStyle.Button("外部工具比较");
+        private readonly Button external = DialogStyle.Button("比较工具…");
         private readonly Button export = DialogStyle.Button("导出目标版本…");
         private readonly Button exportSource = DialogStyle.Button("导出起点版本…");
         private readonly NumericUpDown fromRevision = new NumericUpDown();
