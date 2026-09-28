@@ -1,5 +1,5 @@
 #include <windows.h>
-1 ICON "..\\Resources\\Tortoise.ico"
+1 ICON "..\\Resources\\gluon.ico"
 101 ICON "..\\Resources\\Icons\\Win10\\NormalIcon.ico"
 102 ICON "..\\Resources\\Icons\\Win10\\ModifiedIcon.ico"
 103 ICON "..\\Resources\\Icons\\Win10\\ConflictIcon.ico"

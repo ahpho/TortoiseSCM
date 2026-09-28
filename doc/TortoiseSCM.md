@@ -33,6 +33,10 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 
 入口也支持 `TortoiseSCM.exe --command create-workspace`，可选 `--path 'D:\Workspaces\MyProject'` 预填精确目标目录，或 `--parent-path 'D:\'` 在父目录下建议新子目录；两者不能混用。这是 GUI 向导命令。工作区外目录、目录背景可右键拉取，磁盘节点通过经典菜单提供；已有工作区内不显示此入口，避免嵌套创建。已打开工作区的“操作 → 拉取仓库…”会在完成后打开独立窗口，保留原工作区。
 
+## 应用图标
+
+主程序、所有业务窗口（包括历史记录）、Explorer 菜单和安装器统一使用 `src/Resources/gluon.ico`。图标原样取自本机 Plastic SCM 客户端 `D:\Program Files\PlasticSCM5\theme\avalonia\icons\gluon.ico`，SHA-256 为 `556946ab179e30309e726b3eb8ffee3e5e9c1f84c2340682a54dc388205597f7`，保留 16、32、48、256 像素图层。现代菜单包的 PNG 标识由该 ICO 的 256 像素图层按目标尺寸导出。子窗口通过公共 `DialogStyle` 读取当前 EXE 的图标，后续新增窗口应沿用此入口。
+
 ## 构建图形安装包
 
 在已有 Release 构建上运行：

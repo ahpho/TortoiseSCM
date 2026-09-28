@@ -13,7 +13,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <OutputPath>..\..\bin\TortoiseSCM\$(Configuration)\</OutputPath>
     <IntermediateOutputPath>..\..\obj\TortoiseSCM\$(Configuration)\</IntermediateOutputPath>
-    <ApplicationIcon>..\Resources\Tortoise.ico</ApplicationIcon>
+    <ApplicationIcon>..\Resources\gluon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <WarningLevel>4</WarningLevel>
