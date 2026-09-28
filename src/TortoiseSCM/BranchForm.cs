@@ -36,6 +36,7 @@ namespace TortoiseSCM
         private readonly ToolStripMenuItem createChild = new ToolStripMenuItem("创建子分支…");
         private readonly ToolStripMenuItem branchHistory = new ToolStripMenuItem("显示本分支历史…");
         private readonly ToolStripMenuItem renameBranch = new ToolStripMenuItem("重命名分支…");
+        private readonly ToolStripMenuItem deleteBranch = new ToolStripMenuItem("删除空分支…");
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private CancellationTokenSource request;
         private IList<PlasticBranch> entries = new List<PlasticBranch>();
@@ -80,9 +81,11 @@ namespace TortoiseSCM
             branches.SelectedIndexChanged += delegate { files.Items.Clear(); description.Clear(); UpdateButtons(); };
             branches.DoubleClick += async delegate { await ShowHeadAsync(); };
             var menu = new ContextMenuStrip(); menu.Items.Add(branchHistory); menu.Items.Add(createChild); menu.Items.Add(renameBranch);
+            menu.Items.Add(new ToolStripSeparator()); menu.Items.Add(deleteBranch);
             branchHistory.Click += delegate { OpenBranchHistory(); };
             createChild.Click += async delegate { await OpenCreateAsync(); };
             renameBranch.Click += async delegate { await OpenRenameAsync(); };
+            deleteBranch.Click += async delegate { await OpenDeleteAsync(); };
             menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { UpdateButtons(); e.Cancel = busy || SelectedBranch() == null; };
             branches.ContextMenuStrip = menu;
             branchTree.Dock = DockStyle.Fill; branchTree.HideSelection = false; branchTree.FullRowSelect = true; branchTree.ShowNodeToolTips = true;
@@ -146,6 +149,10 @@ namespace TortoiseSCM
                 !entries.Any(branch => String.Equals(branch.Parent, selected.Name, StringComparison.OrdinalIgnoreCase));
             renameBranch.ToolTipText = rename.Enabled ? "重命名服务器分支，不切换当前工作区。" :
                 "仅支持身份完整、名称位于父分支下的非当前叶分支；根分支、有子分支或特殊名称层级不可重命名。";
+            deleteBranch.Enabled = !busy && BranchDeleteForm.CanDelete(selected) &&
+                !entries.Any(branch => String.Equals(branch.Parent, selected.Name, StringComparison.OrdinalIgnoreCase));
+            deleteBranch.ToolTipText = deleteBranch.Enabled ? "检查并删除无自身提交及属性的空分支；任何暂存项引用继承头提交均会阻止删除。不可撤销。" :
+                "仅支持身份完整、名称位于父分支下的非当前空叶分支；根分支、子分支、特殊名称层级或含引号/反斜线的名称不支持删除。";
         }
 
         private void ValidateContext()
@@ -178,7 +185,7 @@ namespace TortoiseSCM
                 if (result.Any(branch => branch.Repository != repository)) throw new InvalidOperationException("分支仓库不匹配。");
                 partial = workspace.IsPartial; entries = result;
                 loaded = true;
-                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：可浏览、创建及重命名分支，不能切换或合并）" : "（Standard）");
+                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：可浏览、创建、重命名及删除空分支，不能切换或合并）" : "（Standard）");
             }, false);
             if (!lifetime.IsCancellationRequested && loaded) RenderBranches();
         }
@@ -218,7 +225,7 @@ namespace TortoiseSCM
                 // expanded iteratively so deeply nested names do not recurse here.
                 foreach (var item in hierarchy)
                     if (item.Depth == 0 || !item.IsMatch) treeNodes[item.Branch.Name].Expand();
-                status.Text = branches.Items.Count + " / " + entries.Count + " 个匹配分支。右键可显示本分支历史或创建子分支。";
+                status.Text = branches.Items.Count + " / " + entries.Count + " 个匹配分支。右键可查看历史、创建、重命名或删除空分支。";
             }
             catch (ArgumentException ex) { RejectHierarchy(ex); }
             catch (InvalidDataException ex) { RejectHierarchy(ex); }
@@ -403,6 +410,35 @@ namespace TortoiseSCM
             filter.Clear(); await LoadAsync();
             if (renamed != null) SelectBranch(renamed);
             else status.Text = "重命名结果未确认；已尝试刷新列表，请核对原名称和新名称。不会自动反向重命名。 " + status.Text;
+        }
+
+        private BranchDeleteForm CreateDeleteDialog()
+        {
+            ValidateContext(); UpdateButtons();
+            if (!deleteBranch.Enabled) throw new InvalidOperationException("请选择身份完整、名称位于父分支下的非当前空叶分支。");
+            var workspace = client.DiscoverWorkspace(root);
+            return new BranchDeleteForm(client, root, workspace.Selector, SelectedBranch());
+        }
+
+        private async Task OpenDeleteAsync()
+        {
+            if (!deleteBranch.Enabled) return;
+            bool attempted = false; string deleted = null;
+            string parent = SelectedBranch().Parent;
+            try {
+                using (var dialog = CreateDeleteDialog()) {
+                    dialog.ShowDialog(this); attempted = dialog.Attempted; deleted = dialog.DeletedBranch;
+                }
+            }
+            catch (Exception ex) {
+                entries = new List<PlasticBranch>(); RenderBranches();
+                status.Text = "无法删除空分支：" + ex.Message; return;
+            }
+            if (!attempted) return;
+            // Discard all cached targets after a write, including uncertain results.
+            filter.Clear(); await LoadAsync();
+            if (deleted != null) SelectBranch(parent);
+            else status.Text = "删除结果未确认；已尝试刷新列表，请核对分支是否仍存在。不会自动重试或重建。 " + status.Text;
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)

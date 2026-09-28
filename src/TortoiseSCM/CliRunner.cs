@@ -17,7 +17,7 @@ namespace TortoiseSCM
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
-            "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
+            "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch, rename-branch, delete-branch\r\n" +
             "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame, repository-list, revision-graph\r\n" +
             "          labels, label-resolve, label-create, label-delete\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
@@ -37,6 +37,7 @@ namespace TortoiseSCM
             "  Matching branches retain visible ancestors as context; missing parents are marked explicitly.\r\n" +
             "  switch-branch --path <root> --branch </main/name> --yes (clean Standard workspaces only)\r\n" +
             "  rename-branch --path <workspace> --branch <old> --branch-id <id> --branch-guid <guid> --changeset <head> --new-name <leaf> --yes\r\n" +
+            "  delete-branch --path <workspace> --branch <empty-leaf> --branch-id <id> --branch-guid <guid> --changeset <head> --yes\r\n" +
             "  create-branch --path <workspace> --branch </main/new> --changeset N --comment <text> --yes\r\n" +
             "  A nonempty creation comment is required; --commentsfile <UTF-8-file> can replace --comment.\r\n" +
             "  Creation writes repository metadata only; it never switches the workspace and supports Partial workspaces.\r\n" +
@@ -351,6 +352,18 @@ namespace TortoiseSCM
                 if (response.exitCode != 0) return;
                 response.data = new { workspace = workspaceData, oldBranch = selected.Name, newBranch = selected.Parent + "/" + options.NewName,
                     branchId = selected.BranchId, guid = selected.Guid, operation = "rename-branch" };
+                return;
+            }
+            if (options.Command == "delete-branch")
+            {
+                var selected = client.GetBranchesAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult().SingleOrDefault(item => item.Name == options.Branch);
+                if (selected == null || selected.BranchId != options.BranchId.Value || selected.HeadChangeset != options.Changeset.Value ||
+                    !String.Equals(selected.Guid, options.BranchGuid.Value.ToString("D"), StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("The reviewed branch identity or head changed. List branches and review again before deleting.");
+                SetResult(response, client.DeleteBranchAsync(options.Paths[0], selected, workspace.Selector, CancellationToken.None).GetAwaiter().GetResult());
+                if (response.exitCode != 0) return;
+                response.data = new { workspace = workspaceData, branch = selected.Name, branchId = selected.BranchId,
+                    guid = selected.Guid, operation = "delete-branch" };
                 return;
             }
             if (options.Command == "create-branch")
@@ -979,18 +992,21 @@ namespace TortoiseSCM
             }
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
-                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch", "rename-branch",
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch", "rename-branch", "delete-branch",
                 "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "revision-graph", "labels", "label-resolve", "label-create", "label-delete", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "rename-branch", "label-create", "label-delete", "shelve-create", "shelve-apply", "shelve-delete", "shelve-export", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "rename-branch", "delete-branch", "label-create", "label-delete", "shelve-create", "shelve-apply", "shelve-delete", "shelve-export", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
             bool renameBranch = options.Command == "rename-branch";
-            if (renameBranch != options.BranchId.HasValue || renameBranch != options.BranchGuid.HasValue || renameBranch != (options.NewName != null))
-                throw new ArgumentException("--branch-id, --branch-guid and --new-name are required only for rename-branch; list and review branches first.");
+            bool identityBranch = renameBranch || options.Command == "delete-branch";
+            if (identityBranch != options.BranchId.HasValue || identityBranch != options.BranchGuid.HasValue)
+                throw new ArgumentException("--branch-id and --branch-guid are required only for rename-branch and delete-branch; list and review branches first.");
+            if (renameBranch != (options.NewName != null))
+                throw new ArgumentException("--new-name is required only for rename-branch.");
             if (renameBranch && String.IsNullOrWhiteSpace(options.NewName)) throw new ArgumentException("--new-name requires a nonempty leaf branch name.");
             bool labelCommand = new[] { "labels", "label-resolve", "label-create", "label-delete" }.Contains(options.Command);
             bool labelTarget = labelCommand && options.Command != "labels";
@@ -1005,11 +1021,11 @@ namespace TortoiseSCM
                 throw new ArgumentException("Shelveset commands require exactly one workspace path.");
             if (new[] { "shelves", "shelve-details", "shelve-diff" }.Contains(options.Command) && yes)
                 throw new ArgumentException("Read-only shelveset commands do not accept --yes.");
-            bool branchCommand = new[] { "branches", "branch-tree", "branch-head", "switch-branch", "create-branch", "rename-branch" }.Contains(options.Command);
-            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "create-branch" || options.Command == "rename-branch";
+            bool branchCommand = new[] { "branches", "branch-tree", "branch-head", "switch-branch", "create-branch", "rename-branch", "delete-branch" }.Contains(options.Command);
+            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "create-branch" || options.Command == "rename-branch" || options.Command == "delete-branch";
             if (branchCommand && options.Paths.Count != 1) throw new ArgumentException("Branch commands require exactly one workspace path.");
             if ((branchTarget && options.Branch == null) || (!branchTarget && options.Command != "history-page" && options.Branch != null))
-                throw new ArgumentException("--branch is required for branch-head, switch-branch, create-branch and rename-branch, and optional for history-page.");
+                throw new ArgumentException("--branch is required for branch-head, switch-branch, create-branch, rename-branch and delete-branch, and optional for history-page.");
             if (options.Branch != null && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
             if (options.Filter != null && options.Command != "branch-tree" && options.Command != "labels") throw new ArgumentException("--filter is supported only for branch-tree and labels.");
             if (options.Ignore != null && options.Command != "blame") throw new ArgumentException("--ignore is supported only for blame.");
@@ -1050,7 +1066,7 @@ namespace TortoiseSCM
             if ((options.Command == "locks" || options.Command == "unlock") && options.Paths.Count != 1) throw new ArgumentException("Lock operations require exactly one workspace root.");
             bool mergeWorkflow = options.Command.StartsWith("merge-", StringComparison.Ordinal);
             bool conflictFile = partialFile || options.Command == "partial-structure-prepare" || options.Command == "partial-directory-prepare" || options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
-            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "rename-branch", "label-create", "label-delete", "export", "repository-list", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
+            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "rename-branch", "delete-branch", "label-create", "label-delete", "export", "repository-list", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
             if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("This command " + (needsChangeset ? "requires" : "does not accept") + " --changeset.");
             if (needsChangeset && options.Paths.Count != 1) throw new ArgumentException("Select exactly one file or directory scope for this command.");
             if (mergeWorkflow && options.Paths.Count != 1) throw new ArgumentException("Workspace merge operations require exactly one explicit workspace root.");

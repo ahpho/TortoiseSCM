@@ -79,6 +79,23 @@ internal static class CliTests
             Run(2, renameArguments.Concat(new[] { "--new-name", "duplicate" }).ToArray());
             Run(2, renameArguments.Concat(new[] { "--comment", "unsupported" }).ToArray());
             Run(2, renameArguments.Concat(new[] { "--path", Path.Combine(temporary, "file.txt") }).ToArray());
+            var deleteArguments = renameArguments.ToList();
+            deleteArguments[1] = "delete-branch";
+            int newNameIndex = deleteArguments.IndexOf("--new-name"); deleteArguments.RemoveRange(newNameIndex, 2);
+            foreach (string required in new[] { "--branch", "--branch-id", "--branch-guid", "--changeset", "--yes" })
+            {
+                var missing = deleteArguments.ToList(); int index = missing.IndexOf(required);
+                missing.RemoveAt(index); if (required != "--yes") missing.RemoveAt(index);
+                Run(2, missing.ToArray());
+            }
+            foreach (string[] invalid in new[] { new[] { "--branch-id", "0" }, new[] { "--branch-id", "-1" },
+                new[] { "--branch-guid", "invalid" }, new[] { "--branch-guid", Guid.Empty.ToString() }, new[] { "--changeset", "-1" } })
+            {
+                var bad = deleteArguments.ToArray(); bad[Array.IndexOf(bad, invalid[0]) + 1] = invalid[1]; Run(2, bad);
+            }
+            foreach (string[] extra in new[] { new[] { "--new-name", "unsupported" }, new[] { "--comment", "unsupported" },
+                new[] { "--branch-id", "42" }, new[] { "--branch-guid", Guid.NewGuid().ToString() }, new[] { "--path", Path.Combine(temporary, "another-path") } })
+                Run(2, deleteArguments.Concat(extra).ToArray());
             Run(2, "--command", "status", "--path", temporary, "--external");
             Run(2, "--command", "diff", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"), "--external");
             Run(2, "--command", "merge", "--yes");

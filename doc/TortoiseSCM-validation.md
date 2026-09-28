@@ -404,3 +404,14 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 真实服务器 CLI 集成 39 项通过：`qa/integration-20260928-162349-60a9dc2b/branch-rename-results.json`。在隔离分支创建实际提交后分别经 Standard 与 Partial 重命名，同一 ID/GUID、父关系和头提交保持不变；旧名消失。当前/根/带子分支及旧身份等拒绝测试通过，两个工作区已有的私有文件、状态及 selector 未改变，原 TestSCM 文件与 selector 亦保持不变。
 - 原生 `cm branch rename` 的第二参数为短名称；本机探测不支持 `brid:`/`br:brid:` 作为首参数。实现使用仓库限定名称，在执行前后核对身份，但不承诺原子条件写入或更新其他用户保存的名称引用。分支删除、当前/父分支重命名和 Partial 分支切换仍待后续实现。
 - 全量 `build-tortoisescm.ps1 -Test` 通过（`qa/branch-rename-regression.log`），包含 2,187 项 CLI、Core、Shell/现代菜单和完整 WinForms 回归，新增重命名 UI 62 项亦在全量运行中通过。安装/升级回滚/卸载检查 45 项通过（`qa/branch-rename-package-tests.log`），实际 Explorer 注册保持不变。版本包路径：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-branch-rename-20260928-windows-x64.zip`。
+
+# 受保护的空叶分支删除（2026-09-28）
+
+- 分支列表/层级树右键新增“删除空分支…”和 `delete-branch` CLI，确认固定原生 ID、GUID、父关系与继承头提交。只允许非当前空叶分支，执行前两次核对完整分支记录、自身 changeset、分支属性与继承头暂存引用；任一引用查询失败或返回异常数据均不写入。暂存保护是保守的：即使暂存集来自其他分支，只要以该继承头为父版本也会阻止删除。
+- `BranchDeleteTests` 157 项通过，C# 5 `/warnaserror` 编译通过；覆盖身份/头/父关系/selector/工作区模式竞态、两类本地操作锁、引用查询错误、迟到的提交/属性/暂存引用、取消、失败、不确定结果和可变调用参数快照。继承 cs:0 合法；删除后原名称或 ID/GUID 仍存在、或列表身份字段缺失时不能报告成功。证据 `qa/branch-delete-core/results.log`。
+- `BranchDeleteUiTests` 48 项通过，验证默认取消、取消不写入、异步关闭保护、失败后禁止旧窗口重试、身份快照、过滤前完整子分支检查及 Partial 入口。普通/最小窗口、失败状态和层级树截图为 `qa/branch-delete-ui/branch-delete*.png`，已目视检查文字和按钮完整，无重叠；这些是进程内 WinForms 检查。
+- 首轮真实 CLI 集成 54 项通过；最终后端另补“写后列表缺失身份时不报告成功”的保护，最终构建在新 fixture 重做服务器集成。执行使用 `cm branch delete br:<name>@<repo>`；实测 `brid:<id>` 和 `br:brid:<id>` 不可用。原生按名称写入存在跨客户端并发窗口，无法保证原子条件删除或检查其他用户保存的 selector 引用。
+- 不删除已发布的 changeset、标签、暂存集或其他分支，不自动重建或重试；有历史的分支不提供级联删除。测试只在独立 `tortoisescm-autotest-*` 分支操作，原 TestSCM 保持不变。
+- 最终构建的真实服务器 CLI 集成 54 项通过（`qa/branch-delete-integration-final.log`），fixture 为 `qa/integration-20260928-172006-dbd57e69/manifest.json`，结果在相邻 `branch-delete-results.json`。覆盖中文空分支、根/当前/子分支保护、真实分支属性、已发布提交、继承头暂存引用、Standard/Partial 成功删除、保留父提交、旧身份拒绝同名替代分支。两个工作区已有私有文件、状态及 selector 和原 TestSCM 内容均保持不变。
+- 全量回归的 Core 套件全部通过（`qa/branch-delete-regression.log`）。首轮新增 CLI 多路径拒绝测试误用了同一路径，CLI 按既有规则去重后进入工作区查询，导致测试期望不匹配；已改成两个不同路径，并从 CLI 阶段继续执行完整 CLI、Shell/现代菜单及 GUI 检查，未重复运行已通过的 Core 套件。
+- 后续全量回归通过（`qa/branch-delete-regression-resumed.log`）：2,262 项主 CLI 检查及全部其他 CLI、Shell/现代菜单和 WinForms 检查，新增删除 UI 48 项亦通过。安装/升级回滚/卸载 45 项通过（`qa/branch-delete-package.log`），未改变实际 Explorer 注册。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-branch-delete-20260928-windows-x64.zip`。
