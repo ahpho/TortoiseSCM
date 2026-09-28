@@ -34,6 +34,29 @@ internal static class HistoricalBeyondCompareTests
         RestoreSelector();
         var client = new PlasticClient(new PlasticClientConfig { CmPath = executable, BeyondComparePath = bc, UseBeyondCompare = true,
             Timeout = TimeSpan.FromSeconds(10) });
+        var parentComparison = await client.GetChangesetParentComparisonAsync(root, 10, Repository, Token);
+        Check(parentComparison.FromChangeset == 1 && parentComparison.ToChangeset == 10,
+            "Default file diff reads actual non-adjacent parent, never changeset minus one");
+        Check(File.ReadAllText(Path.Combine(root, "parent-query")).Contains("where changesetid = 10 on repository '" + Repository + "'"),
+            "Parent metadata query pins selected changeset and repository");
+        Check(parentComparison.Files.Single(f => f.Status == "M").OldPath == "/old 中文 &.txt",
+            "Parent comparison preserves authoritative historical source path");
+        foreach (string mode in new[] { "parent-root", "parent-wrong", "parent-malformed", "find-fail", "find-selector" })
+        {
+            File.WriteAllText(Path.Combine(root, "mode"), mode);
+            await Reject<Exception>(() => client.GetChangesetParentComparisonAsync(root, 10, Repository, Token),
+                "Parent lookup rejects invalid identity, absence, server error or context race: " + mode);
+            RestoreSelector();
+        }
+        File.WriteAllText(Path.Combine(root, "mode"), "");
+        await Reject<InvalidOperationException>(() => client.GetChangesetParentComparisonAsync(root, 10, "other@server", Token),
+            "Parent lookup rejects stale expected repository");
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            await Reject<OperationCanceledException>(() => client.GetChangesetParentComparisonAsync(root, 10, Repository, cancelled.Token),
+                "Cancelled parent lookup cannot start comparison");
+        }
         var comparison = await client.GetChangesetComparisonAsync(root, 1, 2, Token);
         foreach (var row in comparison.Files)
         {
@@ -84,6 +107,8 @@ internal static class HistoricalBeyondCompareTests
         await Reject<InvalidOperationException>(() => client.OpenChangesetFileDiffToolAsync(root, comparison, added, Token), "Reviewed root mismatch rejects comparison");
         comparison.RootPath = root;
         await Reject<ArgumentException>(() => client.OpenRevisionDiffToolAsync(root, added.Path, 1, 2, Token), "Unproven ordinary history missing endpoint remains an error");
+        await Reject<InvalidOperationException>(() => client.OpenRevisionDiffToolAsync(root, "/old 中文 &.txt", "/new 中文 &.txt", 1, 2, "other@server", Token),
+            "Ordinary marked comparison rejects changed expected repository");
         Check((await client.OpenRevisionDiffToolAsync(root, "/old 中文 &.txt", "/new 中文 &.txt", 1, 2, Token)).Succeeded, "Ordinary cross-path historical comparison still works");
         var ordinary = XDocument.Load(Path.Combine(root, "viewer.xml")).Root.Elements("arg").Select(x => x.Value).ToArray();
         Check(ordinary[4] == "/lefttitle=serverpath:/old 中文 &.txt#cs:1@" + Repository && ordinary[5] == "/righttitle=serverpath:/new 中文 &.txt#cs:2@" + Repository, "Ordinary history has real endpoint titles too");
@@ -139,6 +164,17 @@ internal static class HistoricalBeyondCompareTests
         File.AppendAllText(Path.Combine(testRoot, "commands"), args[0] + "\n");
         if (mode == args[0] + "-fail") { Console.Error.WriteLine("Deliberate server failure"); return 19; }
         if (mode == args[0] + "-selector") File.WriteAllText(Path.Combine(testRoot, ".plastic", "plastic.selector"), "repository \"other@server\"");
+        if (args[0] == "find")
+        {
+            File.WriteAllText(Path.Combine(testRoot, "parent-query"), String.Join("\n", args));
+            Console.WriteLine(new XElement("PLASTICQUERY", new XElement("CHANGESET",
+                new XElement("ID", 100), new XElement("CHANGESETID", mode == "parent-wrong" ? 9 : 10),
+                new XElement("PARENT", mode == "parent-root" ? "-1" : mode == "parent-malformed" ? "invalid" : "1"),
+                new XElement("GUID", "9bbdadde-8a92-4537-b233-715a2646e879"), new XElement("BRANCH", "/main"),
+                new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087"), new XElement("REPOSITORY", "test"),
+                new XElement("DATE", "2026-09-28T10:00:00Z"), new XElement("OWNER", "tester"), new XElement("COMMENT", "parent fixture"))));
+            return 0;
+        }
         if (args[0] == "diff")
         {
             Console.WriteLine((mode == "different-row" ? "C" : "A") + "|/added 中文 &.txt|F||");

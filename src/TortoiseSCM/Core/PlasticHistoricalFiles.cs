@@ -124,7 +124,11 @@ namespace TortoiseSCM
         public Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string repositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
         { return OpenRevisionDiffToolAsync(workspacePath, repositoryPath, repositoryPath, fromChangeset, toChangeset, cancellationToken); }
 
-        public async Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
+        public Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
+        { return OpenRevisionDiffToolAsync(workspacePath, fromRepositoryPath, toRepositoryPath, fromChangeset, toChangeset, null, cancellationToken); }
+
+        public async Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath,
+            long fromChangeset, long toChangeset, string expectedRepository, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
@@ -132,6 +136,7 @@ namespace TortoiseSCM
             ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
             ValidateRepositoryFilePath(fromRepositoryPath); ValidateRepositoryFilePath(toRepositoryPath);
             var context = await HistoricalContextAsync(workspacePath, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
+            ValidateExpectedHistoricalRepository(context, expectedRepository);
             // Validate both endpoints even for the native viewer, which otherwise owns errors
             // in its GUI. Missing historical paths remain explicit errors, never empty bytes.
             await ValidateHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);

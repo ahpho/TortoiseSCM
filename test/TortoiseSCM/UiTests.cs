@@ -15,6 +15,7 @@ namespace TortoiseSCM
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Length > 0 && (args[0] == "find" || args[0] == "diff" || args[0] == "status")) return HistoryLoadingUiTests.FakeCm(args);
             var previousContext = SynchronizationContext.Current;
             bool previousAutoInstall = WindowsFormsSynchronizationContext.AutoInstall;
             WindowsFormsSynchronizationContext uiContext = null;
@@ -36,6 +37,12 @@ namespace TortoiseSCM
                 if (args.Length == 2 && args[0] == "--launch-routing-ui")
                 {
                     LaunchRoutingUiTests.Run(args[1]); return 0;
+                }
+                if (args.Length == 2 && args[0] == "--history-experience-ui")
+                {
+                    WorkspacePickerUiTests.Run(args[1]);
+                    HistoryLoadingUiTests.Run(args[1]);
+                    HistoryDirectDiffUiTests.Run(args[1]); return 0;
                 }
                 if (args.Length == 2 && args[0] == "--graph-ui")
                 {
@@ -99,6 +106,9 @@ namespace TortoiseSCM
                 WorkspaceCreationUiTests.Run(artifacts);
                 VersionInfoUiTests.Run(artifacts);
                 LaunchRoutingUiTests.Run(artifacts);
+                WorkspacePickerUiTests.Run(artifacts);
+                HistoryLoadingUiTests.Run(artifacts);
+                HistoryDirectDiffUiTests.Run(artifacts);
                 Require(LaunchRequest.Parse(new[] { "--command", "create-workspace" }).Paths.Count == 0, "Workspace creation opens without an existing workspace");
                 Require(LaunchRequest.Parse(new[] { "--command", "create-workspace", "--path", Path.Combine(artifacts, "new workspace") }).Paths.Count == 1, "Workspace creation accepts a proposed destination");
                 try { LaunchRequest.Parse(new[] { "--command", "create-workspace", "--path", artifacts, "--path", artifacts }); throw new Exception("Multiple workspace destinations accepted"); }
@@ -274,8 +284,8 @@ namespace TortoiseSCM
                             Require(((ListView)Field(history, "revisions")).Items.Count > 0, "Upper history pane contains real changesets");
                             Require(((ListView)Field(history, "changedFiles")).Items.Count > 0, "Lower history pane contains real changed files");
                             var revisions = (ListView)Field(history, "revisions");
-                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Initial bounded history page finishes");
-                            Require(revisions.Items.Count <= 50, "History opens with at most fifty commits");
+                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Initial automatic full history finishes");
+                            Require(!(bool)Field(history, "hasMoreHistory"), "History opens after automatically exhausting all pages");
                             var historyFlags = BindingFlags.Instance | BindingFlags.NonPublic;
                             var marked = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
                             revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "标记为比较起点").PerformClick();
@@ -290,26 +300,15 @@ namespace TortoiseSCM
                             Require((string)typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { false }) == "cs:" + marked.Changeset &&
                                 (string)typeof(HistoryForm).GetMethod("SelectedRevisionText", historyFlags).Invoke(history, new object[] { true }) == marked.Comment,
                                 "Revision copy actions preserve the selected identifier and full multiline comment without touching the clipboard");
-                            var older = (Button)Field(history, "loadMore");
-                            if (older.Enabled)
-                            {
-                                int firstPageCount = revisions.Items.Count;
-                                older.PerformClick();
-                                WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Load older history page finishes");
-                                Require(revisions.Items.Count > firstPageCount && revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).Distinct().Count() == revisions.Items.Count,
-                                    "Load older appends repository commits without duplicates");
-                                var refreshButton = (Button)Field(history, "refreshHistory");
-                                Require(refreshButton.Enabled && refreshButton.CanSelect, "History refresh is available after loading older records");
-                                refreshButton.PerformClick();
-                                WaitUntil(() => !(bool)Field(history, "loadingHistory"), "History refresh returns to newest page");
-                                Require(older.Enabled && revisions.Items.Count <= 50, "Refreshed history retains its continuation");
-                                int retained = revisions.Items.Count;
-                                older.PerformClick();
-                                Require(((Button)Field(history, "cancelHistory")).Enabled, "Paging exposes cancellation while loading");
-                                ((Button)Field(history, "cancelHistory")).PerformClick();
-                                WaitUntil(() => !(bool)Field(history, "loadingHistory"), "History page cancellation completes");
-                                Require(revisions.Items.Count == retained && older.Enabled, "Cancelled page preserves loaded records and remains retryable");
-                            }
+                            int fullyLoadedCount = revisions.Items.Count;
+                            Require(revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).Distinct().Count() == fullyLoadedCount,
+                                "Automatic complete history contains no duplicate commits");
+                            var refreshButton = (Button)Field(history, "refreshHistory");
+                            Require(refreshButton.Enabled && refreshButton.CanSelect, "Full history refresh remains available");
+                            refreshButton.PerformClick();
+                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Refresh loads all history again");
+                            Require(!(bool)Field(history, "hasMoreHistory") && revisions.Items.Count >= fullyLoadedCount,
+                                "Refresh completes the entire history instead of returning only one page");
                             var beforeRefresh = revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).ToArray();
                             ((Button)Field(history, "refreshHistory")).PerformClick();
                             ((Button)Field(history, "cancelHistory")).PerformClick();
@@ -341,7 +340,7 @@ namespace TortoiseSCM
                             Application.DoEvents();
                             var restore = (Button)Field(history, "restore");
                             Require(history.RectangleToScreen(history.ClientRectangle).Contains(restore.RectangleToScreen(restore.ClientRectangle)), "History restore button remains visible at minimum size");
-                            foreach (string name in new[] { "refreshHistory", "loadMore", "cancelHistory", "close" })
+                            foreach (string name in new[] { "refreshHistory", "cancelHistory", "close" })
                             {
                                 var button = (Button)Field(history, name);
                                 Rectangle bounds = button.RectangleToScreen(button.ClientRectangle);
@@ -428,7 +427,7 @@ namespace TortoiseSCM
                             object[] refreshKeys = { Message.Create(IntPtr.Zero, 0, IntPtr.Zero, IntPtr.Zero), Keys.F5 };
                             Require((bool)typeof(HistoryForm).GetMethod("ProcessCmdKey", historyFlags).Invoke(history, refreshKeys), "History consumes the F5 refresh shortcut");
                             WaitUntil(() => !(bool)Field(history, "loadingHistory"), "F5 history refresh finishes");
-                            Require(((Button)Field(history, "restore")).Enabled && revisions.Items.Count <= 50, "F5 refresh restores the newest page with coherent selected details");
+                            Require(((Button)Field(history, "restore")).Enabled && !(bool)Field(history, "hasMoreHistory"), "F5 refresh loads all history with coherent selected details");
                             Save(history, Path.Combine(artifacts, "history-minimum.png"));
                             history.Close();
                         }
@@ -1037,7 +1036,7 @@ namespace TortoiseSCM
                 history.Size = history.MinimumSize; Application.DoEvents();
                 Require(scopeLabel.Parent.RectangleToScreen(scopeLabel.Parent.ClientRectangle).Contains(scopeLabel.RectangleToScreen(scopeLabel.ClientRectangle)),
                     "Branch history scope occupies its own visible row at minimum size");
-                foreach (string name in new[] { "loadMore", "refreshHistory", "cancelHistory", "restore", "snapshot", "close" })
+                foreach (string name in new[] { "refreshHistory", "cancelHistory", "restore", "snapshot", "close" })
                 {
                     var control = (Control)Field(history, name);
                     Require(history.RectangleToScreen(history.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Branch history " + name + " visible at minimum size");
@@ -1058,10 +1057,10 @@ namespace TortoiseSCM
             }
             using (var history = new HistoryForm(client, workspace, workspace, "/main"))
             {
-                Prepare(history); WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Sparse branch-history first page loads");
+                Prepare(history); WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Sparse branch-history automatically loads all pages");
                 var entries = (System.Collections.Generic.List<PlasticHistoryItem>)Field(history, "entries");
-                Require(entries.All(entry => entry.Branch == "/main") && ((Button)Field(history, "loadMore")).Enabled == (bool)Field(history, "hasMoreHistory"),
-                    "Branch history keeps continuation available for empty matching pages");
+                Require(entries.All(entry => entry.Branch == "/main") && !(bool)Field(history, "hasMoreHistory"),
+                    "Branch history continues through empty matching pages to completion");
                 history.Close();
             }
         }

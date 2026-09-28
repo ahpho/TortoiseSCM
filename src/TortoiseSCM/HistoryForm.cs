@@ -23,7 +23,6 @@ namespace TortoiseSCM
         private readonly TextBox description = new TextBox();
         private readonly Label status = new Label();
         private readonly Label historySummary = new Label();
-        private readonly Button loadMore = new Button();
         private readonly Button refreshHistory = new Button();
         private readonly Button cancelHistory = new Button();
         private readonly Button restore = new Button();
@@ -37,7 +36,6 @@ namespace TortoiseSCM
         private CancellationTokenSource historyRequest;
         private bool loadingHistory;
         private bool hasMoreHistory = true;
-        private long? beforeChangeset;
         private int scannedChangesets;
         private string historyRepository;
         private bool writing;
@@ -46,6 +44,11 @@ namespace TortoiseSCM
         private long? comparisonChangeset;
         private readonly ToolStripMenuItem compareMarkedFile = new ToolStripMenuItem();
         private readonly ToolStripMenuItem compareMarkedChangeset = new ToolStripMenuItem();
+        private bool comparingFile;
+        private Func<long, CancellationToken, Task<PlasticChangesetComparison>> getParentComparison;
+        private Func<long, long, CancellationToken, Task<PlasticChangesetComparison>> getMarkedComparison;
+        private Func<PlasticChangesetComparison, PlasticChangesetFile, CancellationToken, Task<PlasticCommandResult>> openFileComparison;
+        private Func<PlasticChangesetComparison, string, CancellationToken, Task<PlasticCommandResult>> openUnchangedComparison;
 
         public HistoryForm(PlasticClient client, string path, string workspaceRoot)
             : this(client, path, workspaceRoot, null) { }
@@ -59,6 +62,11 @@ namespace TortoiseSCM
             this.path = path;
             this.workspaceRoot = workspaceRoot;
             this.branch = branch;
+            getParentComparison = (cs, token) => client.GetChangesetParentComparisonAsync(workspaceRoot, cs, historyRepository, token);
+            getMarkedComparison = (from, to, token) => client.GetChangesetComparisonAsync(workspaceRoot, from, to, token);
+            openFileComparison = (comparison, file, token) => client.OpenChangesetFileDiffToolAsync(workspaceRoot, comparison, file, token);
+            openUnchangedComparison = (comparison, file, token) => client.OpenRevisionDiffToolAsync(workspaceRoot, file, file,
+                comparison.FromChangeset, comparison.ToChangeset, comparison.Repository, token);
             if (branch != null)
             {
                 var workspace = client.DiscoverWorkspace(path);
@@ -90,7 +98,7 @@ namespace TortoiseSCM
                 TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, Margin = new Padding(0, 0, 12, 3) }, 0, 0);
             header.Controls.Add(new Label { Text = "筛选(&F):", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 1, 0);
             filter.Dock = DockStyle.Fill;
-            filter.AccessibleName = "筛选已加载历史：版本、日期、作者、分支或说明";
+            filter.AccessibleName = "筛选全部历史：版本、日期、作者、分支或说明";
             filter.Margin = new Padding(3, 2, 0, 4);
             filter.TextChanged += async delegate { await ApplyFilterAsync(); };
             header.Controls.Add(filter, 2, 0);
@@ -137,11 +145,18 @@ namespace TortoiseSCM
             description.AccessibleName = "提交说明";
             ConfigureList(changedFiles, "本次提交的文件", new[] { "操作", "路径", "原路径", "类型" }, new[] { 75, 570, 280, 70 });
             changedFiles.SelectedIndexChanged += delegate { UpdateFileAction(); };
-            changedFiles.DoubleClick += delegate { OpenHistoricalFile(); };
-            changedFiles.KeyDown += delegate(object sender, KeyEventArgs e) { CopyListSelection(e, true); };
+            changedFiles.DoubleClick += async delegate { await CompareHistoricalFileAsync(false); };
+            changedFiles.KeyDown += async delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyData == (Keys.Control | Keys.D))
+                { e.Handled = e.SuppressKeyPress = true; await CompareHistoricalFileAsync(false); }
+                else CopyListSelection(e, true);
+            };
             var fileMenu = new ContextMenuStrip();
-            var openFile = fileMenu.Items.Add("比较 / 导出历史文件…", null, delegate { OpenHistoricalFile(); });
-            compareMarkedFile.Click += delegate { OpenHistoricalFile(true); };
+            var openFile = (ToolStripMenuItem)fileMenu.Items.Add("Beyond Compare 比较", null, async delegate { await CompareHistoricalFileAsync(false); });
+            openFile.ShortcutKeyDisplayString = "Ctrl+D";
+            var exportFile = fileMenu.Items.Add("导出 / 自选版本…", null, delegate { OpenHistoricalFile(); });
+            compareMarkedFile.Click += async delegate { await CompareHistoricalFileAsync(true); };
             fileMenu.Items.Add(compareMarkedFile);
             fileMenu.Items.Add("显示此路径的历史…", null, delegate { OpenSelectedPathHistory(); });
             fileMenu.Items.Add(new ToolStripSeparator());
@@ -150,7 +165,7 @@ namespace TortoiseSCM
             fileMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
             {
                 e.Cancel = writing || changedFiles.SelectedItems.Count != 1;
-                openFile.Enabled = historicalFile.Enabled;
+                openFile.Enabled = exportFile.Enabled = historicalFile.Enabled;
                 copyOldPath.Enabled = !String.IsNullOrEmpty(SelectedFilePath(true));
                 UpdateFileAction();
             };
@@ -180,15 +195,13 @@ namespace TortoiseSCM
             restore.Margin = new Padding(3, 3, 6, 3);
             restore.Enabled = false;
             restore.Click += async delegate { await RestoreAsync(false); };
-            historicalFile.Text = "比较 / 导出文件…";
+            historicalFile.Text = "比较文件 (Ctrl+D)";
             historicalFile.Dock = DockStyle.Fill; historicalFile.Enabled = false;
-            historicalFile.Click += delegate { OpenHistoricalFile(); };
+            historicalFile.Click += async delegate { await CompareHistoricalFileAsync(false); };
             footer.Controls.Add(historicalFile, 0, 0);
-            var paging = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 234, Margin = Padding.Empty, WrapContents = false };
-            refreshHistory.Text = "刷新"; refreshHistory.Width = 60;
+            var paging = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 164, Margin = Padding.Empty, WrapContents = false };
+            refreshHistory.Text = "刷新全部"; refreshHistory.Width = 78;
             refreshHistory.Click += async delegate { await LoadHistoryPageAsync(true); };
-            loadMore.Text = "加载更早"; loadMore.Width = 78;
-            loadMore.Click += async delegate { await LoadHistoryPageAsync(false); };
             cancelHistory.Text = "取消加载"; cancelHistory.Width = 72; cancelHistory.Enabled = false;
             cancelHistory.Click += delegate
             {
@@ -196,7 +209,7 @@ namespace TortoiseSCM
                 if (detailRequest != null) detailRequest.Cancel();
                 status.Text = "已取消加载；已加载历史保留，可重试。";
             };
-            paging.Controls.Add(refreshHistory); paging.Controls.Add(loadMore); paging.Controls.Add(cancelHistory);
+            paging.Controls.Add(refreshHistory); paging.Controls.Add(cancelHistory);
             historyNavigation.Controls.Add(paging);
             snapshot.Text = "切换历史快照…";
             snapshot.Dock = DockStyle.Fill; snapshot.Visible = wholeWorkspace; snapshot.Enabled = false;
@@ -215,6 +228,7 @@ namespace TortoiseSCM
             Shown += async delegate { await LoadHistoryPageAsync(true); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (writing) e.Cancel = true; else lifetime.Cancel(); };
             FormClosed += delegate { if (detailRequest != null) detailRequest.Cancel(); };
+            Disposed += delegate { lifetime.Cancel(); if (detailRequest != null) detailRequest.Cancel(); };
         }
 
         private static void ConfigureList(ListView list, string name, string[] columns, int[] widths)
@@ -231,41 +245,66 @@ namespace TortoiseSCM
 
         private async Task LoadHistoryPageAsync(bool reset)
         {
-            if (loadingHistory || writing || lifetime.IsCancellationRequested || (!reset && !hasMoreHistory)) return;
+            if (loadingHistory || writing || lifetime.IsCancellationRequested) return;
             loadingHistory = true;
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             historyRequest = cancellation;
-            refreshHistory.Enabled = loadMore.Enabled = false; cancelHistory.Enabled = true;
-            status.Text = wholeWorkspace ? "正在读取最多 50 个提交…" : "正在检查最多 50 个提交的路径；可随时取消…";
+            refreshHistory.Enabled = false; cancelHistory.Enabled = true;
+            status.Text = "正在读取全部历史；可随时取消…";
+            // Preserve a previous result throughout a refresh. Initial loads publish
+            // completed batches, including progress through sparse path/branch history.
+            bool publishBatches = entries.Count == 0;
+            var refreshed = new List<PlasticHistoryItem>();
+            var seen = new HashSet<long>();
+            string repository = null;
+            long? before = null;
+            hasMoreHistory = true; scannedChangesets = 0;
+            UpdateHistorySummary();
             try
             {
-                if (branch != null) ValidateHistoryContext();
-                var page = branch == null ? await client.GetHistoryPageAsync(path, reset ? null : beforeChangeset, 50, cancellation.Token) :
-                    await client.GetHistoryPageAsync(path, branch, reset ? null : beforeChangeset, 50, cancellation.Token);
-                if (cancellation.IsCancellationRequested) return;
-                if (branch != null)
+                do
                 {
-                    ValidateHistoryContext();
-                    if (page.Repository != branchRepository || page.Branch != branch) throw new InvalidOperationException("分支历史上下文已改变，请重新打开窗口。");
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    if (branch != null) ValidateHistoryContext();
+                    var page = branch == null ? await client.GetHistoryPageAsync(path, before, 50, cancellation.Token) :
+                        await client.GetHistoryPageAsync(path, branch, before, 50, cancellation.Token);
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    if (branch != null)
+                    {
+                        ValidateHistoryContext();
+                        if (page.Repository != branchRepository || page.Branch != branch) throw new InvalidOperationException("分支历史上下文已改变，请重新打开窗口。");
+                    }
+                    if (repository != null && page.Repository != repository) throw new InvalidOperationException("工作区仓库已改变，请刷新历史。");
+                    if (page.HasMore && (!page.NextBeforeChangeset.HasValue || page.NextBeforeChangeset.Value < 0 ||
+                        (before.HasValue && page.NextBeforeChangeset.Value >= before.Value)))
+                        throw new InvalidDataException("历史查询未返回有效的更早版本位置；未将不完整结果视为全部历史。");
+                    repository = page.Repository;
+                    foreach (var item in page.Items) if (seen.Add(item.Changeset)) refreshed.Add(item);
+                    scannedChangesets += page.ScannedChangesets;
+                    before = page.NextBeforeChangeset;
+                    hasMoreHistory = page.HasMore;
+                    if (publishBatches || !page.HasMore)
+                    {
+                        if (historyRepository != null && historyRepository != repository) comparisonChangeset = null;
+                        historyRepository = repository;
+                        entries.Clear(); entries.AddRange(refreshed);
+                        await ApplyFilterAsync(!page.HasMore);
+                    }
+                    UpdateHistorySummary();
+                    // Yield between bounded batches even when all backend tasks are cached.
+                    if (page.HasMore) await Task.Yield();
                 }
-                if (!reset && historyRepository != null && page.Repository != historyRepository) throw new InvalidOperationException("工作区仓库已改变，请刷新历史。");
-                // Publish the refreshed page only after success: failed or cancelled
-                // refreshes keep the visible history and its continuation cursor intact.
-                if (reset) { entries.Clear(); scannedChangesets = 0; }
-                if (historyRepository != null && historyRepository != page.Repository) comparisonChangeset = null;
-                historyRepository = page.Repository;
-                entries.AddRange(page.Items);
-                scannedChangesets += page.ScannedChangesets; hasMoreHistory = page.HasMore; beforeChangeset = page.NextBeforeChangeset;
-                await ApplyFilterAsync();
+                while (hasMoreHistory);
             }
-            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消本页加载；已加载历史保留，可重试。"; }
+            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消加载；已加载历史保留。点击“刷新全部”重试。"; }
             catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "读取失败：" + ex.Message; }
             finally
             {
                 historyRequest = null; cancellation.Dispose();
                 if (!lifetime.IsCancellationRequested)
                 {
-                    refreshHistory.Enabled = !writing; loadMore.Enabled = !writing && hasMoreHistory; cancelHistory.Enabled = false;
+                    refreshHistory.Enabled = !writing; cancelHistory.Enabled = false;
+                    loadingHistory = false;
                     UpdateHistorySummary();
                 }
                 loadingHistory = false;
@@ -275,12 +314,12 @@ namespace TortoiseSCM
         private void UpdateHistorySummary()
         {
             historySummary.Text = revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
-                " 个提交；" + (hasMoreHistory ? "更早历史尚未加载" : "已扫描全部历史") +
-                (branch != null ? "（仅本分支提交，不含祖先；空页仍可继续加载）" :
-                    (wholeWorkspace ? "（筛选仅作用于已加载项）" : "（路径历史，不追溯重命名前的其他路径；筛选仅作用于已加载项）"));
+                " 个提交；" + (hasMoreHistory ? (loadingHistory ? "正在读取全部历史，可取消" : "加载未完成，请刷新全部重试") : "已扫描全部历史") +
+                (branch != null ? "（仅本分支提交，不含祖先）" :
+                    (wholeWorkspace ? "" : "（路径历史，不追溯重命名前的其他路径）"));
         }
 
-        private async Task ApplyFilterAsync()
+        private async Task ApplyFilterAsync(bool forceDetails = false)
         {
             if (writing || lifetime.IsCancellationRequested) return;
             long? selected = revisions.SelectedItems.Count == 1 ? (long?)((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset : null;
@@ -302,7 +341,10 @@ namespace TortoiseSCM
             finally { revisions.EndUpdate(); filtering = false; }
             status.Text = revisions.Items.Count + " / " + entries.Count + " 个提交";
             UpdateHistorySummary();
-            await LoadDetailsAsync();
+            long? current = revisions.SelectedItems.Count == 1 ? (long?)((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset : null;
+            // Appending an older batch must not cancel/reload the selected immutable
+            // changeset detail or interrupt a comparison launched from that selection.
+            if (forceDetails || selected != current || !current.HasValue) await LoadDetailsAsync();
         }
 
         private static bool MatchesFilter(PlasticHistoryItem entry, string query)
@@ -344,8 +386,8 @@ namespace TortoiseSCM
         private void UpdateFileAction()
         {
             var file = changedFiles.SelectedItems.Count == 1 ? (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag : null;
-            historicalFile.Enabled = !writing && revisions.SelectedItems.Count == 1 && file != null &&
-                !string.Equals(file.ItemType, "D", StringComparison.OrdinalIgnoreCase) && !string.Equals(file.ItemType, "dir", StringComparison.OrdinalIgnoreCase);
+            historicalFile.Enabled = !writing && !comparingFile && revisions.SelectedItems.Count == 1 && file != null &&
+                (file.ItemType == "F" || file.ItemType == "B");
             compareMarkedFile.Text = comparisonChangeset.HasValue ? "与标记 cs:" + comparisonChangeset.Value + " 比较此文件…" : "与标记变更集比较此文件…";
             compareMarkedFile.Enabled = historicalFile.Enabled && comparisonChangeset.HasValue;
             compareMarkedChangeset.Text = comparisonChangeset.HasValue ? "与标记 cs:" + comparisonChangeset.Value + " 比较整个仓库…" : "与标记变更集比较整个仓库…";
@@ -354,6 +396,47 @@ namespace TortoiseSCM
 
         private void OpenHistoricalFile()
         { OpenHistoricalFile(false); }
+
+        private async Task CompareHistoricalFileAsync(bool useMarkedChangeset)
+        {
+            if (!historicalFile.Enabled || comparingFile || lifetime.IsCancellationRequested ||
+                (useMarkedChangeset && !comparisonChangeset.HasValue)) return;
+            var selected = (PlasticChangesetFile)changedFiles.SelectedItems[0].Tag;
+            long target = ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset;
+            long? marked = useMarkedChangeset ? comparisonChangeset : null;
+            comparingFile = true; UpdateFileAction();
+            status.Text = "正在准备历史文件比较；Beyond Compare 关闭前请勿重复打开…";
+            try
+            {
+                ValidateHistoryContext();
+                string repository = historyRepository ?? client.DiscoverWorkspace(workspaceRoot).Repository;
+                var comparison = marked.HasValue ? await getMarkedComparison(marked.Value, target, lifetime.Token) :
+                    await getParentComparison(target, lifetime.Token);
+                lifetime.Token.ThrowIfCancellationRequested(); ValidateHistoryContext();
+                if (comparison.Repository != repository || !comparison.RootPath.TrimEnd('\\', '/').Equals(workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
+                    comparison.ToChangeset != target || (marked.HasValue && comparison.FromChangeset != marked.Value))
+                    throw new InvalidOperationException("历史比较的工作区、仓库或版本与所选项不一致。");
+                // Use the tree comparison's normalized old path, including children
+                // edited underneath a renamed directory. Never read the working file.
+                var candidates = comparison.Files.Where(f => f.Path == selected.Path && f.ItemType == selected.ItemType &&
+                    (marked.HasValue || f.Status == selected.Status)).ToList();
+                PlasticCommandResult result;
+                if (candidates.Count == 0 && marked.HasValue)
+                    result = await openUnchangedComparison(comparison, selected.Path, lifetime.Token);
+                else
+                {
+                    var file = candidates.FirstOrDefault(f => f.Status == selected.Status) ?? candidates.FirstOrDefault();
+                    if (file == null || candidates.Count(f => f.Status == file.Status) != 1)
+                        throw new InvalidOperationException("所选文件与服务器历史比较不一致，请刷新历史后重试。");
+                    result = await openFileComparison(comparison, file, lifetime.Token);
+                }
+                if (!lifetime.IsCancellationRequested)
+                    status.Text = result.Succeeded ? "Beyond Compare 已关闭。" : "Beyond Compare 比较失败：" + result.Error;
+            }
+            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消历史文件比较。"; }
+            catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "无法比较历史文件：" + ex.Message; }
+            finally { comparingFile = false; if (!lifetime.IsCancellationRequested) UpdateFileAction(); }
+        }
 
         private void OpenHistoricalFile(bool useMarkedChangeset)
         {
@@ -455,6 +538,11 @@ namespace TortoiseSCM
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (keyData == (Keys.Control | Keys.D) && changedFiles.ContainsFocus)
+            {
+                if (historicalFile.Enabled) historicalFile.PerformClick();
+                return true;
+            }
             if (keyData == Keys.F5)
             {
                 if (refreshHistory.Enabled) refreshHistory.PerformClick();
@@ -497,7 +585,7 @@ namespace TortoiseSCM
 
         private async Task RestoreAsync(bool switchSnapshot)
         {
-            if (writing || revisions.SelectedItems.Count != 1) return;
+            if (writing || comparingFile || revisions.SelectedItems.Count != 1) return;
             var entry = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
             string explanation = switchSnapshot ?
                 "将整个工作区切换到历史快照。部分工作区只切换已加载内容，并保留加载规则。\r\n这不会创建回滚提交；存在待提交更改时操作会被拒绝。" :
@@ -507,7 +595,7 @@ namespace TortoiseSCM
                 "TortoiseSCM — 恢复历史版本", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             writing = true;
             if (historyRequest != null) historyRequest.Cancel();
-            refreshHistory.Enabled = loadMore.Enabled = cancelHistory.Enabled = false;
+            refreshHistory.Enabled = cancelHistory.Enabled = false;
             revisions.Enabled = restore.Enabled = snapshot.Enabled = historicalFile.Enabled = filter.Enabled = close.Enabled = false;
             status.Text = "正在恢复历史版本…";
             try
@@ -522,7 +610,7 @@ namespace TortoiseSCM
             finally
             {
                 writing = false; revisions.Enabled = restore.Enabled = snapshot.Enabled = filter.Enabled = close.Enabled = true;
-                refreshHistory.Enabled = !loadingHistory; loadMore.Enabled = !loadingHistory && hasMoreHistory; UpdateFileAction();
+                refreshHistory.Enabled = !loadingHistory; UpdateFileAction();
             }
         }
     }

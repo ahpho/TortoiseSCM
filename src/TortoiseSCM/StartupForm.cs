@@ -24,7 +24,7 @@ namespace TortoiseSCM
         internal StartupForm()
         {
             DialogStyle.Apply(this); Text = "TortoiseSCM"; ClientSize = new Size(620, 330); MinimumSize = new Size(550, 350); MaximizeBox = false;
-            selectExisting = delegate { using (var picker = new FolderBrowserDialog { Description = "选择已有 Plastic SCM 工作区", ShowNewFolderButton = false })
+            selectExisting = delegate { using (var picker = new WorkspacePickerForm())
                 return picker.ShowDialog(this) == DialogResult.OK ? picker.SelectedPath : null; };
             createNew = delegate { using (var wizard = new WorkspaceCreationForm()) return wizard.ShowDialog(this) == DialogResult.OK ? wizard.SelectedWorkspacePath : null; };
             getWorkspace = (path, token) => new PlasticClient(PlasticClientConfig.Load()).GetWorkspaceAsync(path, token);

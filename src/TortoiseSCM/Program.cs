@@ -53,7 +53,7 @@ namespace TortoiseSCM
                 }
                 if (request.Paths.Count == 0)
                 {
-                    using (var picker = new FolderBrowserDialog { Description = "选择 Plastic SCM 工作区", ShowNewFolderButton = false })
+                    using (var picker = new WorkspacePickerForm())
                     {
                         if (picker.ShowDialog() != DialogResult.OK) return 0;
                         request.Paths.Add(picker.SelectedPath);
