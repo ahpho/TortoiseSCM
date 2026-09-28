@@ -71,6 +71,10 @@ namespace TortoiseSCM
         public string MergeToolArguments { get; set; }
         public bool UseBuiltInDiff { get; set; }
         public bool UseBuiltInMerge { get; set; }
+        public string BeyondComparePath { get; set; }
+        // Loaded application settings always use the supported profile. The internal setter
+        // keeps legacy adapters testable without offering an XML opt-out to users.
+        public bool UseBeyondCompare { get; internal set; }
 
         public PlasticClientConfig()
         {
@@ -79,6 +83,7 @@ namespace TortoiseSCM
             CmPath = FindExecutable("cm.exe");
             GluonPath = FindExecutable("gluon.exe");
             DiffToolPath = MergeToolPath = "";
+            BeyondComparePath = "";
             DiffToolArguments = "\"{base}\" \"{local}\"";
             MergeToolArguments = "\"{base}\" \"{local}\" \"{remote}\" \"{merged}\"";
         }
@@ -89,16 +94,34 @@ namespace TortoiseSCM
         public static PlasticClientConfig Load(string settingsPath)
         {
             var result = new PlasticClientConfig();
+            result.UseBeyondCompare = true;
             if (!String.IsNullOrWhiteSpace(settingsPath)) result.SettingsPath = System.IO.Path.GetFullPath(settingsPath);
             if (!File.Exists(result.SettingsPath)) return result;
             XDocument doc = SafeXml.Load(File.ReadAllText(result.SettingsPath));
             if (doc.Root == null || doc.Root.Name != "TortoiseSCM") throw new InvalidDataException("Invalid TortoiseSCM settings.");
             result.CmPath = (string)doc.Root.Element("CmPath") ?? result.CmPath;
             result.GluonPath = (string)doc.Root.Element("GluonPath") ?? result.GluonPath;
+            result.BeyondComparePath = (string)doc.Root.Element("BeyondComparePath") ?? "";
             result.DiffToolPath = (string)doc.Root.Element("DiffToolPath") ?? result.DiffToolPath;
             result.DiffToolArguments = (string)doc.Root.Element("DiffToolArguments") ?? result.DiffToolArguments;
             result.MergeToolPath = (string)doc.Root.Element("MergeToolPath") ?? result.MergeToolPath;
             result.MergeToolArguments = (string)doc.Root.Element("MergeToolArguments") ?? result.MergeToolArguments;
+            if (doc.Root.Element("BeyondComparePath") == null)
+            {
+                // Preserve an explicitly chosen older BC installation, including a stale
+                // path that should be diagnosed rather than silently replaced by discovery.
+                foreach (string legacy in new[] { result.MergeToolPath, result.DiffToolPath })
+                {
+                    try
+                    {
+                        string name = System.IO.Path.GetFileName(legacy);
+                        if (System.IO.Path.IsPathRooted(legacy) && (String.Equals(name, "BComp.exe", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(name, "BCompare.exe", StringComparison.OrdinalIgnoreCase)))
+                        { result.BeyondComparePath = legacy; break; }
+                    }
+                    catch (ArgumentException) { }
+                }
+            }
             result.UseBuiltInDiff = (bool?)doc.Root.Element("UseBuiltInDiff") ?? false;
             result.UseBuiltInMerge = (bool?)doc.Root.Element("UseBuiltInMerge") ?? false;
             double seconds;
@@ -110,10 +133,18 @@ namespace TortoiseSCM
         public void Save()
         {
             if (Timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException("Timeout");
-            if (!UseBuiltInDiff) PlasticToolArguments.ValidateConfiguration(DiffToolPath, DiffToolArguments, false);
-            if (!UseBuiltInMerge) PlasticToolArguments.ValidateConfiguration(MergeToolPath, MergeToolArguments, true);
+            if (UseBeyondCompare)
+            {
+                if (!String.IsNullOrWhiteSpace(BeyondComparePath)) BeyondComparePath = BeyondCompareTool.NormalizeExecutable(BeyondComparePath);
+            }
+            else
+            {
+                if (!UseBuiltInDiff) PlasticToolArguments.ValidateConfiguration(DiffToolPath, DiffToolArguments, false);
+                if (!UseBuiltInMerge) PlasticToolArguments.ValidateConfiguration(MergeToolPath, MergeToolArguments, true);
+            }
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SettingsPath));
             new XDocument(new XElement("TortoiseSCM", new XElement("CmPath", CmPath), new XElement("GluonPath", GluonPath),
+                new XElement("BeyondComparePath", BeyondComparePath),
                 new XElement("DiffToolPath", DiffToolPath), new XElement("DiffToolArguments", DiffToolArguments),
                 new XElement("MergeToolPath", MergeToolPath), new XElement("MergeToolArguments", MergeToolArguments),
                 new XElement("UseBuiltInDiff", UseBuiltInDiff), new XElement("UseBuiltInMerge", UseBuiltInMerge),

@@ -11,11 +11,10 @@ namespace TortoiseSCM
         private readonly TextBox cm = new TextBox();
         private readonly TextBox gluon = new TextBox();
         private readonly TextBox diffTool = new TextBox();
-        private readonly TextBox diffArgs = new TextBox();
         private readonly TextBox mergeTool = new TextBox();
-        private readonly TextBox mergeArgs = new TextBox();
-        private readonly CheckBox builtInDiff = new CheckBox();
-        private readonly CheckBox builtInMerge = new CheckBox();
+        private readonly Label diffStatus = new Label();
+        private readonly Label mergeStatus = new Label();
+        private bool synchronizingPath;
         private readonly NumericUpDown timeout = new NumericUpDown();
         private readonly PlasticClientConfig config;
 
@@ -28,8 +27,7 @@ namespace TortoiseSCM
             MinimumSize = new Size(740, 470);
             MaximizeBox = false;
             cm.Text = config.CmPath; gluon.Text = config.GluonPath;
-            diffTool.Text = config.DiffToolPath; diffArgs.Text = config.DiffToolArguments;
-            mergeTool.Text = config.MergeToolPath; mergeArgs.Text = config.MergeToolArguments;
+            diffTool.Text = config.BeyondComparePath; mergeTool.Text = config.BeyondComparePath;
             timeout.Minimum = 1; timeout.Maximum = 120;
             timeout.Value = Math.Max(1, Math.Min(120, (decimal)config.Timeout.TotalMinutes));
 
@@ -42,16 +40,18 @@ namespace TortoiseSCM
                 ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, Margin = new Padding(0, 0, DialogStyle.Gap, 0), AccessibleName = "设置类别" };
             var pages = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             var clientPage = CreatePage("客户端", "使用 Plastic 客户端已有的登录配置。");
-            var diffPage = CreatePage("差异查看器", "选择内置文本比较，或配置外部程序。外部程序留空时使用官方查看器。");
-            var mergePage = CreatePage("合并工具", "选择内置三方文本编辑器，或配置外部程序。保存结果后仍需明确确认应用。");
+            var diffPage = CreatePage("差异查看器", "统一使用 Beyond Compare。比较和合并共用以下程序路径；留空时自动检测安装位置。");
+            var mergePage = CreatePage("合并工具", "统一使用 Beyond Compare。三方文本合并需要 Beyond Compare Pro 许可证。");
             AddPath(clientPage, 1, "cm.exe", cm); AddPath(clientPage, 2, "gluon.exe", gluon);
-            clientPage.Controls.Add(FieldLabel("超时（分钟）"), 0, 3); clientPage.Controls.Add(timeout, 1, 3);
-            AddPath(diffPage, 1, "程序", diffTool); AddArguments(diffPage, 2, diffArgs);
-            AddHint(diffPage, 3, "占位符：{base} 为基线，{local} 为本地文件。\r\n示例：\"{base}\" \"{local}\"\r\n工具应等待窗口关闭后退出；如工具支持，请加 --wait。");
-            AddPath(mergePage, 1, "程序", mergeTool); AddArguments(mergePage, 2, mergeArgs);
-            AddHint(mergePage, 3, "占位符：{base}、{local}、{remote}、{merged}。\r\n示例：\"{base}\" \"{local}\" \"{remote}\" \"{merged}\"\r\n等待工具退出后可检查结果；不会自动标记冲突已解决。");
-            AddBuiltInChoice(diffPage, builtInDiff, "使用内置文本比较", config.UseBuiltInDiff);
-            AddBuiltInChoice(mergePage, builtInMerge, "使用内置三方文本编辑器", config.UseBuiltInMerge);
+            clientPage.Controls.Add(FieldLabel("Plastic 命令\r\n超时（分钟）"), 0, 3); clientPage.Controls.Add(timeout, 1, 3);
+            AddHint(clientPage, 4, "此超时只限制 Plastic 命令，不限制 Beyond Compare 编辑时间。");
+            AddBeyondComparePath(diffPage, diffTool, diffStatus);
+            AddBeyondComparePath(mergePage, mergeTool, mergeStatus);
+            AddHint(diffPage, 3, "比较参数由 TortoiseSCM 固定管理。\r\n左侧：基线或较早版本；右侧：本地文件或较新版本。\r\n请关闭本次比较窗口后返回；无需配置参数模板。");
+            AddHint(mergePage, 3, "合并参数由 TortoiseSCM 固定管理。\r\n左侧：本地；右侧：远程；祖先：基线；输出：合并结果。\r\n保存并关闭 Beyond Compare 后，仍需在 TortoiseSCM 中明确应用结果；不会自动解决冲突或签入。");
+            diffTool.TextChanged += delegate { SynchronizePath(diffTool, mergeTool); };
+            mergeTool.TextChanged += delegate { SynchronizePath(mergeTool, diffTool); };
+            UpdateBeyondCompareStatus();
             var merge = DialogStyle.Button("打开合并工具…"); merge.Width = 130;
             merge.Click += delegate
             {
@@ -90,8 +90,8 @@ namespace TortoiseSCM
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 95));
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 98));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             AddHint(grid, 0, introduction); box.Controls.Add(grid); return grid;
@@ -111,31 +111,47 @@ namespace TortoiseSCM
 
         private void ApplyTools()
         {
-            if (!builtInDiff.Checked) PlasticToolArguments.ValidateConfiguration(diffTool.Text.Trim(), diffArgs.Text, false);
-            if (!builtInMerge.Checked) PlasticToolArguments.ValidateConfiguration(mergeTool.Text.Trim(), mergeArgs.Text, true);
-            config.DiffToolPath = diffTool.Text.Trim(); config.DiffToolArguments = diffArgs.Text;
-            config.MergeToolPath = mergeTool.Text.Trim(); config.MergeToolArguments = mergeArgs.Text;
-            config.UseBuiltInDiff = builtInDiff.Checked; config.UseBuiltInMerge = builtInMerge.Checked;
+            string path = diffTool.Text.Trim();
+            config.BeyondComparePath = path.Length == 0 ? String.Empty : BeyondCompareTool.NormalizeExecutable(path);
+            config.UseBeyondCompare = true;
+            diffTool.Text = config.BeyondComparePath;
             config.Timeout = TimeSpan.FromMinutes((double)timeout.Value);
         }
 
         private static Label FieldLabel(string text)
-        { return new Label { Text = text, AutoSize = true, Padding = new Padding(0, 4, 0, 0) }; }
+        { return new Label { Text = text, Dock = DockStyle.Fill, Padding = new Padding(0, 4, 0, 0) }; }
 
-        private static void AddBuiltInChoice(TableLayoutPanel grid, CheckBox choice, string text, bool selected)
+        private void SynchronizePath(TextBox source, TextBox destination)
         {
-            choice.Text = text; choice.AutoSize = true; choice.AccessibleName = text;
-            grid.Controls.Add(choice, 0, 4); grid.SetColumnSpan(choice, 3);
-            Action update = delegate
+            if (synchronizingPath) return;
+            synchronizingPath = true;
+            try { destination.Text = source.Text; }
+            finally { synchronizingPath = false; }
+            UpdateBeyondCompareStatus();
+        }
+
+        private void UpdateBeyondCompareStatus()
+        {
+            string status;
+            try
             {
-                foreach (Control control in grid.Controls)
-                {
-                    int row = grid.GetRow(control);
-                    if (row == 1 || row == 2) control.Enabled = !choice.Checked;
-                }
-            };
-            choice.CheckedChanged += delegate { update(); };
-            choice.Checked = selected; update();
+                string resolved = BeyondCompareTool.ResolveExecutable(diffTool.Text.Trim());
+                status = String.IsNullOrEmpty(resolved) ? "未找到 Beyond Compare。请安装后点击“自动检测”，或浏览选择 BComp.exe。"
+                    : "已找到 BComp.exe。比较与合并使用同一路径；三方合并需要 Pro 许可证。";
+            }
+            catch (Exception) { status = "未找到可用的 Beyond Compare。请安装后点击“自动检测”，或浏览选择 BComp.exe。"; }
+            diffStatus.Text = status; mergeStatus.Text = status;
+        }
+
+        private void AddBeyondComparePath(TableLayoutPanel grid, TextBox input, Label status)
+        {
+            AddPath(grid, 1, "BComp.exe", input, true);
+            var detect = DialogStyle.Button("自动检测");
+            detect.AccessibleName = "自动检测 Beyond Compare";
+            detect.Click += delegate { input.Text = BeyondCompareTool.FindExecutable() ?? String.Empty; UpdateBeyondCompareStatus(); };
+            grid.Controls.Add(detect, 1, 2);
+            status.Dock = DockStyle.Fill; status.AccessibleName = "Beyond Compare 状态";
+            grid.Controls.Add(status, 0, 4); grid.SetColumnSpan(status, 3);
         }
 
         private static void AddHint(TableLayoutPanel grid, int row, string text)
@@ -144,14 +160,7 @@ namespace TortoiseSCM
             grid.Controls.Add(label, 0, row); grid.SetColumnSpan(label, 3);
         }
 
-        private static void AddArguments(TableLayoutPanel grid, int row, TextBox input)
-        {
-            grid.Controls.Add(FieldLabel("参数"), 0, row);
-            input.Dock = DockStyle.Fill; input.AccessibleName = "参数模板";
-            grid.Controls.Add(input, 1, row); grid.SetColumnSpan(input, 2);
-        }
-
-        private static void AddPath(TableLayoutPanel grid, int row, string label, TextBox input)
+        private static void AddPath(TableLayoutPanel grid, int row, string label, TextBox input, bool beyondCompare = false)
         {
             grid.Controls.Add(FieldLabel(label), 0, row);
             input.Dock = DockStyle.Fill; input.AccessibleName = label;
@@ -160,7 +169,11 @@ namespace TortoiseSCM
             browse.Click += delegate
             {
                 using (var picker = new OpenFileDialog { Filter = "Windows 程序 (*.exe)|*.exe", FileName = input.Text })
-                    if (picker.ShowDialog() == DialogResult.OK) input.Text = picker.FileName;
+                    if (picker.ShowDialog() == DialogResult.OK)
+                    {
+                        try { input.Text = beyondCompare ? BeyondCompareTool.NormalizeExecutable(picker.FileName) : picker.FileName; }
+                        catch (Exception ex) { MessageBox.Show(input.FindForm(), ex.Message, "TortoiseSCM"); }
+                    }
             };
             grid.Controls.Add(browse, 2, row);
         }

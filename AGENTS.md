@@ -5,3 +5,4 @@
 - The Plastic client is built from `src/TortoiseSCM.sln`; the retained upstream `src/TortoiseGit.sln` is still the Git client.
 - GUI changes should follow the native TortoiseGit/TortoiseSVN dialog conventions. Use `src/Resources/TortoiseProcENG.rc` and the corresponding `src/TortoiseProc` dialogs as references, and verify normal and minimum-size rendering.
 - Test repository server writes belong on dedicated `tortoisescm-autotest-*` branches and isolated workspaces. Preserve the original `TestSCM` workspace selector and existing files.
+- The product standardizes comparison and merge tools on Beyond Compare. Prioritize its integration and Plastic workflows; do not expand the retained in-process editors as a competing product direction. Three-way text merge requires Beyond Compare Pro.

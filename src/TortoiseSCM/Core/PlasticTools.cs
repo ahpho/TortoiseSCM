@@ -104,8 +104,10 @@ namespace TortoiseSCM
         public async Task<PlasticCommandResult> OpenDiffToolAsync(string path, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (config.UseBeyondCompare)
+                return await OpenPreparedDiffAsync(path, null, BeyondCompareTool.ResolveExecutable(config.BeyondComparePath), cancellationToken).ConfigureAwait(false);
             if (config.UseBuiltInDiff)
-                return await OpenBuiltInDiffAsync(path, RequireToolHost(), cancellationToken).ConfigureAwait(false);
+                return await OpenPreparedDiffAsync(path, RequireToolHost(), null, cancellationToken).ConfigureAwait(false);
             if (String.IsNullOrWhiteSpace(config.DiffToolPath))
                 return await RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Diff, Paths = new List<string> { path },
                     WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) }, cancellationToken).ConfigureAwait(false);
@@ -142,7 +144,7 @@ namespace TortoiseSCM
             }
         }
 
-        private async Task<PlasticCommandResult> OpenBuiltInDiffAsync(string path, IPlasticToolHost host, CancellationToken token)
+        private async Task<PlasticCommandResult> OpenPreparedDiffAsync(string path, IPlasticToolHost host, string beyondCompare, CancellationToken token)
         {
             var command = await BuildReadCommandAsync(path, token).ConfigureAwait(false);
             string local = command.Arguments[1];
@@ -159,10 +161,11 @@ namespace TortoiseSCM
             if (file == null || !Int64.TryParse((string)file.Element("RevisionChangeset"), out changeset) || changeset < 0)
                 throw new InvalidOperationException("The file has no checked-in base revision to compare.");
             if (String.Equals((string)file.Element("IsUnderXlink"), "true", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Cross-repository linked files cannot be compared with the built-in tool.");
+                throw new ArgumentException("Cross-repository linked files cannot be compared with this tool.");
             long itemId = await BuiltInToolItemIdAsync(context, local, token).ConfigureAwait(false);
             string temporary = NewHistoricalTemporaryDirectory();
             string before = Path.Combine(temporary, "base" + Path.GetExtension(local));
+            bool preserve = false;
             try
             {
                 // Resolve the checked-in path using native identity: a local rename
@@ -176,9 +179,13 @@ namespace TortoiseSCM
                 ValidateHistoricalContext(context);
                 File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
                 token.ThrowIfCancellationRequested();
-                return await host.ShowDiffAsync(before, local, token).ConfigureAwait(false);
+                if (host != null) return await host.ShowDiffAsync(before, local, token).ConfigureAwait(false);
+                return await BeyondCompareProcess.RunAsync(beyondCompare,
+                    PlasticToolArguments.Expand(BeyondCompareTool.DiffArguments,
+                        new Dictionary<string, string> { { "base", before }, { "local", local } }, false), temporary, token).ConfigureAwait(false);
             }
-            finally { RemoveHistoricalTemporaryDirectory(temporary, before); }
+            catch (BeyondCompareWaitException) { preserve = true; throw; }
+            finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before); }
         }
 
         private async Task<long> BuiltInToolItemIdAsync(PlasticWorkspace context, string path, CancellationToken token)
@@ -202,8 +209,9 @@ namespace TortoiseSCM
 
         private async Task<PlasticCommandResult> RunMergeToolLockedAsync(string basePath, string localPath, string remotePath, string mergedPath, CancellationToken cancellationToken)
         {
-            var host = config.UseBuiltInMerge ? RequireToolHost() : null;
-            if (host == null)
+            string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
+            var host = !config.UseBeyondCompare && config.UseBuiltInMerge ? RequireToolHost() : null;
+            if (host == null && beyondCompare == null)
             {
                 if (String.IsNullOrWhiteSpace(config.MergeToolPath)) throw new InvalidOperationException("Configure an external merge tool in TortoiseSCM settings first.");
                 PlasticToolArguments.ValidateConfiguration(config.MergeToolPath, config.MergeToolArguments, true);
@@ -218,6 +226,11 @@ namespace TortoiseSCM
             cancellationToken.ThrowIfCancellationRequested();
             if (host != null)
                 return await host.ShowMergeAsync(inputs[0], inputs[1], inputs[2], output, cancellationToken).ConfigureAwait(false);
+            if (beyondCompare != null)
+                return await BeyondCompareProcess.RunAsync(beyondCompare,
+                    PlasticToolArguments.Expand(BeyondCompareTool.MergeArguments, new Dictionary<string, string> {
+                        { "base", inputs[0] }, { "local", inputs[1] }, { "remote", inputs[2] }, { "merged", output } }, true),
+                    Path.GetDirectoryName(output), cancellationToken).ConfigureAwait(false);
             return await ExecuteAsync(new PlasticProcessCommand { FileName = config.MergeToolPath, WorkingDirectory = Path.GetDirectoryName(output),
                 Arguments = PlasticToolArguments.Expand(config.MergeToolArguments, new Dictionary<string, string> {
                     { "base", inputs[0] }, { "local", inputs[1] }, { "remote", inputs[2] }, { "merged", output } }, true) }, cancellationToken).ConfigureAwait(false);

@@ -356,3 +356,14 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 完整 `build-tortoisescm.ps1 -Test -Workspace` 回归通过（`qa/block-merge-release.log`），包括 2,076 项 CLI、后端、Shell/现代菜单及整套 GUI 检查。该轮主 EXE 构建后补充了界面提示及格式专用块导航修正；最终 GUI 源码已由逐块套件及完整 UI 编译检查覆盖，并重新构建发布程序（`qa/block-merge-final-build.log`）。安装包、隔离安装及卸载 44 项检查通过（`qa/block-merge-package.log`）。
 - 最终程序 SHA-256、构建时间与源码提交记录于 `qa/block-merge-release-record.json`；发布包为 `packages/TortoiseSCM-0.1.0-dev-block-merge-20260928-windows-x64.zip`。原 TestSCM 仍无待定更改且保持 `/main`，服务器写入均位于独立测试分支。
 - 该阶段仍不持久化跨会话核查状态，不支持自由编辑后自动重建安全块映射，也未完成实际 Explorer 点击、多 DPI 或整套上游 TortoiseMerge 功能对齐。
+
+# Beyond Compare 统一工具配置与会话（2026-09-28）
+
+- 产品方向改为统一 BC，停止内置编辑器扩展；路线图审视已单独提交 `b623dfd7d`。新旧应用配置均使用固定 BC profile，旧字段留存但不参与产品路由。显式旧 BC 路径迁移、共用新路径、自动发现、BCompare→BComp 归一化、缺失配置和固定参数 34 项通过（`qa/beyond-compare-profile-final.log`）。CLI 使用 `--beyond-compare`；旧工具/参数选项明确提示迁移。
+- 新进程契约 22 项通过（完整回归日志内）：真实辅助进程验证三方顺序、中文/空格路径、只读参数、工作文件改名按身份读取、固定历史端点、源文件不变、正常退出后清理、超短 SCM 超时不影响编辑、取消等待工具关闭、非零退出及 102 等待失败保留贡献目录。辅助进程不是 BC 产品，不能替代 BC 桌面验收。
+- 设置窗口共用路径、固定角色、Pro 提示、程序缺失状态及普通/最小尺寸 52 项通过（`qa/beyond-compare-settings-ui.log`）。`qa/beyond-compare-settings/settings-diff*.png`、`settings-merge*.png` 已生成并目视检查，无按钮遮挡；这些仍属于进程内 WinForms 检查。
+- 完整 `build-tortoisescm.ps1 -Test -Workspace` 通过（`qa/beyond-compare-regression.log`）：2,082 项 CLI、后端、Shell/现代菜单和整套 GUI。完整回归后仅补充旧 BC 显式路径迁移，并通过最终 34 项配置检查及重新构建（`qa/beyond-compare-final-build.log`）；工具进程和 UI 实现未在此后改动。
+- 最终 Core 的真实 Plastic + BC 辅助进程集成 35 项通过（`qa/beyond-compare-live-final.log`），fixture 为 `qa/integration-20260928-124354-206bc33b/manifest.json`，结果为相邻 `bc-contract-results.json`。覆盖受控改名、Partial 加载基线、历史固定端点、Standard/Partial 三方字节、保存仍未解决、明确应用及签入、独立消费者精确内容、selector/加载规则。首轮辅助测试 XML 换行归一化使 CRLF 期望值不匹配，已改用 Base64 传输精确字节；失败 fixture 保留且不计入通过。
+- 实际已安装 BC 4 经发布 EXE 启动三方窗口，命令行角色和独立实例参数正确；配置 SCM 超时 1 秒，进程仍等待 72 秒且未自动生成结果。证据 `qa/bc-desktop-20260928-124541/launch-evidence.json`。Computer Use 原生管道缺失，按重试/重置流程仍不可用，故未确认窗口内只读表现、保存/放弃、已有实例并行或 DPI；验证后只终止了命令行确认为本次隔离 fixture 的测试进程，不计为正常关闭验收。
+- 安装包/隔离安装/卸载 44 项通过（`qa/beyond-compare-package.log`）。源码提交、最终 EXE 和 ZIP 哈希记录于 `qa/beyond-compare-release-record.json`；发布包 `packages/TortoiseSCM-0.1.0-dev-beyond-compare-20260928-windows-x64.zip`。原 TestSCM 保持干净及 `/main`，服务器写入均位于隔离测试分支。
+- 后续边界：历史主“比较”及暂存集文本预览尚待改为 BC 入口，新增/删除空侧比较尚未实现；BC 5、BC 4 保存/放弃与多 DPI 仍需实机验收。等待异常 102 时不能推断子窗口状态，贡献文件保留并要求用户先关闭对应窗口；不根据工具退出码认定 Plastic 已解决。

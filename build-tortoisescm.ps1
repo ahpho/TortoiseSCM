@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -90,6 +90,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\RevisionGraphUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\TextEditorUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\TextMergePlanUiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BeyondCompareSettingsUiTests.cs'
     $uiOutput = Join-Path $out 'UiTests.exe'
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.UiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$uiOutput" $uiSources
     if ($LASTEXITCODE -ne 0) { throw 'UI test compilation failed.' }
@@ -117,6 +118,11 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-builtin-tools.txt'), $builtInManifest)
         & $builtInOutput $builtInManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Built-in tools integration tests failed. Inspect $builtInManifest." }
+        $bcManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $bcManifest -or -not (Test-Path -LiteralPath $bcManifest)) { throw 'Beyond Compare contract fixture setup failed.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-beyond-compare.txt'), $bcManifest)
+        & $builtInOutput $bcManifest 'D:\Program Files\PlasticSCM5\client\cm.exe' --bc-contract
+        if ($LASTEXITCODE -ne 0) { throw "Beyond Compare contract integration tests failed. Inspect $bcManifest." }
         $comparisonManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $comparisonManifest -or -not (Test-Path -LiteralPath $comparisonManifest)) { throw 'Changeset comparison setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-comparison.txt'), $comparisonManifest)

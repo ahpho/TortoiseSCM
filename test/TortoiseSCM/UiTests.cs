@@ -29,6 +29,10 @@ namespace TortoiseSCM
                 uiContext = new WindowsFormsSynchronizationContext();
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 2 && args[0] == "--bc-settings-ui")
+                {
+                    BeyondCompareSettingsUiTests.Run(args[1]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--graph-ui")
                 {
                     Directory.CreateDirectory(args[1]); RevisionGraphUiTests.Run(args[1]); return 0;
@@ -84,30 +88,7 @@ namespace TortoiseSCM
                 catch (ArgumentException) { }
                 try { LaunchRequest.Parse(new[] { "--pathfile", Path.Combine(artifacts, "foreign.txt") }); throw new Exception("Foreign path file accepted"); }
                 catch (ArgumentException) { }
-                using (var settings = new SettingsForm())
-                {
-                    Prepare(settings);
-                    Save(settings, Path.Combine(artifacts, "settings.png"));
-                    var tree = Descendants(settings).OfType<TreeView>().Single();
-                    tree.SelectedNode = tree.Nodes[1];
-                    Application.DoEvents();
-                    Require(((TextBox)Field(settings, "diffTool")).Visible && !((TextBox)Field(settings, "cm")).Visible, "Settings navigation shows the selected diff page");
-                    Save(settings, Path.Combine(artifacts, "settings-diff.png"));
-                    var builtInDiff = (CheckBox)Field(settings, "builtInDiff");
-                    builtInDiff.Checked = true;
-                    Require(!((TextBox)Field(settings, "diffTool")).Enabled && !((TextBox)Field(settings, "diffArgs")).Enabled,
-                        "Built-in diff selection disables external controls");
-                    Save(settings, Path.Combine(artifacts, "settings-builtin-diff.png"));
-                    tree.SelectedNode = tree.Nodes[1].Nodes[0];
-                    Application.DoEvents();
-                    Require(((TextBox)Field(settings, "mergeTool")).Visible && !((TextBox)Field(settings, "diffTool")).Visible, "Settings navigation shows the selected merge page");
-                    settings.Size = settings.MinimumSize;
-                    ((CheckBox)Field(settings, "builtInMerge")).Checked = true;
-                    Application.DoEvents();
-                    Require(!((TextBox)Field(settings, "mergeTool")).Enabled, "Built-in merge selection disables external program");
-                    Save(settings, Path.Combine(artifacts, "settings-merge-minimum.png"));
-                    settings.Close();
-                }
+                BeyondCompareSettingsUiTests.Run(artifacts);
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);

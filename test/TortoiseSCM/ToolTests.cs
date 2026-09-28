@@ -26,6 +26,7 @@ internal static class ToolTests
                 MergeToolArguments = "--tool-merge \"{base}\" \"{local}\" \"{remote}\" \"{merged}\"", Timeout = TimeSpan.FromSeconds(10) };
             config.Save();
             var loaded = PlasticClientConfig.Load(settings);
+            loaded.UseBeyondCompare = false; // Exercise the retained injectable generic adapter, not the product profile.
             Check(loaded.DiffToolPath == exe && loaded.MergeToolArguments == config.MergeToolArguments && loaded.SettingsPath == settings, "Custom tools persist in isolated settings");
             string before = File.ReadAllText(settings);
             config.MergeToolArguments = "{base} {local} {remote}";

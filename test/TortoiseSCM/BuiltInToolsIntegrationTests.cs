@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,16 +20,19 @@ internal static class BuiltInToolsIntegrationTests
     private static readonly List<object> Evidence = new List<object>();
     private static string run, cm, branch, repository;
     private static int assertions;
+    private static bool beyondCompare;
 
     private static int Main(string[] args)
     {
-        try { Run(args).GetAwaiter().GetResult(); Save(true, null); Console.WriteLine("PASS: " + assertions + " built-in tool live assertions"); return 0; }
+        if (args.Length > 0 && args[0] == "/solo") return BeyondCompareChild(args);
+        try { Run(args).GetAwaiter().GetResult(); Save(true, null); Console.WriteLine("PASS: " + assertions + (beyondCompare ? " BC contract live assertions" : " built-in tool live assertions")); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error); Save(false, error.ToString()); return 1; }
     }
 
     private static async Task Run(string[] args)
     {
-        if (args.Length != 2) throw new ArgumentException("Usage: BuiltInToolsIntegrationTests.exe <manifest.json> <cm.exe>");
+        if (args.Length != 2 && (args.Length != 3 || args[2] != "--bc-contract")) throw new ArgumentException("Usage: BuiltInToolsIntegrationTests.exe <manifest.json> <cm.exe> [--bc-contract]");
+        beyondCompare = args.Length == 3;
         var manifest = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(args[0], Utf8));
         run = Path.GetFullPath((string)manifest["runDirectory"]); cm = args[1];
         branch = (string)manifest["branch"]; repository = (string)manifest["repository"];
@@ -41,6 +45,12 @@ internal static class BuiltInToolsIntegrationTests
             Check(String.IsNullOrWhiteSpace(Native(workspace, "status", "--short", "--machinereadable")), "Fresh fixture has no pending changes");
         }
         var config = new PlasticClientConfig { CmPath = cm, SettingsPath = Path.Combine(run, "builtin-settings.xml"), UseBuiltInDiff = true, UseBuiltInMerge = true };
+        if (beyondCompare)
+        {
+            config.UseBeyondCompare = true; config.BeyondComparePath = Path.Combine(run, "BComp.exe");
+            File.Copy(Assembly.GetExecutingAssembly().Location, config.BeyondComparePath);
+            Environment.SetEnvironmentVariable("TSCM_BC_LIVE_EXPECTATION", Path.Combine(run, "bc-expectation.xml"));
+        }
         var host = new RecordingHost(); var client = new PlasticClient(config) { ToolHost = host };
         const string name = "内置 compare.txt",
             baseText = "header\r\nleft base\r\nanchor one\r\nbase 中文\r\nanchor two\r\nright base\r\nfooter\r\n",
@@ -51,10 +61,10 @@ internal static class BuiltInToolsIntegrationTests
         File.WriteAllText(file, baseText, Utf8); Native(producer, "add", file); Native(producer, "checkin", producer, "-c=Built-in tools common base");
         long baseCs = Revision(file);
         File.WriteAllText(file, localText, Utf8); host.Before = baseText; host.After = localText;
-        Check((await client.OpenDiffToolAsync(file, Token)).Succeeded, "Real working diff routes into built-in host");
+        PrepareTool(host); Check((await client.OpenDiffToolAsync(file, Token)).Succeeded, "Real working diff routes into selected tool"); ReadReceipt(host);
         Check(!File.Exists(host.LastBase), "Working baseline cleaned after host returns");
         Native(producer, "move", file, renamed);
-        Check((await client.OpenDiffToolAsync(renamed, Token)).Succeeded, "Renamed file compares its actual checked-in identity");
+        PrepareTool(host); Check((await client.OpenDiffToolAsync(renamed, Token)).Succeeded, "Renamed file compares its actual checked-in identity"); ReadReceipt(host);
         Native(producer, "undo", producer, "--recursive");
         Check(File.ReadAllText(file, Utf8) == baseText && !File.Exists(renamed), "Isolated rename fixture restored");
         string sourceBranch = branch + "/builtin-source";
@@ -63,14 +73,14 @@ internal static class BuiltInToolsIntegrationTests
         File.WriteAllText(other, remoteText, Utf8); Native(consumer, "checkin", other, "-c=Built-in remote version"); long remoteCs = Revision(other);
         File.WriteAllText(file, localText, Utf8); Native(producer, "checkin", file, "-c=Built-in local version"); long localCs = Revision(file);
         host.Before = baseText; host.After = localText;
-        Check((await client.OpenRevisionDiffToolAsync(producer, "/" + name, baseCs, localCs, Token)).Succeeded, "Fixed historical endpoints use built-in diff");
+        PrepareTool(host); Check((await client.OpenRevisionDiffToolAsync(producer, "/" + name, baseCs, localCs, Token)).Succeeded, "Fixed historical endpoints use selected tool"); ReadReceipt(host);
         Check(!File.Exists(host.LastBase) && !File.Exists(host.LastLocal), "Historical inputs live until host returns, then cleaned");
         string selector = File.ReadAllText(Path.Combine(producer, ".plastic", "plastic.selector"));
         var session = await client.BeginMergeAsync(producer, remoteCs, Token);
         Check(session.Plan.FileConflicts.Count == 1, "Native Standard content conflict prepared");
         var files = await client.PrepareMergeConflictAsync(producer, remoteCs, "/" + name, Token);
         host.Before = baseText; host.After = localText; host.Remote = remoteText; host.Merged = mergedText;
-        await client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, Token);
+        PrepareTool(host); Check((await client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, Token)).Succeeded, "Standard merge tool completes"); ReadReceipt(host);
         Check(File.ReadAllText(files.ResultPath, Utf8) == mergedText && File.ReadAllText(file, Utf8) == localText, "Editor saves only independent result with CRLF preserved");
         Check(!(await client.GetMergeSessionAsync(producer, Token)).Plan.FileConflicts[0].Resolved, "Editor save never marks Standard conflict resolved");
         var resumed = new PlasticClient(config) { ToolHost = host };
@@ -92,10 +102,10 @@ internal static class BuiltInToolsIntegrationTests
         selector = File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.selector"));
         string load = File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.fullycheckeddirectories"));
         host.Before = mergedText; host.After = partialLocal;
-        Check((await client.OpenDiffToolAsync(partialFile, Token)).Succeeded, "Partial diff uses loaded base rather than incoming HEAD");
+        PrepareTool(host); Check((await client.OpenDiffToolAsync(partialFile, Token)).Succeeded, "Partial diff uses loaded base rather than incoming HEAD"); ReadReceipt(host);
         files = await client.PreparePartialConflictAsync(partial, "/" + name, Token);
         host.Remote = incoming; host.Merged = incoming.Replace("local only", "partial local only");
-        await client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, Token);
+        PrepareTool(host); Check((await client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, Token)).Succeeded, "Partial merge tool completes"); ReadReceipt(host);
         Check(!(await client.GetPartialConflictSessionAsync(partial, Token)).Conflicts[0].Resolved && File.ReadAllText(partialFile, Utf8) == partialLocal, "Saving Partial result preserves unresolved state and local bytes");
         Check((await client.ResolvePartialConflictAsync(partial, "/" + name, files.ResultPath, Token)).Succeeded, "Partial explicit apply accepts editor output");
         Check(File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.selector")) == selector && File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.fullycheckeddirectories")) == load, "Partial selector and loading rules preserved");
@@ -132,6 +142,38 @@ internal static class BuiltInToolsIntegrationTests
             return Task.FromResult(new PlasticCommandResult());
         }
     }
+    private static void PrepareTool(RecordingHost host)
+    {
+        if (!beyondCompare) return;
+        File.Delete(Path.Combine(run, "bc-receipt.xml"));
+        new XDocument(new XElement("expected", new XElement("base", Encode(host.Before)), new XElement("local", Encode(host.After)),
+            new XElement("remote", Encode(host.Remote)), new XElement("merged", Encode(host.Merged)))).Save(Path.Combine(run, "bc-expectation.xml"));
+    }
+    private static void ReadReceipt(RecordingHost host)
+    {
+        if (!beyondCompare) return;
+        var receipt = XDocument.Load(Path.Combine(run, "bc-receipt.xml")).Root;
+        host.LastBase = (string)receipt.Element("base"); host.LastLocal = (string)receipt.Element("local");
+        Check((bool)receipt.Element("matched"), "BC helper receives exact real Plastic contributors in fixed roles");
+    }
+    private static int BeyondCompareChild(string[] args)
+    {
+        string expectation = Environment.GetEnvironmentVariable("TSCM_BC_LIVE_EXPECTATION");
+        var expected = XDocument.Load(expectation).Root;
+        bool merge = args.Any(a => a.StartsWith("/mergeoutput="));
+        if (!args.Contains("/readonly")) return 17;
+        string baseline = args[merge ? 4 : 2], local = args[merge ? 2 : 3];
+        bool matched = File.ReadAllText(baseline, Utf8) == Decode(expected, "base") &&
+            File.ReadAllText(local, Utf8) == Decode(expected, "local") &&
+            (!merge || File.ReadAllText(args[3], Utf8) == Decode(expected, "remote"));
+        new XDocument(new XElement("receipt", new XElement("base", baseline), new XElement("local", local), new XElement("matched", matched)))
+            .Save(Path.Combine(Path.GetDirectoryName(expectation), "bc-receipt.xml"));
+        if (!matched) return 18;
+        if (merge) File.WriteAllText(args.Single(a => a.StartsWith("/mergeoutput=")).Substring(13), Decode(expected, "merged"), Utf8);
+        return 0;
+    }
+    private static string Encode(string text) { return Convert.ToBase64String(Utf8.GetBytes(text ?? "")); }
+    private static string Decode(XElement expected, string name) { return Utf8.GetString(Convert.FromBase64String((string)expected.Element(name))); }
     private static long Revision(string path)
     { return (long)XDocument.Parse(Native(Path.GetDirectoryName(path), "fileinfo", path, "--xml")).Descendants("FileInfo").Single().Element("RevisionChangeset"); }
     private static string Native(string cwd, params string[] arguments)
@@ -152,5 +194,5 @@ internal static class BuiltInToolsIntegrationTests
     private static void Check(bool value, string description)
     { assertions++; Evidence.Add(new { description, success = value }); if (!value) throw new Exception(description); }
     private static void Save(bool success, string error)
-    { if (run != null) File.WriteAllText(Path.Combine(run, "builtin-tools-results.json"), new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue }.Serialize(new { success, assertions, error, evidence = Evidence }), Utf8); }
+    { if (run != null) File.WriteAllText(Path.Combine(run, beyondCompare ? "bc-contract-results.json" : "builtin-tools-results.json"), new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue }.Serialize(new { success, assertions, error, evidence = Evidence }), Utf8); }
 }

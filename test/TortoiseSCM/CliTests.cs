@@ -18,6 +18,7 @@ internal static class CliTests
     private static int assertions;
     private static string application;
     private static string fakeCm;
+    private static string fakeBc;
     private static string temporary;
     private static string mergeSettingsDirectory;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
@@ -36,6 +37,7 @@ internal static class CliTests
             application = Path.GetFullPath(args[0]);
             fakeCm = Assembly.GetExecutingAssembly().Location;
             Directory.CreateDirectory(Path.Combine(temporary, ".plastic"));
+            fakeBc = Path.Combine(temporary, "BComp.exe"); File.Copy(fakeCm, fakeBc);
             File.WriteAllText(Path.Combine(temporary, ".plastic", "plastic.workspace"), "CLI 中文\r\nguid\r\nStandard\r\n", new UTF8Encoding(false));
             File.WriteAllText(Path.Combine(temporary, ".plastic", "plastic.selector"), "repository \"test@server:8087\"\r\n path \"/\"\r\n smartbranch \"/main\"\r\n");
             Check(Run(0, "--help")["output"].ToString().Contains("--commentsfile"), "Help is machine-readable without paths");
@@ -591,24 +593,23 @@ internal static class CliTests
         var defaults = Data(Run(0, "--command", "settings", "--settings-file", settings));
         Check(((Dictionary<string, object>)defaults["settings"])["settingsFile"].ToString() == settings, "Settings get uses isolated path");
         Check(!File.Exists(settings), "Settings get does not create a file");
-        string diffArgs = "--tool-diff \"{base}\" \"{local}\" \"literal & | % ! 中文\"";
-        string mergeArgs = "--tool-merge \"{base}\" \"{local}\" \"{remote}\" \"{merged}\"";
-        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--diff-tool", fakeCm,
-            "--diff-args", diffArgs, "--merge-tool", fakeCm, "--merge-args", mergeArgs);
+        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--beyond-compare", fakeBc);
         var saved = (Dictionary<string, object>)Data(Run(0, "--command", "settings", "--settings-file", settings))["settings"];
-        Check(saved["diffTool"].ToString() == fakeCm && saved["diffArgs"].ToString() == diffArgs && saved["mergeArgs"].ToString() == mergeArgs, "External tool settings round trip");
+        Check(saved["diffTool"].ToString() == fakeBc && saved["mergeTool"].ToString() == fakeBc && saved["toolProvider"].ToString() == "BeyondCompare", "Beyond Compare uses one persisted path for both tools");
         string previous = File.ReadAllText(settings);
         Run(2, "--command", "settings", "--settings-file", settings, "--yes", "--diff-args", "{unknown}");
         Check(File.ReadAllText(settings) == previous, "Invalid settings leave saved configuration intact");
+        Run(2, "--command", "settings", "--settings-file", settings, "--yes", "--beyond-compare", fakeCm);
+        Check(File.ReadAllText(settings) == previous, "A non-BC executable is rejected without replacing settings");
         var guiPreferences = XDocument.Load(settings);
         guiPreferences.Root.SetElementValue("UseBuiltInDiff", true);
         guiPreferences.Root.SetElementValue("UseBuiltInMerge", true);
         guiPreferences.Save(settings);
         var selected = (Dictionary<string, object>)Data(Run(0, "--command", "settings", "--settings-file", settings))["settings"];
-        Check((bool)selected["useBuiltInDiff"] && (bool)selected["useBuiltInMerge"], "CLI reports built-in GUI preferences");
+        Check(!(bool)selected["useBuiltInDiff"] && !(bool)selected["useBuiltInMerge"], "Product configuration overrides dormant built-in preferences");
         var diff = Run(0, "--command", "diff", "--external", "--path", controlled, "--cm", fakeCm, "--settings-file", settings);
         Check(Convert.ToBoolean(Data(diff)["external"]), "External diff mode reported");
-        Check(diff["output"].ToString().Contains("literal & | % ! 中文"), "External diff argv preserves metacharacters without a shell");
+        Check(diff["output"].ToString().Contains("Beyond Compare"), "External diff completes through the fixed BC profile");
         string basePath = Path.Combine(temporary, "base.txt"), localPath = Path.Combine(temporary, "local.txt"), remotePath = Path.Combine(temporary, "remote.txt"), mergedPath = Path.Combine(temporary, "merged 中文.txt");
         File.WriteAllText(basePath, "base"); File.WriteAllText(localPath, "local"); File.WriteAllText(remotePath, "remote");
         var merge = Run(0, "--command", "merge", "--yes", "--base", basePath, "--local", localPath, "--remote", remotePath, "--output", mergedPath, "--settings-file", settings);
@@ -618,11 +619,12 @@ internal static class CliTests
         Check(File.ReadAllText(basePath) == "base", "Merge output cannot overwrite an input");
         Run(2, "--command", "merge", "--base", basePath, "--local", localPath, "--remote", remotePath, "--output", mergedPath, "--settings-file", settings);
         Check((bool)XDocument.Load(settings).Root.Element("UseBuiltInDiff") && (bool)XDocument.Load(settings).Root.Element("UseBuiltInMerge"),
-            "CLI external diff and merge ignore GUI preferences without overwriting them");
-        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--diff-tool", "", "--merge-tool", "");
+            "Unified tool routing preserves dormant legacy preferences on disk");
+        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--beyond-compare", "");
         var cleared = (Dictionary<string, object>)Data(Run(0, "--command", "settings", "--settings-file", settings))["settings"];
-        Check(!(bool)cleared["useBuiltInDiff"] && !(bool)cleared["useBuiltInMerge"], "Explicit CLI external tool settings deselect built-in mode");
-        Check(cleared["diffTool"].ToString() == "" && cleared["mergeTool"].ToString() == "", "Empty tool paths clear configuration");
+        Check(!(bool)cleared["useBuiltInDiff"] && !(bool)cleared["useBuiltInMerge"], "Automatic detection still uses the Beyond Compare profile");
+        Check(cleared["beyondCompare"].ToString() == "", "Empty BC path requests automatic detection");
+        var absent = XDocument.Load(settings); absent.Root.SetElementValue("BeyondComparePath", Path.Combine(temporary, "absent", "BComp.exe")); absent.Save(settings);
         Run(1, "--command", "merge", "--yes", "--base", basePath, "--local", localPath, "--remote", remotePath, "--output", mergedPath, "--settings-file", settings);
         File.WriteAllText(settings, "<invalid-settings />");
         Run(1, "--command", "settings", "--settings-file", settings);
@@ -673,7 +675,7 @@ internal static class CliTests
         Run(2, "--command", "export", "--path", temporary, "--item", "/../outside", "--changeset", "1", "--output", output, "--yes", "--overwrite", "--cm", fakeCm);
         Run(2, "--command", "export", "--path", temporary, "--item", "/missing.txt", "--changeset", "1", "--output", output, "--yes", "--overwrite", "--cm", fakeCm);
         Check(File.ReadAllText(output, Encoding.UTF8) == "historical two 中文\n", "Missing historical source never truncates an overwrite destination");
-        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--diff-tool", fakeCm, "--diff-args", "--tool-diff \"{base}\" \"{local}\"");
+        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--beyond-compare", fakeBc);
         var external = Data(Run(0, "--command", "diff-history", "--path", temporary, "--item", "/deleted 中文.txt", "--from", "1", "--to", "1", "--external", "--cm", fakeCm, "--settings-file", settings));
         Check((bool)external["external"], "External historical comparison supports identical endpoints");
         var moved = Data(Run(0, "--command", "diff-history", "--path", temporary, "--from-item", "/old name.txt", "--item", "/new name.txt", "--from", "1", "--to", "2", "--cm", fakeCm));
@@ -760,7 +762,7 @@ internal static class CliTests
         File.WriteAllText(Path.Combine(temporary, "fake-clean.marker"), "clean");
         string file = Path.Combine(temporary, "merge-conflict.txt"), settings = Path.Combine(mergeSettingsDirectory, "settings.xml");
         File.WriteAllText(file, "merge local 中文\n", new UTF8Encoding(false));
-        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--merge-tool", fakeCm, "--merge-args", "--tool-merge \"{base}\" \"{local}\" \"{remote}\" \"{merged}\"");
+        Run(0, "--command", "settings", "--settings-file", settings, "--yes", "--beyond-compare", fakeBc);
         Check(Data(Run(0, "--command", "merge-status", "--path", temporary, "--cm", fakeCm, "--settings-file", settings))["sessionId"] == null, "Merge status reports no active session without opening UI");
         Run(2, "--command", "merge-prepare", "--path", temporary, "--changeset", "2", "--item", "/merge-conflict.txt", "--yes", "--cm", fakeCm, "--settings-file", settings);
         var plan = (Dictionary<string, object>)Data(Run(0, "--command", "merge-preview", "--path", temporary, "--changeset", "2", "--cm", fakeCm, "--settings-file", settings))["plan"];
@@ -813,6 +815,13 @@ internal static class CliTests
     private static int FakeCm(string[] args)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
+        if (args[0] == "/solo")
+        {
+            string mergeOutput = args.FirstOrDefault(a => a.StartsWith("/mergeoutput="));
+            if (!args.Contains("/readonly") || !args.Skip(2).Take(mergeOutput == null ? 2 : 3).All(File.Exists)) return 9;
+            if (mergeOutput != null) File.WriteAllText(mergeOutput.Substring(13), "merged 中文", new UTF8Encoding(false));
+            return 0;
+        }
         string metadata = Path.Combine(Environment.CurrentDirectory, ".plastic");
         if (Directory.Exists(metadata)) File.AppendAllText(Path.Combine(metadata, "cli-cm-calls.log"), Json.Serialize(args) + Environment.NewLine);
         if (args[0] == "--tool-diff")
@@ -968,7 +977,7 @@ internal static class CliTests
         else if (args[0] == "ls") Console.WriteLine(new XElement("LsResults", new XElement("LsItems", args[1] == "/missing.txt" ||
             (args[1] == "/old name.txt" && !args.Any(arg => arg.StartsWith("--tree=cs:1@"))) ||
             (args[1] == "/new name.txt" && !args.Any(arg => arg.StartsWith("--tree=cs:2@"))) ? null : new XElement("LsItem",
-            new XElement("Name", Path.GetFileName(args[1])), new XElement("CurrentPath", args[1]), new XElement("ItemId", "42"), new XElement("Type", "txt")))).ToString());
+            new XElement("Name", Path.GetFileName(args[1])), new XElement("CurrentPath", args[1] == "/" ? "/original.txt" : args[1]), new XElement("ItemId", "42"), new XElement("Type", "txt"), new XElement("Repository", "rep:test@server:8087")))).ToString());
         else if (args[0] == "diff" && args.Length > 2 && args[1].StartsWith("cs:") && args[2].StartsWith("cs:"))
         {
             if (args.Take(3).Any(arg => arg.StartsWith("cs:999@") || arg.StartsWith("cs:777@"))) { Console.Error.WriteLine("Comparison endpoint unavailable"); return 7; }

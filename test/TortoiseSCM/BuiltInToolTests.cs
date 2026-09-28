@@ -30,12 +30,13 @@ internal static class BuiltInToolTests
             string settings = Path.Combine(root, "settings.xml");
             File.WriteAllText(settings, "<TortoiseSCM><DiffToolArguments>{base} {local}</DiffToolArguments></TortoiseSCM>");
             var config = PlasticClientConfig.Load(settings);
-            Check(!config.UseBuiltInDiff && !config.UseBuiltInMerge, "Legacy settings preserve native/external tool defaults");
+            Check(config.UseBeyondCompare && !config.UseBuiltInDiff && !config.UseBuiltInMerge, "Legacy settings activate Beyond Compare and retain dormant tool preferences");
             config.UseBuiltInDiff = config.UseBuiltInMerge = true;
             config.DiffToolPath = config.MergeToolPath = Path.Combine(root, "removed-tool.exe");
             config.Save();
             config = PlasticClientConfig.Load(settings);
             Check(config.UseBuiltInDiff && config.UseBuiltInMerge && config.DiffToolPath.EndsWith("removed-tool.exe"), "Built-in choices persist and preserve dormant external settings");
+            config.UseBeyondCompare = false; // Exercise the retained editor adapter independently of the application profile.
             config.CmPath = Assembly.GetExecutingAssembly().Location;
             Directory.CreateDirectory(Path.Combine(root, ".plastic"));
             File.WriteAllText(Path.Combine(root, ".plastic", "plastic.workspace"), "test\nguid\nStandard\n");

@@ -127,7 +127,8 @@ namespace TortoiseSCM
         public async Task<PlasticCommandResult> OpenRevisionDiffToolAsync(string workspacePath, string fromRepositoryPath, string toRepositoryPath, long fromChangeset, long toChangeset, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var host = config.UseBuiltInDiff ? RequireToolHost() : null;
+            string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
+            var host = !config.UseBeyondCompare && config.UseBuiltInDiff ? RequireToolHost() : null;
             ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
             ValidateRepositoryFilePath(fromRepositoryPath); ValidateRepositoryFilePath(toRepositoryPath);
             var context = await HistoricalContextAsync(workspacePath, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
@@ -136,14 +137,15 @@ namespace TortoiseSCM
             await ValidateHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
             await ValidateHistoricalFileAsync(context, toRepositoryPath, toChangeset, cancellationToken).ConfigureAwait(false);
             ValidateHistoricalContext(context);
-            if (host == null && String.IsNullOrWhiteSpace(config.DiffToolPath))
+            if (host == null && beyondCompare == null && String.IsNullOrWhiteSpace(config.DiffToolPath))
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.CmPath, WorkingDirectory = context.RootPath, Interactive = true,
                     Arguments = new List<string> { "diff", HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset),
                         HistoricalSpec(context.Repository, toRepositoryPath, toChangeset) } }, cancellationToken).ConfigureAwait(false);
-            if (host == null) PlasticToolArguments.ValidateConfiguration(config.DiffToolPath, config.DiffToolArguments, false);
+            if (host == null && beyondCompare == null) PlasticToolArguments.ValidateConfiguration(config.DiffToolPath, config.DiffToolArguments, false);
             string temporary = NewHistoricalTemporaryDirectory();
             string before = Path.Combine(temporary, "from-" + fromChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(fromRepositoryPath));
             string after = Path.Combine(temporary, "to-" + toChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(toRepositoryPath));
+            bool preserve = false;
             try
             {
                 await DownloadHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, before, cancellationToken).ConfigureAwait(false);
@@ -153,11 +155,16 @@ namespace TortoiseSCM
                 File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (host != null) return await host.ShowDiffAsync(before, after, cancellationToken).ConfigureAwait(false);
+                if (beyondCompare != null)
+                    return await BeyondCompareProcess.RunAsync(beyondCompare,
+                        PlasticToolArguments.Expand(BeyondCompareTool.DiffArguments,
+                            new Dictionary<string, string> { { "base", before }, { "local", after } }, false), temporary, cancellationToken).ConfigureAwait(false);
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.DiffToolPath, WorkingDirectory = temporary,
                     Arguments = PlasticToolArguments.Expand(config.DiffToolArguments,
                         new Dictionary<string, string> { { "base", before }, { "local", after } }, false) }, cancellationToken).ConfigureAwait(false);
             }
-            finally { RemoveHistoricalTemporaryDirectory(temporary, before, after); }
+            catch (BeyondCompareWaitException) { preserve = true; throw; }
+            finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }
         }
 
         private async Task<PlasticWorkspace> HistoricalContextAsync(string workspacePath, string repositoryPath, long changeset, CancellationToken cancellationToken)

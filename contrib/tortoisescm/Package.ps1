@@ -31,6 +31,8 @@ try {
 TortoiseSCM for Windows x64
 
 Requires Windows x64, .NET Framework 4.8 and an installed Plastic SCM / Unity Version Control client.
+Comparison and merge tools require a separately installed Beyond Compare 4 or 5; three-way text merge requires Pro.
+TortoiseSCM detects BComp.exe automatically or accepts its path in Settings. Beyond Compare is not bundled.
 Install for this user from 64-bit PowerShell:
   .\Install.ps1
 Optional Explorer status overlays require elevated PowerShell:

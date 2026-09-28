@@ -157,7 +157,7 @@ Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲
 历史分批加载，单批最多扫描 50 个提交；窗口显示已扫描、已加载及是否还有更早记录。“加载更早”继续查询，“取消加载”保留已有结果。
 提交列表右键可复制变更集编号或提交说明，以及“标记为比较起点”。选择另一条提交后，在下方文件明细右键选择与标记版本比较，即可预填该文件的两个比较版本；也可清除标记。此操作比较同一路径的文件内容，不是整个变更集的目录差异。
 比较整个仓库时，在提交列表标记起点，再选择目标提交，右键选择“与标记版本比较整个仓库”。新窗口列出两个快照之间的新增、删除、修改和移动项，可按状态、路径、原路径或类型筛选；支持取消加载、刷新和 F5。目录、符号链接和 Xlink 仅显示结构变更，目录移动不展开未修改子文件。
-双击文件可比较内容、调用配置的外部工具，或分别导出起点/目标版本。移动项和移动目录下的修改文件使用旧、新两条历史路径；新增只可导出目标版本，删除只可导出起点版本，不把不存在的端点伪装成空文件。该窗口比较范围为整个仓库，包括在文件或子目录历史窗口中发起的比较。
+双击文件可比较内容、调用 Beyond Compare，或分别导出起点/目标版本。移动项和移动目录下的修改文件使用旧、新两条历史路径；新增只可导出目标版本，删除只可导出起点版本，不把不存在的端点伪装成空文件。该窗口比较范围为整个仓库，包括在文件或子目录历史窗口中发起的比较。
 文件明细右键可打开该路径的历史、复制路径或移动前路径；已从本地删除的历史路径仍可查询。`Ctrl+C` 复制当前焦点列表的变更集编号或路径，`F5` 刷新历史。
 文件/目录页面按路径事件筛选提交，能显示复用旧修订的回滚发布。重命名前的历史需查询旧路径；路径曾被删除再创建时，本页面会包含该路径的多次使用。
 设置使用左侧分类树和右侧设置页。所有窗口共用系统对话框字体、颜色和 Explorer 列表主题。
@@ -180,14 +180,14 @@ Partial 工作区仅缓存实际加载项。原生合并存在但无法确定冲
 | 删除 / 重命名 | 生成待提交删除或移动；要求所选范围干净，不覆盖目标；可撤销后再决定是否提交 |
 | 加入忽略列表 | 将未版本控制项的精确路径追加到工作区 ignore.conf，保留已有规则 |
 | 打开 Gluon | 在官方客户端中打开当前工作区 |
-| 设置 | 配置 cm.exe、gluon.exe、命令超时、外部 diff / merge 程序及参数模板 |
+| 设置 | 配置 cm.exe、gluon.exe、Plastic 命令超时及共用 Beyond Compare 路径 |
 
 目录操作递归包含子项。签入/撤销一个有更改的目录前应核对其子项。
 勾选目录会勾选其可见后代；取消某个子项会取消父目录的递归选择，避免把该子项隐式提交。
 列表右键提供显示历史、查看差异和丢弃修改，操作对象为高亮行；签入按钮使用勾选项。
 待提交列表按当前路径过滤，移动到范围外的条目不会显示在原目录内。
 CLI 命令根据实际退出码报告结果，GUI 错误可在“操作 → 操作记录”查看；失败时不会清空签入说明。
-Gluon 与默认官方差异窗口独立运行，TortoiseSCM 仅确认进程启动。自定义外部工具等待进程退出，报告其退出码。
+Gluon 独立运行，TortoiseSCM 仅确认进程启动。Beyond Compare 则等待本次窗口关闭，期间保留贡献文件且不受 Plastic 命令超时限制。
 命令超时后请刷新核对工作区状态。
 
 ## 无界面 CLI
@@ -303,31 +303,30 @@ GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件�
 忽略配置采用 [Plastic 原生 ignore.conf 精确路径规则](https://docs.unity.com/en-us/unity-version-control/config-files/filter-pattern)，
 目录规则覆盖后代，已有受控文件不会因此取消跟踪。需要共享规则时可自行添加、提交 ignore.conf。
 
-### 内置与外部 diff / merge
+### Beyond Compare 比较与合并
 
-设置窗口的“差异查看器”和“合并工具”页面可分别勾选内置工具。内置 Diff 用于待定文件和历史窗口的“比较工具…”；工作文件的基线按 Plastic ItemId 定位，支持已受控文件重命名后的比较。左右窗格只读，支持行号、同步滚动、差异高亮、F7 / Shift+F7 导航；双击行或按 Enter 可打开自动换行的完整行查看器，检查长行尾部。
+图形比较与合并工具统一使用 Windows Beyond Compare 4/5。三方文本合并需要 Pro；用户自行安装并授权，TortoiseSCM 不分发 BC、不修改其全局设置。程序查找常见安装目录和注册表，也可在设置的“差异查看器”或“合并工具”中选择 BComp.exe；两页共用同一路径，留空自动检测。选择 BCompare.exe 时会转为同目录的 BComp.exe。找不到程序会明确提示，不回退到其他编辑器；状态、历史查询和提交等不依赖 BC 的操作仍可使用。
 
-内置三方编辑器上方显示基线、本地和远程，下方编辑独立结果。打开时保留已有结果，新结果从本地内容开始；点击“自动合并”后才生成草稿：互不冲突的修改自动组合，双方一致的修改只保留一份，冲突块默认保留本地候选并列为待审核。选择差异块可定位贡献文件及结果，逐块采用基线/本地/远程，或明确将当前候选标为已审核。自动组合与已审核分别显示，不代表 Plastic 冲突已解决。
+工作文件基线按 Plastic ItemId 定位，支持受控文件本地改名后的比较；启动前重新核对工作区 selector、仓库和文件身份。历史“比较工具…”下载固定端点。比较两侧只读；三方左侧为本地、右侧为远程、祖先为基线，输出为独立结果文件。参数由程序固定管理，无需填写模板。输入角色及等待方式依据 [Beyond Compare 官方集成说明](https://www.scootersoftware.com/kb/vcs) 和 [命令行文档](https://www.scootersoftware.com/v5help/command_line_reference.html)。
 
-可以随时直接编辑全文；这种修改会使块位置失效，窗口暂停逐块操作并提示全文审核。再次生成草稿需要确认替换当前内容。重新打开只恢复已保存字节，审核状态不跨窗口保存，不会根据结果看似相同而推断已审核。粗略对齐和仅编码/行尾变化的特殊情况保守地作为整文件待审核项，编码与行尾仍由保存选项处理。
+每次启动采用 BComp.exe 与独立实例选项，等待本次窗口关闭后才清理比较临时文件。人工编辑不受 Plastic 命令超时限制；若请求取消，先在 BC 中保存或放弃并关闭窗口，TortoiseSCM 才结束等待，避免杀掉未保存编辑。等待器异常（102）会报告并保留贡献目录；此时先关闭对应 BC 窗口再重试，不要同时应用或重新编辑结果。
 
-Ctrl+S 保存，关闭时提示未保存修改；仍有待审核冲突时保存的是草稿。保存后必须回到 Standard 或 Partial 冲突窗口审核并确认应用，最后另行签入。逐块选择、自动组合和保存都不会修改工作区文件或自动完成 Plastic 冲突。
+保存并关闭 BC 后，必须回到 Standard 或 Partial 冲突窗口核查并明确应用，最后另行签入。工具正常退出只表示窗口关闭，不证明已保存或已解决冲突；不根据退出码自动应用。原有备份、身份校验、输入/输出别名保护和恢复流程继续有效。
 
-内置工具支持严格 UTF-8（可带 BOM），以及带 BOM 的 UTF-16 LE/BE、UTF-32 LE/BE。保存沿用结果文件的编码/BOM；新结果沿用本地文件编码。默认保留原行尾，混合行尾修改后须明确选择 CRLF、LF 或 CR。编码/行尾差异会单独提示。二进制、未知编码、超过 2 MiB 或 20,000 行的文件请改用外部工具。复杂的大范围修改会明确提示粗略对齐。磁盘结果发生变化、输入别名、硬链接、符号链接或只读目标会拒绝保存。
+重新启动 BC 三方合并会从三个贡献文件重新组合输出，不会像旧内置编辑器那样直接载入此前手工保存的结果。已有满意结果可直接在冲突窗口确认应用；再次启动并保存之前，请另存需要保留的手工结果。此行为见 [Scooter Software 关于合并输出恢复的说明](https://forum.scootersoftware.com/forum/beyond-compare-discussion/general-aa/92039-text-merge-potential-improvements-options-for-vcs-purposes)。
 
-旧配置继续使用原有外部/官方工具，不自动切换。选择内置工具时保留外部路径和参数，取消勾选即可切回。CLI `diff --external` 和 `merge` 始终沿用外部工具，GUI 的内置偏好不会触发 CLI 弹窗；CLI `settings` 会报告 `useBuiltInDiff/useBuiltInMerge`，显式设置 `--diff-tool/--merge-tool` 则取消对应内置选项。CLI 外部配置示例：
+BC 自身负责文本编码、行尾、差异显示和交互合并；旧内置编辑器的 2 MiB / 20,000 行限制不套用到 BC，Plastic 内容准备及操作范围限制仍然有效。内置编辑器源码和回归资产保留，但设置不再提供选择入口。历史“比较”的统一文本预览与暂存集预览尚待收敛；新增/删除空侧比较、真实 BC 桌面及多 DPI 验收见路线图。
+
+旧配置加载后统一使用 BC，原内置/外部字段保留为停用配置。已有明确 BC 路径优先迁移（先旧合并路径、再旧比较路径），失效路径会报告，不偷偷替换安装位置。CLI `settings` 报告 `toolProvider=BeyondCompare`；`--beyond-compare` 配置共用路径，旧的独立工具/参数选项会提示迁移，不能切回其他工具。普通 CLI `diff` 继续输出文本，`--external` 才打开 BC：
 
 ```powershell
 & $exe --cli --command settings --json | ConvertFrom-Json
-& $exe --cli --command settings --diff-tool 'C:\Tools\diff.exe' --diff-args '"{base}" "{local}"' --yes --json | ConvertFrom-Json
-& $exe --cli --command settings --merge-tool 'C:\Tools\merge.exe' --merge-args '"{base}" "{local}" "{remote}" "{merged}"' --yes --json | ConvertFrom-Json
+& $exe --cli --command settings --beyond-compare 'C:\Program Files\Beyond Compare 5\BComp.exe' --yes --json | ConvertFrom-Json
 & $exe --cli --command diff --path 'D:\workspace\file.txt' --external --json | ConvertFrom-Json
 & $exe --cli --command merge --base 'D:\tmp\base.txt' --local 'D:\tmp\local.txt' --remote 'D:\tmp\remote.txt' --output 'D:\tmp\merged.txt' --yes --json | ConvertFrom-Json
 ```
 
-工具参数必须符合所选工具的实际命令格式。应使用工具的等待选项（若有），以便临时基础文件在比较结束后才清理。
-未选内置模式且 diff 留空时，GUI 使用官方查看器；普通 CLI `diff` 仍输出文本，只有 `--external` 才启动工具。
-未选内置模式且 merge 留空时明确报错。设置窗口的“打开合并工具”允许选择四个文件，此入口只编辑文件。
+设置窗口的“打开合并工具”允许选择三个输入和独立输出，此入口只编辑文件。
 待定更改窗口的“操作 → 合并变更集 / 解决冲突”提供完整工作区的分支合并流程：预检、开始、三方编辑、确认解决，然后返回待定更改提交。工具退出本身不会标记冲突解决。
 工具通过独立参数调用，不经过命令解释器。`--settings-file <文件>` 可使用隔离配置；进行分支合并或准备 Partial 冲突时，该配置文件及相邻会话目录必须放在工作区外，避免操作影响自身的恢复资料或将备份误加入提交。
 
@@ -360,7 +359,7 @@ Standard 目录结构冲突先建立规划会话，在“结构冲突…”中�
 & $exe --cli --command merge-directory-cancel --path 'D:\workspace' --yes --json | ConvertFrom-Json
 ```
 
-Partial 工作区通过“操作 → Partial 传入冲突…”处理已加载文件的本地内容修改与服务器新版本冲突。预检后准备基础、本地、传入三方文件，调用用户配置的合并工具；审核结果后单独确认应用。后端只更新该文件的基础修订，再写入审核结果，保持 Partial 模式、分支和加载规则，不自动提交。
+Partial 工作区通过“操作 → Partial 传入冲突…”处理已加载文件的本地内容修改与服务器新版本冲突。预检后准备基础、本地、传入三方文件，调用 Beyond Compare；审核结果后单独确认应用。后端只更新该文件的基础修订，再写入审核结果，保持 Partial 模式、分支和加载规则，不自动提交。
 
 ```powershell
 & $exe --cli --command partial-conflicts --path 'D:\workspace' --json | ConvertFrom-Json
@@ -468,7 +467,7 @@ Explorer
             └─ src/TortoiseSCM/Program.cs      独立程序入口
                  ├─ MainForm.cs               中文待定更改与操作窗口
                  ├─ HistoryForm.cs            提交 / 文件明细与历史恢复
-                 ├─ SettingsForm.cs           客户端与外部工具设置
+                 ├─ SettingsForm.cs           客户端与 Beyond Compare 设置
                  ├─ ToolLaunchForm.cs         外部三方合并入口
                  ├─ MergeForm.cs              分支合并预检与文件冲突处理
                  ├─ LocksForm.cs              仓库锁列表与自己持有锁的释放
