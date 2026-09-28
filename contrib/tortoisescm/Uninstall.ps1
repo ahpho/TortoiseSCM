@@ -52,7 +52,7 @@ if ($record.registered) {
 }
 $retained = New-Object 'Collections.Generic.List[string]'
 # Keep installer metadata and scripts when a loaded/modified product file needs a later retry.
-$deferred = @('Uninstall.cmd', 'PackageLauncher.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Unregister-ModernShell.ps1')
+$deferred = @('Uninstall.cmd', 'PackageLauncher.ps1', 'PackageExplorer.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Unregister-ModernShell.ps1')
 # Older packages did not ship the clickable launchers; similarly named user files
 # in those versions must not be interpreted as package-owned retry components.
 $deferred = @($deferred | Where-Object { $_ -in @($manifest.files | ForEach-Object path) })

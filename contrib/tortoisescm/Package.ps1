@@ -38,7 +38,7 @@ try {
     # Explicit allowlist: test executables, symbols, workspace metadata and cm.exe are never shipped.
     foreach ($file in @('TortoiseSCM.exe', 'TortoiseSCMShell.dll')) { Copy-Item -LiteralPath (Join-Path $binaries $file) -Destination (Join-Path $stage $file) }
     if (Test-Path -LiteralPath (Join-Path $binaries 'TortoiseSCM.exe.config')) { Copy-Item -LiteralPath (Join-Path $binaries 'TortoiseSCM.exe.config') -Destination $stage }
-    foreach ($file in @('Install.cmd', 'Uninstall.cmd', 'PackageLauncher.ps1', 'Install.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Register-Shell.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Register-ModernShell.ps1', 'Unregister-ModernShell.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $stage }
+    foreach ($file in @('Install.cmd', 'Uninstall.cmd', 'PackageLauncher.ps1', 'PackageExplorer.ps1', 'Install.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Register-Shell.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Register-ModernShell.ps1', 'Unregister-ModernShell.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $stage }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ModernMenu') -Destination (Join-Path $stage 'ModernMenu') -Recurse
     & (Join-Path $PSScriptRoot 'Build-ModernMenu.ps1') -OutputDirectory (Join-Path $stage 'ModernMenu') | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $stage
@@ -76,6 +76,7 @@ Extract the entire ZIP first. Double-click Install.cmd to install and open Torto
 Double-click Uninstall.cmd to confirm and remove the active installation.
 Both launchers keep the result visible; PowerShell script association does not matter.
 These double-click entries close their command window when finished; use the PS1 scripts from an existing terminal or automation.
+After installation, if Explorer still uses an older extension, wait for all copy, move, delete and extract operations to finish before pressing Enter at the restart confirmation prompt. Restarting Explorer can interrupt unfinished file operations, closes this user's folder windows, and briefly removes the desktop/taskbar; other applications remain running. Type N and press Enter to defer (installation remains complete). You can also restart Windows Explorer later in Task Manager.
 Version information: right-click a Plastic workspace > TortoiseSCM > Version information.
 It displays the package version, source commit and running program directory.
 For advanced use, install from 64-bit PowerShell:
@@ -96,7 +97,7 @@ Remove machine overlays too, from elevated PowerShell:
   .\Uninstall.ps1 -RemoveMachineOverlays
 
 Installations use distinct version directories; an Explorer-loaded DLL is never overwritten.
-If uninstall reports locked files, sign out and retry. User settings and workspaces are preserved.
+If uninstall reports locked files, wait for all file operations to finish, restart Explorer and retry; signing out is an alternative. User settings and workspaces are preserved.
 package-manifest.json provides SHA-256 integrity checks. This package is not digitally signed.
 Source: https://github.com/ahpho/TortoiseSCM
 TortoiseSCM license: GPL-2.0-or-later; see LICENSE. See doc/TortoiseSCM.md for usage.

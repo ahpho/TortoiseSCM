@@ -2,6 +2,13 @@
 
 范围说明（2026-09-28）：用户已排除多 DPI、提交失败草稿跨重启恢复，以及签名/自动更新/ARM64 等发布与平台产品化工作。以下历史记录中的未验收事实保留；历史“下一步/待完成”描述不覆盖 [当前路线图](../ROADMAP.md) 的范围约定。
 
+## 安装后检测旧菜单与确认重启 Explorer（2026-09-28）
+
+- 安装器区分磁盘安装成功与 Explorer 实际加载状态，显示旧/新目录；检测到旧扩展后提供重启选项。按用户最终偏好，按 Enter 确认、输入 `N` 或其他非空内容则稍后；提示先完成复制/移动/删除/解压任务，说明可能中断文件操作、关闭文件夹窗口及桌面/任务栏短暂消失，不声称自动检测了文件操作是否完成。
+- `-NoPause`、`-NoRegister`、非交互或重定向输入不触发重启，EOF/读取异常不视作确认。重启目标限制当前用户 SID、当前登录会话及系统 Explorer 路径，持有进程句柄并在停止前复核身份；等待自动恢复，必要时启动 Explorer 并限时核对桌面 shell。失败保留已完成安装并提供任务管理器/运行新任务恢复说明。
+- 新 helper 随包进入哈希清单，部分卸载保留依赖供双击重试。双击入口及重启分支专项 83 项通过，包含模拟身份变化/其他用户和会话拒绝、选择稍后、停止或恢复失败及重启后版本未确认；日志 `bin/TortoiseSCM/explorer-launcher-full.log`。已有安装/卸载 45 项、随包 BC 39 项、现代菜单包 27 项通过，日志在 `qa/shell-dispatch-fix/`。
+- 本机只读检查验证旧扩展检测及桌面进程身份 API；后者发现并修复了局部变量与 PowerShell 只读 `$ShellId` 同名的问题。重启/停止测试使用模拟对象，未替用户实际重启桌面，也未修改实际 Explorer 注册。真实桌面重启及用户文件操作状态仍需用户在确认提示后自行验收。
+
 ## Explorer 命令分派与独立更新窗口修复（2026-09-28）
 
 - 复现用户报告：Explorer 设置 Unicode 标志、数字菜单编号放在 `lpVerb` 且 `lpVerbW` 为空时，旧代码将所有菜单项误读为编号 0（status）。新增测试先在旧源码失败，并通过旧生产 DLL 捕获 `Expected: update / Actual: status`。根据 [Microsoft IContextMenu 实现说明](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-implement-the-icontextmenu-interface)，数字编号从 `lpVerb` 读取，Unicode 字符串才使用 `lpVerbW`。

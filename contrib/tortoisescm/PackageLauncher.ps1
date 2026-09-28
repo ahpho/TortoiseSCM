@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 function Invoke-TscmPackageLauncher {
     if (-not [Environment]::Is64BitProcess) { throw '请使用 Install.cmd / Uninstall.cmd，或 64 位 Windows PowerShell。' }
     . (Join-Path $PSScriptRoot 'Package.Common.ps1')
+    . (Join-Path $PSScriptRoot 'PackageExplorer.ps1')
     $rootPath = Assert-TscmPlainPath $InstallRoot
     $pointerPath = Join-TscmOwnedPath $rootPath 'current-install.json'
 
@@ -33,6 +34,7 @@ function Invoke-TscmPackageLauncher {
         Write-Host ''
         Write-Host '安装完成。' -ForegroundColor Green
         Write-Host ('安装位置：' + $installed.versionDirectory)
+        Invoke-TscmExplorerRefresh -VersionDirectory $installed.versionDirectory -NoRegister:$NoRegister -NoPause:$NoPause
         if (-not $NoLaunch) {
             $executable = Join-Path $installed.versionDirectory 'TortoiseSCM.exe'
             try {
@@ -42,7 +44,6 @@ function Invoke-TscmPackageLauncher {
                 throw ('安装已完成，但无法打开程序。请从上述安装位置运行 TortoiseSCM.exe。详情：' + $_.Exception.Message)
             }
         }
-        Write-Host '如果资源管理器仍显示旧菜单，请注销 Windows 后重新登录。'
         return 0
     }
 
@@ -84,13 +85,13 @@ function Invoke-TscmPackageLauncher {
     if (-not $removed.removed) {
         Write-Host ''
         Write-Host '卸载尚未完全完成，部分文件正在使用中或已被修改。' -ForegroundColor Yellow
-        Write-Host '请关闭 TortoiseSCM，注销 Windows 后重新登录，再运行 Uninstall.cmd。已修改的文件会保留。'
+        Write-Host '请关闭 TortoiseSCM，等待所有文件操作结束后重启资源管理器，再运行 Uninstall.cmd。已修改的文件会保留。'
         foreach ($file in $removed.retainedFiles) { Write-Host ('保留：' + $file) }
         return 2
     }
     Write-Host ''
     Write-Host '卸载完成，工作区和用户设置已保留。' -ForegroundColor Green
-    Write-Host '如果资源管理器仍显示旧菜单，请注销 Windows 后重新登录。'
+    Write-Host '如果资源管理器仍显示旧菜单，请等待所有文件操作结束后重启资源管理器，也可注销 Windows 后重新登录。'
     return 0
 }
 
