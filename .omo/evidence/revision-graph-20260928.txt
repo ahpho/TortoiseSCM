@@ -1,0 +1,9 @@
+Revision graph milestone, 2026-09-28
+Release build: build-tortoisescm.ps1 -Configuration Release -Test, exit 0.
+Backend 49 assertions; CLI 84 assertions; GUI 45 assertions; native Standard/Partial integration 225 assertions.
+True parent PARENT and native merge edges were read from Plastic XML. Real fixture covers normal merge source cs39->destination45 and interval subtractive cs36->37 with base35; separate native diamond probe confirms cs136->137/138, cs138->139 and merge cs137->139.
+Graph GUI uses native list + custom canvas, explicit edge type and unloaded endpoints, gutter routes for skipped commits and separate ports for overlapping relationships. Normal/minimum screenshots inspected.
+Original TestSCM remains clean /main. Fixture workspaces preserve pending status, selectors, wktree and all working-file hashes. No server writes in graph validation.
+Package/install tests: 44 assertions, actual Explorer registration unchanged. No desktop Explorer or multi-DPI claim.
+Limits: GUI default page 100; CLI limit 1..100; page rejects >1000 merge rows; no branch/path filter, image export or full graph auto-layout. Unknown native edge types remain literal; only parent and kind=merge participate in cycle/ancestry validation.
+Logs: bin/TortoiseSCM/qa/graph-final-build.log, graph-live-final2.log, graph-package-final.log.

@@ -53,7 +53,8 @@ constexpr Command commands[] = {
     {L"shelves", L"Shelvesets...", L"暂存集..."},
     {L"blame", L"Annotate / Blame...", L"Annotate / Blame..."},
     {L"repository-browser", L"Repository browser...", L"仓库浏览器..."},
-    {L"labels", L"Labels...", L"标签..."}
+    {L"labels", L"Labels...", L"标签..."},
+    {L"revision-graph", L"Revision graph...", L"提交关系图..."}
 };
 
 const wchar_t* Label(const Command& command)

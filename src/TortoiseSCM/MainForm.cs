@@ -154,6 +154,7 @@ namespace TortoiseSCM
             operations.Items.Add("暂存集…", null, delegate { ShowShelves(); });
             operations.Items.Add("标签…", null, delegate { ShowLabels(); });
             operations.Items.Add("仓库浏览器…", null, delegate { ShowRepositoryBrowser(null); });
+            operations.Items.Add("版本关系图…", null, delegate { ShowRevisionGraph(null); });
             operations.Items.Add("保存勾选项为暂存集…", null, async delegate { await SaveShelveAsync(); });
             operations.Items.Add("合并变更集 / 解决冲突…", null, async delegate {
                 if (busy || !loaded) return;
@@ -330,6 +331,7 @@ namespace TortoiseSCM
                 else if (launch.Command == "shelves") ShowShelves();
                 else if (launch.Command == "labels") ShowLabels();
                 else if (launch.Command == "repository-browser") ShowRepositoryBrowser(launch.Changeset);
+                else if (launch.Command == "revision-graph") ShowRevisionGraph(launch.Before);
                 else if (launch.Command == "merge")
                 {
                     using (var dialog = new MergeForm(client, workspace.RootPath)) dialog.ShowDialog(this);
@@ -366,6 +368,13 @@ namespace TortoiseSCM
         {
             return launch.Paths.Any(p => string.Equals(path, p, StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(p.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void ShowRevisionGraph(long? before)
+        {
+            if (busy || !loaded) return;
+            try { using (var dialog = new RevisionGraphForm(client, workspace.RootPath, before)) dialog.ShowDialog(this); }
+            catch (Exception ex) { ShowError(ex); }
         }
 
         private void ShowLabels()

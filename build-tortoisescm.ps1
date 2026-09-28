@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -73,6 +73,11 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Label CLI test compilation failed.' }
     & $labelCliOutput (Join-Path $out 'TortoiseSCM.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Label CLI tests failed.' }
+    $graphCliOutput = Join-Path $out 'RevisionGraphCliTests.exe'
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Xml.Linq.dll /r:System.Web.Extensions.dll "/out:$graphCliOutput" (Join-Path $PSScriptRoot 'test\TortoiseSCM\RevisionGraphCliTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Revision graph CLI test compilation failed.' }
+    & $graphCliOutput (Join-Path $out 'TortoiseSCM.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Revision graph CLI tests failed.' }
     & $msbuild (Join-Path $PSScriptRoot 'test\TortoiseSCM\ShellTests.vcxproj') /nologo /verbosity:minimal "/p:Configuration=$Configuration" /p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw 'Shell test compilation failed.' }
     & (Join-Path $out 'ShellTests.exe')
@@ -82,6 +87,7 @@ if ($Test -or $Integration) {
     $uiSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
     $uiSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\UiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\RevisionGraphUiTests.cs'
     $uiOutput = Join-Path $out 'UiTests.exe'
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.UiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$uiOutput" $uiSources
     if ($LASTEXITCODE -ne 0) { throw 'UI test compilation failed.' }
@@ -127,6 +133,7 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-merge-integration.txt'), $mergeManifest)
         & $mergeIntegrationOutput (Join-Path $out 'TortoiseSCM.exe') $mergeManifest
         if ($LASTEXITCODE -ne 0) { throw "Server-backed merge tests failed. Inspect $mergeManifest and merge-integration-results.json beside it." }
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\RevisionGraphIntegrationTests.ps1') -Manifest $shelvesManifest -Executable (Join-Path $out 'TortoiseSCM.exe') -UiExecutable $uiOutput
         $partialOutput = Join-Path $out 'PartialConflictIntegrationTests.exe'
         $partialSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $partialSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialConflictIntegrationTests.cs'

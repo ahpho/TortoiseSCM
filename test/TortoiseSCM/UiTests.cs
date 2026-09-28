@@ -29,6 +29,14 @@ namespace TortoiseSCM
                 uiContext = new WindowsFormsSynchronizationContext();
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 2 && args[0] == "--graph-ui")
+                {
+                    Directory.CreateDirectory(args[1]); RevisionGraphUiTests.Run(args[1]); return 0;
+                }
+                if (args.Length == 4 && args[0] == "--graph-live")
+                {
+                    Directory.CreateDirectory(args[1]); RevisionGraphUiTests.RunLive(args[1], args[2], Int64.Parse(args[3])); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--labels-ui")
                 {
                     Directory.CreateDirectory(args[1]); CheckLabelsDialogs(args[1]); return 0;
@@ -100,6 +108,7 @@ namespace TortoiseSCM
                 CheckBlameDialog(artifacts);
                 CheckRepositoryBrowser(artifacts);
                 CheckLabelsDialogs(artifacts);
+                RevisionGraphUiTests.Run(artifacts);
                 if (args.Length > 1)
                 {
                     CheckLiveRepositoryBrowser(artifacts, args[1]);

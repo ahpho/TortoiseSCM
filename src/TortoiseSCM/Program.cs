@@ -53,6 +53,7 @@ namespace TortoiseSCM
     {
         internal string Command = "status";
         internal long? Changeset;
+        internal long? Before;
         internal readonly List<string> Paths = new List<string>();
 
         internal static LaunchRequest Parse(string[] args)
@@ -72,6 +73,11 @@ namespace TortoiseSCM
                         if (result.Changeset.HasValue || !Int64.TryParse(value, System.Globalization.NumberStyles.None,
                             System.Globalization.CultureInfo.InvariantCulture, out changeset)) throw new ArgumentException("变更集必须为非负整数，且只能指定一次。");
                         result.Changeset = changeset; break;
+                    case "--before":
+                        long before;
+                        if (result.Before.HasValue || !Int64.TryParse(value, System.Globalization.NumberStyles.None,
+                            System.Globalization.CultureInfo.InvariantCulture, out before)) throw new ArgumentException("图形分页边界必须为非负整数，且只能指定一次。");
+                        result.Before = before; break;
                     case "--pathfile":
                         // Only consume the temporary files owned by our Explorer extension.
                         string path = Path.GetFullPath(value);
@@ -94,9 +100,10 @@ namespace TortoiseSCM
             // through MainForm so they retain the same confirmation and
             // workspace safety checks as the in-app menus.
             string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "blame", "gluon", "settings",
-                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "export", "rollback", "recover" };
+                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "revision-graph", "export", "rollback", "recover" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             if (result.Changeset.HasValue && result.Command != "repository-browser") throw new ArgumentException("--changeset 仅适用于仓库浏览器。");
+            if (result.Before.HasValue && result.Command != "revision-graph") throw new ArgumentException("--before 仅适用于版本关系图。");
             return result;
         }
     }

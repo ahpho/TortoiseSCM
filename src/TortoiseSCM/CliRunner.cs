@@ -18,7 +18,7 @@ namespace TortoiseSCM
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
-            "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame, repository-list\r\n" +
+            "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame, repository-list, revision-graph\r\n" +
             "          labels, label-resolve, label-create, label-delete\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
@@ -26,6 +26,11 @@ namespace TortoiseSCM
             "Paged history: history-page --path <scope> [--branch </main/name>] [--before <exclusive-changeset>] [--limit <1..100>]\r\n" +
             "  Default scan limit is 50; path pages may be empty with older history still available.\r\n" +
             "  Branch filters scan global pages and match exact published branch names, excluding inherited ancestor commits.\r\n" +
+            "Revision graph: revision-graph --path <scope> [--before <exclusive-changeset>] [--limit <1..100>]\r\n" +
+            "  Default limit is 100; --path locates the workspace, not a file or branch filter.\r\n" +
+            "  Shows loaded changeset nodes and native parent/merge edges. A page is a bounded repository history slice;\r\n" +
+            "  unloaded source/base endpoints are marked explicitly and older pages continue with --before.\r\n" +
+            "  Cherry-pick, subtractive and other typed links are operations; their base is metadata, not ancestry.\r\n" +
             "rollback restores selected content as pending changes; switch replaces the whole workspace revision.\r\n" +
             "Branches: branches --path <workspace>; branch-head --path <workspace> --branch </main/name>\r\n" +
             "  branch-tree --path <workspace> [--filter <text>] (native parent hierarchy, not commit or merge ancestry)\r\n" +
@@ -585,6 +590,63 @@ namespace TortoiseSCM
                 if (options.Branch != null) response.output += Environment.NewLine + "Branch " + options.Branch + ": exact published branch matches only; inherited ancestor commits are excluded.";
                 return;
             }
+            if (options.Command == "revision-graph")
+            {
+                // The backend deliberately captures the workspace and repository
+                // before querying. Passing the observed repository here prevents a
+                // selector change from silently returning a graph for another repo.
+                var page = client.GetRevisionGraphAsync(options.Paths[0], options.Before,
+                    options.Limit ?? 100, workspace.Repository, CancellationToken.None).GetAwaiter().GetResult();
+                if (!String.Equals(page.Repository, workspace.Repository, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The workspace repository changed during revision graph preparation. Refresh before continuing.");
+                response.data = new {
+                    workspace = workspaceData,
+                    repository = page.Repository,
+                    before = options.Before,
+                    limit = options.Limit ?? 100,
+                    nodes = page.Nodes.Select(node => new {
+                        id = node.Id, changeset = node.Changeset, parentChangeset = node.ParentChangeset,
+                        guid = node.Guid, branch = node.Branch, owner = node.Owner, date = node.Date,
+                        comment = node.Comment, repository = node.Repository
+                    }).ToArray(),
+                    edges = page.Edges.Select(edge => new {
+                        id = edge.Id, kind = edge.Kind, sourceChangeset = edge.SourceChangeset,
+                        destinationChangeset = edge.DestinationChangeset, baseChangeset = edge.BaseChangeset,
+                        sourceLoaded = edge.SourceLoaded, baseLoaded = edge.BaseLoaded
+                    }).ToArray(),
+                    hasMore = page.HasMore, nextBeforeChangeset = page.NextBeforeChangeset
+                };
+                var graphText = new StringBuilder();
+                graphText.Append("Revision graph ").Append(page.Repository).Append(" | loaded nodes: ")
+                    .Append(page.Nodes.Count.ToString(CultureInfo.InvariantCulture)).Append(" | edges: ")
+                    .Append(page.Edges.Count.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                graphText.AppendLine("Bounded repository history slice. Only parent and merge links express ancestry; other types are operations, and base is metadata.");
+                foreach (var node in page.Nodes.OrderBy(item => item.Changeset))
+                {
+                    graphText.Append("cs:").Append(node.Changeset.ToString(CultureInfo.InvariantCulture));
+                    if (node.ParentChangeset.HasValue)
+                        graphText.Append(" parent=cs:").Append(node.ParentChangeset.Value.ToString(CultureInfo.InvariantCulture));
+                    if (!String.IsNullOrEmpty(node.Branch)) graphText.Append(" ").Append(node.Branch);
+                    graphText.Append(" | ").Append(node.Comment ?? String.Empty).AppendLine();
+                }
+                foreach (var edge in page.Edges.OrderBy(item => item.DestinationChangeset).ThenBy(item => item.SourceChangeset))
+                {
+                    graphText.Append("cs:").Append(edge.SourceChangeset.ToString(CultureInfo.InvariantCulture))
+                        .Append(" -> cs:").Append(edge.DestinationChangeset.ToString(CultureInfo.InvariantCulture))
+                        .Append(" [").Append(String.IsNullOrEmpty(edge.Kind) ? "unknown" : edge.Kind).Append("]");
+                    if (edge.BaseChangeset.HasValue)
+                        graphText.Append(" base=cs:").Append(edge.BaseChangeset.Value.ToString(CultureInfo.InvariantCulture));
+                    if (!edge.SourceLoaded) graphText.Append(" [source-unloaded]");
+                    if (edge.BaseChangeset.HasValue && !edge.BaseLoaded) graphText.Append(" [base-unloaded]");
+                    graphText.AppendLine();
+                }
+                if (page.HasMore && page.NextBeforeChangeset.HasValue)
+                    graphText.Append("Older graph remains; continue with --before ")
+                        .Append(page.NextBeforeChangeset.Value.ToString(CultureInfo.InvariantCulture)).Append('.');
+                else graphText.Append("No older graph remains.");
+                response.output = graphText.ToString();
+                return;
+            }
             if (options.Command == "history")
             {
                 var entries = new List<PlasticHistoryItem>();
@@ -886,7 +948,7 @@ namespace TortoiseSCM
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch",
-                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "labels", "label-resolve", "label-create", "label-delete", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
+                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "revision-graph", "labels", "label-resolve", "label-create", "label-delete", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
@@ -942,7 +1004,9 @@ namespace TortoiseSCM
             if (((directoryResolution || structureResolution) && options.Resolution == "rename") != (options.Rename != null)) throw new ArgumentException("--rename is required only for rename resolution.");
             if (options.Command == "cache-refresh" && (options.Paths.Count != 1 || !yes)) throw new ArgumentException("cache-refresh requires one workspace root and --yes to write the local cache.");
             if (options.Command == "history-page" && options.Paths.Count != 1) throw new ArgumentException("history-page requires exactly one file, directory or workspace scope.");
-            if (options.Command != "history-page" && (options.Before.HasValue || options.Limit.HasValue)) throw new ArgumentException("--before and --limit are supported only for history-page.");
+            if (options.Command == "revision-graph" && options.Paths.Count != 1) throw new ArgumentException("revision-graph requires exactly one file, directory or workspace scope.");
+            if (options.Command != "history-page" && options.Command != "revision-graph" && (options.Before.HasValue || options.Limit.HasValue)) throw new ArgumentException("--before and --limit are supported only for history-page and revision-graph.");
+            if (options.Command == "revision-graph" && yes) throw new ArgumentException("revision-graph is read-only and does not accept --yes.");
             if (options.ChangesSettings && options.Command != "settings") throw new ArgumentException("Tool configuration options require --command settings.");
             if (new[] { "remove", "move", "ignore" }.Contains(options.Command) && options.Paths.Count != 1) throw new ArgumentException("File operations require exactly one explicit --path.");
             if ((options.Command == "move") != (options.Destination != null)) throw new ArgumentException("--destination is required only for move.");

@@ -1,5 +1,14 @@
 # TortoiseSCM 验证记录
 
+## 提交与合并关系图（2026-09-28）
+
+- 新增只读分页关系图：服务器真实 `PARENT` 作为父提交，原生 `find merge` 的来源、目标、类型和可选基线作为关系数据。父提交用实线、普通 merge 用虚线、其他原生类型用点划线；区间基线只显示在明细，不伪造祖先。页外来源标记为未加载，图形连线绕开中间节点；右侧原生提交列表承担键盘和辅助功能访问。
+- 新增 `revision-graph` CLI（JSON 与文本）及主窗口、Explorer 入口。CLI 允许 `--before` 独占游标和 `--limit 1..100`；默认 100。每页最多验证 1000 条 merge 记录，超过则拒绝返回不完整图。固定仓库、selector、Standard/Partial、取消、超时、异常 XML、对象 ID/分支不一致均会失败并清除旧结果。
+- RevisionGraphTests 后端 49 项、RevisionGraphCliTests 84 项、RevisionGraphUiTests 45 项通过。UI 普通/最小尺寸图已查看；覆盖长分支单行省略、跳过中间提交的 gutter 路径、重叠关系不同端口、分页替换/返回、根提交、精确文件明细和固定快照。
+- `RevisionGraphIntegrationTests.ps1` 最终 225 项通过，使用已有隔离 fixture 的 Standard/Partial 工作区只读核对普通 merge、interval subtractive、基线、真实节点分页和边界；三个工作区的 status、selector、wktree 和全部工作文件 SHA256 保持不变。最终 Release WinForms live 检查由同一构建的 `UiTests.exe` 执行。
+- Release `-Test` 完整回归通过：既有 Core/CLI、130 标签后端、200 标签 CLI、原生 Shell/正式 DLL、45 项图 UI；44 项隔离安装/卸载检查通过，Explorer 注册未改变。未进行桌面 Explorer 点击或多 DPI 验收。
+- 证据：`qa/graph-final-build.log`、`qa/graph-live-final2.log`、fixture 下 `revision-graph-d41dce476f1f4216b83dcafa218e83c2/results.json`；截图见 `qa/graph-ui-worker/` 与该 fixture 的 Standard/Partial 子目录。
+
 ## 仓库标签管理（2026-09-28）
 
 - 新增 GUI 标签列表/筛选、目标提交文件明细、固定快照浏览、创建和删除确认，入口包括主窗口、Explorer 和历史右键。布局参考上游 `IDD_BROWSE_REFS`、`IDD_NEW_BRANCH_TAG`，使用原生控件及既有 DialogStyle。CLI 新增 `labels/label-resolve/label-create/label-delete`，提供 JSON、精确身份及严格参数范围检查。
