@@ -5,7 +5,7 @@ TortoiseSCM 是面向 Windows Explorer 的 Plastic SCM / Unity Version Control �
 
 ## 首次安装与日常操作
 
-运行需要 Windows x64、.NET Framework 4.8，以及已安装并完成服务器登录的 Plastic SCM / Unity Version Control 客户端；不需要安装 Visual Studio。比较使用单独安装的 Beyond Compare 4/5，三方合并需要 Pro。
+运行需要 Windows x64、.NET Framework 4.8，以及已安装并完成服务器登录的 Plastic SCM / Unity Version Control 客户端；不需要安装 Visual Studio。含 BC 的安装包已携带 Beyond Compare 运行文件，无需另装程序；不含 BC 的包需自行安装。三方合并需要 Pro 授权。
 
 1. 解压最新 Windows x64 ZIP，在解压目录打开 64 位 PowerShell，执行以下两行。默认安装到当前用户目录并注册经典右键菜单，不需要管理员权限：
 
@@ -111,6 +111,16 @@ $resolved = (& $exe --cli --json --command label-resolve --path $workspace --lab
 ```powershell
 .\contrib\tortoisescm\Package.ps1 -Version '0.2.0-preview'
 ```
+
+可将自备的 BC 运行文件随包携带，例如：
+
+```powershell
+.\contrib\tortoisescm\Package.ps1 -Version '0.2.0-preview-with-bc' -BeyondCompareDirectory '..\Tool\BeyondCompare'
+```
+
+运行文件安装到本版本的 `Tools\BeyondCompare`，进入逐文件校验清单并随版本安装/升级/卸载；不会注册 BC 自己的 Explorer 扩展。打包要求 `BCompare.exe`、`BComp.exe` 和 `License.html`，并按白名单携带运行所需辅助文件；不复制补丁程序、个人许可证、会话和配置。BC 使用独立许可，三方合并仍需 Pro。
+
+使用含 BC 的包时，在“设置 → 差异查看器”保留空路径（自动模式）即可。已有自定义路径会继续优先使用；需要改用包内 BC 时点击“自动检测”并保存。卸载保留用户新增/修改文件，包括使用 BC 后生成的文件。
 
 产物位于 `bin/TortoiseSCM/packages`：Windows x64 ZIP、SHA-256 校验文件，ZIP 内含逐文件校验清单。
 解压后运行 `Install.ps1`，默认安装到 `%LOCALAPPDATA%\Programs\TortoiseSCM` 并注册当前用户右键菜单。
@@ -377,7 +387,7 @@ GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件�
 
 ### Beyond Compare 比较与合并
 
-图形比较与合并工具统一使用 Windows Beyond Compare 4/5。三方文本合并需要 Pro；用户自行安装并授权，TortoiseSCM 不分发 BC、不修改其全局设置。程序查找常见安装目录和注册表，也可在设置的“差异查看器”或“合并工具”中选择 BComp.exe；两页共用同一路径，留空自动检测。选择 BCompare.exe 时会转为同目录的 BComp.exe。找不到程序会明确提示，不回退到其他编辑器；状态、历史查询和提交等不依赖 BC 的操作仍可使用。
+图形比较与合并工具统一使用 Windows Beyond Compare 4/5。三方文本合并需要 Pro 授权。安装包可通过 `-BeyondCompareDirectory` 携带用户提供的 BC 运行文件及其独立许可说明，个人授权文件不随包分发。程序不修改 BC 全局设置；自动模式先查找当前程序目录的 `Tools\BeyondCompare`，再查找常见安装目录和注册表，也可在设置的“差异查看器”或“合并工具”中选择 BComp.exe；两页共用同一路径，留空或点击“自动检测”保持自动模式，升级后使用新版本目录中的 BC。显式自定义路径仍优先，失效时会提示。选择 BCompare.exe 时会转为同目录的 BComp.exe。找不到程序会明确提示，不回退到其他编辑器；状态、历史查询和提交等不依赖 BC 的操作仍可使用。
 
 工作文件基线按 Plastic ItemId 定位，支持受控文件本地改名后的比较；启动前重新核对工作区 selector、仓库和文件身份。历史主“Beyond Compare”按钮下载固定端点，暂存集逐文件比较下载父版本和暂存版本。比较两侧只读；三方左侧为本地、右侧为远程、祖先为基线，输出为独立结果文件。参数由程序固定管理，无需填写模板。输入角色及等待方式依据 [Beyond Compare 官方集成说明](https://www.scootersoftware.com/kb/vcs) 和 [命令行文档](https://www.scootersoftware.com/v5help/command_line_reference.html)。
 

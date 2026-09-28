@@ -43,6 +43,8 @@ jobs:
         run: .\build-tortoisescm.ps1 -Configuration Release -Test
       - name: Verify portable package and isolated installation
         run: .\test\TortoiseSCM\PackageTests.ps1
+      - name: Verify optional Beyond Compare bundle and installation
+        run: .\test\TortoiseSCM\BundledBeyondComparePackageTests.ps1
       - name: Verify modern menu package and registration rollback
         run: .\test\TortoiseSCM\ModernPackageTests.ps1
       - name: Create portable package

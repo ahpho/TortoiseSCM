@@ -60,7 +60,17 @@ namespace TortoiseSCM
                         AddRegistryCandidate(candidates, hive, view, @"SOFTWARE\Scooter Software\Beyond Compare " + version, "InstallPath", true);
                     }
                 }
-            return FindExecutable(candidates);
+            return FindExecutable(AppDomain.CurrentDomain.BaseDirectory, candidates);
+        }
+
+        internal static string FindExecutable(string applicationDirectory, IEnumerable<string> installedCandidates)
+        {
+            // Keep the tool relative to this exact application version. Upgrades use
+            // a new directory and must not persist the old bundled executable path.
+            string bundled = Path.Combine(applicationDirectory, "Tools", "BeyondCompare");
+            if (File.Exists(Path.Combine(bundled, "BCompare.exe")) && File.Exists(Path.Combine(bundled, "BComp.exe")))
+                return NormalizeExecutable(Path.Combine(bundled, "BComp.exe"));
+            return FindExecutable(installedCandidates);
         }
 
         internal static string FindExecutable(IEnumerable<string> candidates)

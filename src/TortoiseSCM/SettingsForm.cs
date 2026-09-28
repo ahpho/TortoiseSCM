@@ -40,7 +40,7 @@ namespace TortoiseSCM
                 ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, Margin = new Padding(0, 0, DialogStyle.Gap, 0), AccessibleName = "设置类别" };
             var pages = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             var clientPage = CreatePage("客户端", "使用 Plastic 客户端已有的登录配置。");
-            var diffPage = CreatePage("差异查看器", "统一使用 Beyond Compare。比较和合并共用以下程序路径；留空时自动检测安装位置。");
+            var diffPage = CreatePage("差异查看器", "比较和合并共用 Beyond Compare 路径；留空优先使用包内程序，再检测系统安装。");
             var mergePage = CreatePage("合并工具", "统一使用 Beyond Compare。三方文本合并需要 Beyond Compare Pro 许可证。");
             AddPath(clientPage, 1, "cm.exe", cm); AddPath(clientPage, 2, "gluon.exe", gluon);
             clientPage.Controls.Add(FieldLabel("Plastic 命令\r\n超时（分钟）"), 0, 3); clientPage.Controls.Add(timeout, 1, 3);
@@ -148,7 +148,8 @@ namespace TortoiseSCM
             AddPath(grid, 1, "BComp.exe", input, true);
             var detect = DialogStyle.Button("自动检测");
             detect.AccessibleName = "自动检测 Beyond Compare";
-            detect.Click += delegate { input.Text = BeyondCompareTool.FindExecutable() ?? String.Empty; UpdateBeyondCompareStatus(); };
+            // Automatic mode must remain relative to this application version after upgrades.
+            detect.Click += delegate { input.Text = String.Empty; UpdateBeyondCompareStatus(); };
             grid.Controls.Add(detect, 1, 2);
             status.Dock = DockStyle.Fill; status.AccessibleName = "Beyond Compare 状态";
             grid.Controls.Add(status, 0, 4); grid.SetColumnSpan(status, 3);

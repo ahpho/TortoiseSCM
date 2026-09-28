@@ -2,6 +2,14 @@
 
 范围说明（2026-09-28）：用户已排除多 DPI、提交失败草稿跨重启恢复，以及签名/自动更新/ARM64 等发布与平台产品化工作。以下历史记录中的未验收事实保留；历史“下一步/待完成”描述不覆盖 [当前路线图](../ROADMAP.md) 的范围约定。
 
+## 随包携带 Beyond Compare 运行文件（2026-09-28）
+
+- 按用户要求，`Package.ps1 -BeyondCompareDirectory` 可将提供的 BC 运行文件放入 `Tools/BeyondCompare`，纳入 SHA-256 清单及既有版本安装/升级/卸载机制；未指定参数仍生成不含 BC 的包。README 区分两类包，并保留第三方 `License.html`。白名单不复制个人许可证、配置/会话、补丁程序及 BC Shell 扩展。
+- 自动发现优先使用当前程序版本目录内完整的 `BComp.exe`/`BCompare.exe` 配对，再检测系统安装；显式自定义路径继续优先。“自动检测”按钮保存空路径，避免升级后仍绑定旧版本目录。当前用户已切换为空路径自动模式；不把本机路径写入产品默认配置。
+- BC 配置/发现 40 项及设置 UI 53 项通过，C# 5 `/warnaserror` 编译通过；普通/最小设置页面已查看。新随包专项 39 项、既有包/隔离安装专项 45 项通过，覆盖缺文件、链接/非文件拒绝、完整哈希/字节核对、排除项、安装升级与卸载保留用户文件。新随包专项已加入 CI；本次未改动 SCM 后端，采用相关专项回归。
+- 使用用户提供目录中的真实运行文件构建包，在 `qa/bundled-bc-live/` 独立目录 `-NoRegister` 安装。引用该安装版产品的 QA 探针确认自动解析的是本版 `Tools/BeyondCompare/BComp.exe`，通过产品进程等待器执行 `/solo /silent /qc=binary`，相同/不同文件分别返回 1/11，输入文件未改变；安装版两 EXE 的 SHA-256 与用户源文件一致。随后隔离卸载移除包内 BC，保留额外 QA 探针文件，未修改实际 Explorer 注册。
+- 日志及截图：`qa/bundled-bc-build.log`、`bundled-bc-profile-tests.log`、`bundled-bc-ui.log`、`bundled-bc-ui/`、`bundled-beyond-compare-package-tests.log`、`bundled-beyond-compare-existing-package-tests.log`；真实调用 `qa/bundled-bc-live/equal.log`、`different.log`、`uninstall.log`。快速比较不能替代三方 Pro 授权、人工保存/放弃和实际 Explorer 点击验收，这些边界仍保留在路线图。
+
 ## 首次拉取已有仓库向导（2026-09-28）
 
 - 无参数启动进入欢迎窗口，支持拉取仓库、打开已有工作区和设置；另有 `--command create-workspace [--path 新目录]` GUI 入口及主窗口操作菜单。向导查询服务器仓库，明确选择名称/原生 ID/GUID，创建 Standard 完整工作区后下载指定分支，默认 `/main`；不创建服务器仓库，也不提供 Partial/动态工作区创建。

@@ -54,6 +54,23 @@ internal static class BeyondCompareTests
             Check(merge.SequenceEqual(new[] { "/solo", "/readonly", paths["local"], paths["remote"], paths["base"], "/mergeoutput=" + paths["merged"], "/lefttitle=Local", "/righttitle=Remote", "/centertitle=Base", "/outputtitle=Merged" }), "Merge uses BC local/remote/base order, read-only inputs, separate output and named sides");
             Check(!merge.Any(a => a.IndexOf("automerge", StringComparison.OrdinalIgnoreCase) >= 0), "Profile never requests unattended automatic merge");
 
+            string application = Path.Combine(root, "application 中文");
+            string bundled = Path.Combine(application, "Tools", "BeyondCompare");
+            Directory.CreateDirectory(bundled);
+            Check(BeyondCompareTool.FindExecutable(application, new[] { bcomp }) == bcomp, "Package without BC falls back to installed candidates");
+            File.WriteAllText(Path.Combine(bundled, "BComp.exe"), "launcher");
+            Check(BeyondCompareTool.FindExecutable(application, new[] { bcomp }) == bcomp, "Incomplete bundled tool is not selected");
+            File.WriteAllText(Path.Combine(bundled, "BCompare.exe"), "application");
+            string bundledLauncher = Path.Combine(bundled, "BComp.exe");
+            Check(BeyondCompareTool.FindExecutable(application, new[] { bcomp }) == bundledLauncher, "Complete bundled tool precedes installed candidates");
+            Check(BeyondCompareTool.FindExecutable(application, new string[0]) == bundledLauncher, "Bundled tool works without a system installation");
+            Check(BeyondCompareTool.ResolveExecutable(bcompare) == bcomp, "Explicit custom path remains authoritative");
+            string newApplication = Path.Combine(root, "new version");
+            string newBundled = Path.Combine(newApplication, "Tools", "BeyondCompare");
+            Directory.CreateDirectory(newBundled);
+            File.WriteAllText(Path.Combine(newBundled, "BComp.exe"), "launcher"); File.WriteAllText(Path.Combine(newBundled, "BCompare.exe"), "application");
+            Check(BeyondCompareTool.FindExecutable(newApplication, new[] { bundledLauncher }) == Path.Combine(newBundled, "BComp.exe"), "Upgraded app selects its own bundled version");
+
             string settings = Path.Combine(root, "settings.xml");
             Check(PlasticClientConfig.Load(settings).UseBeyondCompare, "Fresh settings always activate supported profile");
             File.WriteAllText(settings, "<TortoiseSCM><UseBuiltInDiff>true</UseBuiltInDiff><UseBuiltInMerge>true</UseBuiltInMerge><DiffToolPath>removed.exe</DiffToolPath><DiffToolArguments>old diff</DiffToolArguments><MergeToolPath>removed-merge.exe</MergeToolPath><MergeToolArguments>old merge</MergeToolArguments><UseBeyondCompare>false</UseBeyondCompare></TortoiseSCM>");

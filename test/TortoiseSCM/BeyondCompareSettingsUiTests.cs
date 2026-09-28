@@ -39,6 +39,9 @@ namespace TortoiseSCM
                     "Missing executable status gives an actionable installation or browse instruction");
                 Require(Field<Label>(settings, "diffStatus").Text == Field<Label>(settings, "mergeStatus").Text,
                     "Editor availability status is shared");
+                Descendants(settings).OfType<Button>().Single(button => button.Visible && button.AccessibleName == "自动检测 Beyond Compare").PerformClick();
+                Require(diff.Text == String.Empty && merge.Text == String.Empty, "Automatic detection does not pin an installed version directory");
+                diff.Text = Path.Combine(Path.GetTempPath(), "tscm-missing-" + Guid.NewGuid().ToString("N"), "BComp.exe");
                 try
                 {
                     typeof(SettingsForm).GetMethod("ApplyTools", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(settings, null);
