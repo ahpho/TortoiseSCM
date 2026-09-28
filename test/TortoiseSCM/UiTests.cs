@@ -15,7 +15,7 @@ namespace TortoiseSCM
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "find" || args[0] == "diff" || args[0] == "status")) return HistoryLoadingUiTests.FakeCm(args);
+            if (args.Length > 0 && (args[0] == "find" || args[0] == "diff" || args[0] == "status" || args[0] == "history" || args[0] == "log")) return HistoryLoadingUiTests.FakeCm(args);
             var previousContext = SynchronizationContext.Current;
             bool previousAutoInstall = WindowsFormsSynchronizationContext.AutoInstall;
             WindowsFormsSynchronizationContext uiContext = null;

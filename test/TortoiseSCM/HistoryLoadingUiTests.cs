@@ -24,7 +24,7 @@ namespace TortoiseSCM
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "find" || args[0] == "diff" || args[0] == "status")) return FakeCm(args);
+            if (args.Length > 0 && (args[0] == "find" || args[0] == "diff" || args[0] == "status" || args[0] == "history" || args[0] == "log")) return FakeCm(args);
             try { Application.EnableVisualStyles(); Run(args.Length == 0 ? "bin/TortoiseSCM/qa/history-loading" : args[0]); return 0; }
             catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
         }
@@ -76,7 +76,7 @@ namespace TortoiseSCM
                     long[] retained = Ids(form);
                     Field<Button>(form, "refreshHistory").PerformClick();
                     Pump(() => File.Exists(Meta(root, "continuation-entered")));
-                    Require(Ids(form).SequenceEqual(retained) && !Field<Button>(form, "refreshHistory").Enabled, "Partial refresh retains previous complete history and disables duplicate refresh");
+                    Require(retained.All(id => Ids(form).Contains(id)) && Ids(form).First() == 145 && !Field<Button>(form, "refreshHistory").Enabled, "Refresh progressively shows new rows while retaining previous history and disabling duplicate refresh");
                     int runningQueries = PageQueries(root);
                     var ignored = (Task)typeof(HistoryForm).GetMethod("LoadHistoryPageAsync", Flags).Invoke(form, new object[] { true });
                     Require(ignored.IsCompleted && PageQueries(root) == runningQueries, "A second refresh cannot start a concurrent scan");
@@ -92,6 +92,15 @@ namespace TortoiseSCM
                     File.Delete(Meta(root, "fail-continuation"));
                     Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
                     Require(revisions.Items.Count == 146 && !Field<bool>(form, "hasMoreHistory"), "Retry after failure completes all pages");
+                    Write(root, "head", "150"); Write(root, "slow-continuation", "");
+                    Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => File.Exists(Meta(root, "continuation-entered")));
+                    typeof(HistoryForm).GetField("writing", Flags).SetValue(form, true);
+                    Field<Label>(form, "status").Text = "write in progress";
+                    Field<CancellationTokenSource>(form, "historyRequest").Cancel(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(Field<List<PlasticHistoryItem>>(form, "entries").Select(item => item.Changeset).SequenceEqual(Ids(form)) &&
+                        Field<Label>(form, "status").Text == "write in progress", "A write cancelling history retains synchronized rows and its own progress text");
+                    typeof(HistoryForm).GetField("writing", Flags).SetValue(form, false);
+                    File.Delete(Meta(root, "slow-continuation")); File.Delete(Meta(root, "continuation-entered"));
                     form.Close();
                 }
 
@@ -135,6 +144,20 @@ namespace TortoiseSCM
                     Require(Ids(form).SequenceEqual(new long[] { 4, 1 }) && !Field<bool>(form, "hasMoreHistory"), "Sparse branch history also traverses empty batches automatically");
                     form.Close();
                 }
+                File.WriteAllText(file, "preview fixture"); Write(root, "slow-continuation", "");
+                using (var form = new HistoryForm(Client(), file, root)) {
+                    form.Show(); Pump(() => File.Exists(Meta(root, "continuation-entered")));
+                    Require(Ids(form).SequenceEqual(new long[] { 4 }) && Field<bool>(form, "hasMoreHistory"),
+                        "Native preview appears before the full scan reaches the old matching page and is never labelled complete");
+                    Save(form, Path.Combine(artifacts, "history-native-preview.png"));
+                    Field<Button>(form, "cancelHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(Ids(form).SequenceEqual(new long[] { 4 }) && Field<bool>(form, "hasMoreHistory"), "Cancel preserves confirmed native preview and incomplete state");
+                    File.Delete(Meta(root, "slow-continuation")); File.Delete(Meta(root, "continuation-entered"));
+                    Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(Ids(form).SequenceEqual(new long[] { 4, 1 }) && !Field<bool>(form, "hasMoreHistory"),
+                        "Full publication scan adds history absent from native preview and deduplicates the preview record");
+                    form.Close();
+                }
                 Console.WriteLine("PASS: history loading UI (" + assertions + " assertions)");
             }
             finally {
@@ -159,12 +182,33 @@ namespace TortoiseSCM
             if (!File.Exists(Meta(root, "history-loading-fixture"))) return 96;
             Console.OutputEncoding = new UTF8Encoding(false);
             File.AppendAllText(Meta(root, "calls.log"), String.Join(" ", args) + "\n");
+            if (args[0] == "history") {
+                if (!File.Exists(args[1])) return 8;
+                Console.WriteLine(new XElement("RevisionHistoriesResult", new XElement("RevisionHistories", new XElement("RevisionHistory",
+                    new XElement("ItemName", args[1]), new XElement("Revisions", new XElement("Revision",
+                        new XElement("ChangesetNumber", 4), new XElement("Branch", "/main/older"),
+                        new XElement("RevisionSpec", args[1] + "#cs:4"), new XElement("CreationDate", "2026-09-29T00:00:00+08:00"),
+                        new XElement("Owner", "tester"), new XElement("Comment", "native preview"),
+                        new XElement("Repository", "test"), new XElement("Server", "server:8087"),
+                        new XElement("RepositorySpec", new XElement("Name", "test"), new XElement("Server", "server:8087"))))))));
+                return 0;
+            }
+            if (args[0] == "log") {
+                int logTop = Int32.Parse(args[1].Substring(3).Split('@')[0]);
+                int bottom = Int32.Parse(args.First(arg => arg.StartsWith("--from=cs:")).Substring(10).Split('@')[0]);
+                Console.WriteLine(new XElement("LogList", Enumerable.Range(bottom + 1, logTop - bottom).Reverse().Select(i =>
+                    new XElement("Changeset", new XElement("ChangesetId", i), new XElement("Branch", i == 4 || i == 1 ? "/main/older" : "/main"),
+                        new XElement("Changes", new XElement("Item", new XElement("Type", "Changed"),
+                            new XElement("SrcCmPath", i == 4 || i == 1 ? "/deleted 中文.txt" : "/other.txt"),
+                            new XElement("DstCmPath", i == 4 || i == 1 ? "/deleted 中文.txt" : "/other.txt")))))));
+                return 0;
+            }
             if (args[0] == "status") {
                 Console.WriteLine(new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", 110),
                     new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("WkConfigName", "/main@test@server:8087"))); return 0;
             }
             if (args[0] == "diff") {
-                int cs = Int32.Parse(args[1].Substring(3));
+                int cs = Int32.Parse(args[1].Substring(3).Split('@')[0]);
                 Console.WriteLine(cs == 4 || cs == 1 ? "C|/deleted 中文.txt|F||" : "C|/other.txt|F||"); return 0;
             }
             if (args[0] == "find" && args[1] == "branch") {

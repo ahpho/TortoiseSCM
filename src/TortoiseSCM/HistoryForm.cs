@@ -37,6 +37,7 @@ namespace TortoiseSCM
         private bool loadingHistory;
         private bool hasMoreHistory = true;
         private int scannedChangesets;
+        private bool historyCompatibilityFallback;
         private string historyRepository;
         private bool writing;
         private int generation;
@@ -251,53 +252,100 @@ namespace TortoiseSCM
             historyRequest = cancellation;
             refreshHistory.Enabled = false; cancelHistory.Enabled = true;
             status.Text = "正在读取全部历史；可随时取消…";
-            // Preserve a previous result throughout a refresh. Initial loads publish
-            // completed batches, including progress through sparse path/branch history.
-            bool publishBatches = entries.Count == 0;
+            // During refresh retain old rows alongside completed batches; on failure
+            // restore the previous result. Native hints never establish completeness.
+            var previous = entries.ToList();
+            string previousRepository = historyRepository;
+            var previewItems = new List<PlasticHistoryItem>();
             var refreshed = new List<PlasticHistoryItem>();
             var seen = new HashSet<long>();
             string repository = null;
             long? before = null;
-            hasMoreHistory = true; scannedChangesets = 0;
+            hasMoreHistory = true; scannedChangesets = 0; historyCompatibilityFallback = false;
             UpdateHistorySummary();
             try
             {
-                do
+                string loadError = null;
+                try
                 {
-                    cancellation.Token.ThrowIfCancellationRequested();
-                    if (branch != null) ValidateHistoryContext();
-                    var page = branch == null ? await client.GetHistoryPageAsync(path, before, 50, cancellation.Token) :
-                        await client.GetHistoryPageAsync(path, branch, before, 50, cancellation.Token);
-                    cancellation.Token.ThrowIfCancellationRequested();
-                    if (branch != null)
+                    if (!wholeWorkspace)
                     {
-                        ValidateHistoryContext();
-                        if (page.Repository != branchRepository || page.Branch != branch) throw new InvalidOperationException("分支历史上下文已改变，请重新打开窗口。");
+                        if (branch != null) ValidateHistoryContext();
+                        var preview = await client.GetNativeHistoryPreviewAsync(path, branch, cancellation.Token);
+                        cancellation.Token.ThrowIfCancellationRequested();
+                        if (branch != null)
+                        {
+                            ValidateHistoryContext();
+                            if (preview.Repository != branchRepository || preview.Branch != branch)
+                                throw new InvalidOperationException("分支历史上下文已改变，请重新打开窗口。");
+                        }
+                        repository = preview.Repository;
+                        previewItems.AddRange(preview.Items);
+                        if (previewItems.Count > 0)
+                        {
+                            bool repositoryChanged = historyRepository != null && historyRepository != repository;
+                            if (repositoryChanged) comparisonChangeset = null;
+                            historyRepository = repository;
+                            entries.Clear();
+                            entries.AddRange(previewItems.Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>())
+                                .GroupBy(item => item.Changeset).Select(group => group.First()).OrderByDescending(item => item.Changeset));
+                            await ApplyFilterAsync(repositoryChanged);
+                            UpdateHistorySummary();
+                        }
                     }
-                    if (repository != null && page.Repository != repository) throw new InvalidOperationException("工作区仓库已改变，请刷新历史。");
-                    if (page.HasMore && (!page.NextBeforeChangeset.HasValue || page.NextBeforeChangeset.Value < 0 ||
-                        (before.HasValue && page.NextBeforeChangeset.Value >= before.Value)))
-                        throw new InvalidDataException("历史查询未返回有效的更早版本位置；未将不完整结果视为全部历史。");
-                    repository = page.Repository;
-                    foreach (var item in page.Items) if (seen.Add(item.Changeset)) refreshed.Add(item);
-                    scannedChangesets += page.ScannedChangesets;
-                    before = page.NextBeforeChangeset;
-                    hasMoreHistory = page.HasMore;
-                    if (publishBatches || !page.HasMore)
+                    do
                     {
-                        if (historyRepository != null && historyRepository != repository) comparisonChangeset = null;
+                        cancellation.Token.ThrowIfCancellationRequested();
+                        if (branch != null) ValidateHistoryContext();
+                        var page = branch == null ? await client.GetHistoryPageAsync(path, before, 50, cancellation.Token) :
+                            await client.GetHistoryPageAsync(path, branch, before, 50, cancellation.Token);
+                        cancellation.Token.ThrowIfCancellationRequested();
+                        if (branch != null)
+                        {
+                            ValidateHistoryContext();
+                            if (page.Repository != branchRepository || page.Branch != branch) throw new InvalidOperationException("分支历史上下文已改变，请重新打开窗口。");
+                        }
+                        if (repository != null && page.Repository != repository) throw new InvalidOperationException("工作区仓库已改变，请刷新历史。");
+                        if (page.HasMore && (!page.NextBeforeChangeset.HasValue || page.NextBeforeChangeset.Value < 0 ||
+                            (before.HasValue && page.NextBeforeChangeset.Value >= before.Value)))
+                            throw new InvalidDataException("历史查询未返回有效的更早版本位置；未将不完整结果视为全部历史。");
+                        repository = page.Repository;
+                        historyCompatibilityFallback |= !String.IsNullOrEmpty(page.FallbackReason);
+                        foreach (var item in page.Items) if (seen.Add(item.Changeset)) refreshed.Add(item);
+                        scannedChangesets += page.ScannedChangesets;
+                        before = page.NextBeforeChangeset;
+                        hasMoreHistory = page.HasMore;
+                        bool repositoryChanged = historyRepository != null && historyRepository != repository;
+                        if (repositoryChanged) comparisonChangeset = null;
                         historyRepository = repository;
-                        entries.Clear(); entries.AddRange(refreshed);
-                        await ApplyFilterAsync(!page.HasMore);
+                        entries.Clear();
+                        // The final list comes exclusively from the complete publication scan.
+                        // Until then, newly confirmed rows can be used without hiding old rows.
+                        IEnumerable<PlasticHistoryItem> visible = refreshed;
+                        if (page.HasMore) visible = visible.Concat(previewItems)
+                            .Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>());
+                        entries.AddRange(visible.GroupBy(item => item.Changeset).Select(group => group.First()).OrderByDescending(item => item.Changeset));
+                        await ApplyFilterAsync(repositoryChanged || !page.HasMore);
+                        UpdateHistorySummary();
+                        // Yield between bounded batches even when all backend tasks are cached.
+                        if (page.HasMore) await Task.Yield();
                     }
-                    UpdateHistorySummary();
-                    // Yield between bounded batches even when all backend tasks are cached.
-                    if (page.HasMore) await Task.Yield();
+                    while (hasMoreHistory);
                 }
-                while (hasMoreHistory);
+                catch (OperationCanceledException) { loadError = "已取消加载；已加载历史保留。点击“刷新全部”重试。"; }
+                catch (Exception ex) { loadError = "读取失败：" + ex.Message; }
+                if (loadError != null && !lifetime.IsCancellationRequested)
+                {
+                    hasMoreHistory = true;
+                    // Restore/snapshot cancels history before starting its write. Do
+                    // not change its status or desynchronize visible and stored rows.
+                    if (!writing)
+                    {
+                        await RestoreHistoryAfterFailedRefreshAsync(previous, previousRepository);
+                        status.Text = loadError;
+                    }
+                }
             }
-            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消加载；已加载历史保留。点击“刷新全部”重试。"; }
-            catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "读取失败：" + ex.Message; }
             finally
             {
                 historyRequest = null; cancellation.Dispose();
@@ -311,12 +359,21 @@ namespace TortoiseSCM
             }
         }
 
+        private async Task RestoreHistoryAfterFailedRefreshAsync(List<PlasticHistoryItem> previous, string repository)
+        {
+            hasMoreHistory = true;
+            if (previous.Count == 0 || historyRepository != repository) return;
+            entries.Clear(); entries.AddRange(previous);
+            await ApplyFilterAsync();
+        }
+
         private void UpdateHistorySummary()
         {
             historySummary.Text = revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
                 " 个提交；" + (hasMoreHistory ? (loadingHistory ? "正在读取全部历史，可取消" : "加载未完成，请刷新全部重试") : "已扫描全部历史") +
                 (branch != null ? "（仅本分支提交，不含祖先）" :
-                    (wholeWorkspace ? "" : "（路径历史，不追溯重命名前的其他路径）"));
+                    (wholeWorkspace ? "" : "（路径历史，不追溯重命名前的其他路径）")) +
+                (historyCompatibilityFallback ? "；已使用兼容查询" : "");
         }
 
         private async Task ApplyFilterAsync(bool forceDetails = false)

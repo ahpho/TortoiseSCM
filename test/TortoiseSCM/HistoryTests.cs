@@ -26,6 +26,8 @@ internal static class HistoryTests
             string selector = Path.Combine(temporary, ".plastic", "plastic.selector");
             File.WriteAllText(selector, "repository \"test@server:8087\"");
             var client = new PlasticClient(new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location, Timeout = TimeSpan.FromSeconds(10) });
+            BatchAssertions(temporary);
+            File.Delete(Log(temporary));
             var first = client.GetHistoryPageAsync(temporary, null, 2, Token).GetAwaiter().GetResult();
             Check(first.Items.Select(i => i.Changeset).SequenceEqual(new long[] { 7, 6 }) && first.HasMore && first.NextBeforeChangeset == 6, "Repository uses descending cursor pagination");
             Check(first.ScannedChangesets == 2 && DiffCount(temporary) == 0, "Repository page requires no per-changeset diff calls");
@@ -116,6 +118,57 @@ internal static class HistoryTests
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { Directory.Delete(temporary, true); }
     }
+    private static void BatchAssertions(string root)
+    {
+        string marker = Path.Combine(root, ".plastic", "batch-mode");
+        File.WriteAllText(marker, "valid");
+        var client = new PlasticClient(new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location });
+        var directory = client.GetHistoryPageAsync(Path.Combine(root, "folder"), 8, 7, Token).GetAwaiter().GetResult();
+        Check(directory.Items.Select(item => item.Changeset).SequenceEqual(new long[] { 7, 5, 4, 3, 2, 1 }), "Batch preserves rollback publication, old/new move paths and directory deletion");
+        Check(DiffCount(root) == 0 && BatchCount(root) == 1 && directory.FallbackReason == null, "One log command filters entire directory page without individual diffs");
+        var file = client.GetHistoryPageAsync(Path.Combine(root, "folder", "file.txt"), 8, 7, Token).GetAwaiter().GetResult();
+        Check(file.Items.Select(item => item.Changeset).SequenceEqual(directory.Items.Select(item => item.Changeset)), "Batch ancestor records are checked without losing moved or deleted descendants");
+        Check(DiffCount(root) == 2, "Only two ambiguous ancestor records need exact file/directory diffs");
+        var branch = client.GetHistoryPageAsync(Path.Combine(root, "folder"), "/main/topic", 8, 7, Token).GetAwaiter().GetResult();
+        Check(branch.Items.Select(item => item.Changeset).SequenceEqual(new long[] { 4, 2 }), "Batch branch and path filters intersect exactly");
+        Check(File.ReadAllLines(Log(root)).Where(line => line.StartsWith("log ")).All(line => line.Contains("--allbranches") && line.Contains("--repositorypaths") && line.Contains("--from=cs:0")), "Batch explicitly includes all branches and correct exclusive lower boundary");
+        int calls = BatchCount(root);
+        var initial = client.GetHistoryPageAsync(Path.Combine(root, "folder"), 1, 1, Token).GetAwaiter().GetResult();
+        Check(initial.Items.Count == 0 && !initial.HasMore && BatchCount(root) == calls, "Initial empty changeset zero needs no unsupported log or diff");
+        foreach (string mode in new[] { "unsupported", "missing", "duplicate", "branch", "path", "field", "malformed", "unknown-type", "foreign", "no-changes", "repeated-field", "nested-field" })
+        {
+            File.WriteAllText(marker, mode);
+            client = new PlasticClient(new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location });
+            int before = DiffCount(root);
+            var page = client.GetHistoryPageAsync(Path.Combine(root, "folder"), 8, 2, Token).GetAwaiter().GetResult();
+            Check(page.Items.Select(item => item.Changeset).SequenceEqual(new long[] { 7 }) && !String.IsNullOrEmpty(page.FallbackReason), "Batch " + mode + " reports safe fallback and preserves correct result");
+            Check(DiffCount(root) == before + 2, "Batch " + mode + " never trusts incomplete interval");
+        }
+        File.WriteAllText(marker, "slow");
+        using (var cancel = new CancellationTokenSource())
+        {
+            var pending = client.GetHistoryPageAsync(Path.Combine(root, "folder"), 8, 2, cancel.Token);
+            for (int wait = 0; wait < 100 && !File.Exists(Path.Combine(root, ".plastic", "log-entered")); wait++) Thread.Sleep(20);
+            Check(File.Exists(Path.Combine(root, ".plastic", "log-entered")), "Cancellation enters actual running batch command");
+            cancel.Cancel(); bool cancelled = false;
+            try { pending.GetAwaiter().GetResult(); } catch (OperationCanceledException) { cancelled = true; }
+            Check(cancelled, "Cancelled batch does not return incomplete page or start fallback");
+        }
+        File.WriteAllText(marker, "switch-repository");
+        bool changed = false;
+        try { client.GetHistoryPageAsync(Path.Combine(root, "folder"), 8, 2, Token).GetAwaiter().GetResult(); }
+        catch (InvalidOperationException) { changed = true; }
+        Check(changed, "Repository change during batch fails closed");
+        File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"test@server:8087\"");
+        Check(File.ReadAllLines(Log(root)).Where(line => line.StartsWith("find changeset ")).All(line => line.Contains("on repository 'test@server:8087'")), "History find queries explicitly pin the captured repository");
+        Check(File.ReadAllLines(Log(root)).Where(line => line.StartsWith("log ") || line.StartsWith("diff ")).All(line => line.Contains("@test@server:8087")), "Batch and exact ancestor/fallback diff queries pin the captured repository");
+        Check(File.ReadAllLines(Log(root)).Where(line => line.StartsWith("log ")).All(line => Regex.IsMatch(line, @"--from=cs:\d+@test@server:8087")), "Both batch interval endpoints pin the same captured repository");
+        File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"quote'repo@server:8087\"");
+        Reject(() => client.GetHistoryPageAsync(root, null, 2, Token).GetAwaiter().GetResult(), "Unsafe query repository is rejected before executing native query");
+        File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"test@server:8087\"");
+        File.Delete(marker);
+    }
+    private static int BatchCount(string root) { return File.ReadAllLines(Log(root)).Count(line => line.StartsWith("log ")); }
     private static int Real(string root)
     {
         try
@@ -164,10 +217,40 @@ internal static class HistoryTests
             Console.WriteLine(new XElement("PLASTICQUERY", ids.Select(i => new XElement("CHANGESET", new XElement("CHANGESETID", i),
                 new XElement("COMMENT", i == 7 ? "publish rollback using old revision" : "commit " + i), new XElement("BRANCH", i == 3 ? "/main/quoted '中文'" : i % 2 == 0 ? "/main/topic" : "/main"))))); return 0;
         }
+        if (args[0] == "log")
+        {
+            string marker = Path.Combine(root, ".plastic", "batch-mode");
+            if (!File.Exists(marker)) return 99;
+            string mode = File.ReadAllText(marker);
+            if (mode == "unsupported") return 99;
+            if (mode == "malformed") { Console.WriteLine("<LogList>"); return 0; }
+            if (mode == "slow") { File.WriteAllText(Path.Combine(root, ".plastic", "log-entered"), ""); Thread.Sleep(5000); }
+            if (mode == "switch-repository") File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"other@server:8087\"");
+            int top = Int32.Parse(args[1].Substring(3).Split('@')[0]), bottom = Int32.Parse(args.Single(arg => arg.StartsWith("--from=cs:")).Substring(10).Split('@')[0]);
+            var records = new List<XElement>();
+            for (int id = top; id > bottom; id--)
+            {
+                if (mode == "missing" && id == top) continue;
+                string source = id == 7 ? "/folder/file.txt" : id == 6 ? "/folderish/other.txt" : id == 5 ? "/folder/file.txt" : id == 4 ? "/original.txt" : id == 3 || id == 2 ? "/folder" : "/folder/file.txt";
+                string destination = id == 5 ? "/elsewhere.txt" : id == 4 ? "/folder/file.txt" : id == 3 ? "/other-directory" : source;
+                var item = new XElement("Item", new XElement("Type", id >= 6 ? "Changed" : id >= 3 ? "Moved" : id == 2 ? "Deleted" : "Added"), new XElement("SrcCmPath", source), new XElement("DstCmPath", destination), new XElement("RevNo", 1));
+                if (mode == "path") item.Element("SrcCmPath").Value = "relative/path";
+                if (mode == "field") item.Element("DstCmPath").Remove();
+                if (mode == "repeated-field") item.Add(new XElement("DstCmPath", "/other"));
+                if (mode == "nested-field") item.Element("DstCmPath").Add(new XElement("Nested", "bad"));
+                if (mode == "unknown-type") item.Element("Type").Value = "Unknown";
+                var record = new XElement("Changeset", new XElement("ChangesetId", mode == "foreign" ? 9000 + id : id),
+                    new XElement("Branch", mode == "branch" ? "/other" : id == 3 ? "/main/quoted '\u4e2d\u6587'" : id % 2 == 0 ? "/main/topic" : "/main"), new XElement("Changes", item));
+                if (mode == "no-changes") record.Element("Changes").Remove();
+                records.Add(record);
+                if (mode == "duplicate") records.Add(new XElement(record));
+            }
+            Console.WriteLine(new XElement("LogList", records)); return 0;
+        }
         if (args[0] == "diff")
         {
             if (File.Exists(Path.Combine(root, ".plastic", "diff-fail"))) return 9;
-            int cs = Int32.Parse(args[1].Substring(3));
+            int cs = Int32.Parse(args[1].Substring(3).Split('@')[0]);
             Console.WriteLine(cs == 7 ? "C|/folder/file.txt|F||" : cs == 6 ? "C|/folderish/other.txt|F||" :
                 cs == 5 ? "M|/elsewhere.txt|F|/folder/file.txt|/elsewhere.txt" : cs == 4 ? "M|/folder/file.txt|F|/original.txt|/folder/file.txt" :
                 cs == 3 ? "M|/other-directory|D|/folder|/other-directory" : cs == 2 ? "D|/folder|D||" : "A|/folder/file.txt|F||"); return 0;
