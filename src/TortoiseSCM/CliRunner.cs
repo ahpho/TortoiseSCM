@@ -17,7 +17,7 @@ namespace TortoiseSCM
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
-            "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch, rename-branch, delete-branch\r\n" +
+            "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, partial-switch-preview, create-branch, rename-branch, delete-branch\r\n" +
             "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame, repository-list, revision-graph\r\n" +
             "          labels, label-resolve, label-create, label-delete\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
@@ -36,6 +36,7 @@ namespace TortoiseSCM
             "  branch-tree --path <workspace> [--filter <text>] (native parent hierarchy, not commit or merge ancestry)\r\n" +
             "  Matching branches retain visible ancestors as context; missing parents are marked explicitly.\r\n" +
             "  switch-branch --path <root> --branch </main/name> --yes (clean Standard/Partial; Partial retains loading configuration)\r\n" +
+            "  partial-switch-preview --path <root> --branch </main/name> (read-only loaded directory structure review)\r\n" +
             "  rename-branch --path <workspace> --branch <old> --branch-id <id> --branch-guid <guid> --changeset <head> --new-name <leaf> --yes\r\n" +
             "  delete-branch --path <workspace> --branch <empty-leaf> --branch-id <id> --branch-guid <guid> --changeset <head> --yes\r\n" +
             "  create-branch --path <workspace> --branch </main/new> --changeset N --comment <text> --yes\r\n" +
@@ -330,6 +331,19 @@ namespace TortoiseSCM
                 long changeset = client.ResolveBranchHeadAsync(options.Paths[0], options.Branch, CancellationToken.None).GetAwaiter().GetResult();
                 response.data = new { workspace = workspaceData, branch = options.Branch, changeset = changeset };
                 response.output = "cs:" + changeset.ToString(CultureInfo.InvariantCulture);
+                return;
+            }
+            if (options.Command == "partial-switch-preview")
+            {
+                var preview = client.PreviewPartialBranchSwitchAsync(options.Paths[0], options.Branch, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, repository = preview.Repository, branch = preview.Branch,
+                    headChangeset = preview.HeadChangeset, canSwitch = preview.CanSwitch, loadedDirectoryCount = preview.LoadedDirectoryCount,
+                    loadingRuleCount = preview.LoadingRuleCount, isFullyLoaded = preview.IsFullyLoaded,
+                    directories = preview.Directories.Select(row => new { path = row.Path, targetPath = row.TargetPath,
+                        itemId = row.ItemId, change = row.Change, reason = row.Reason }).ToArray() };
+                response.output = (preview.CanSwitch ? "Directory structure permits switching." : "Directory structure blocks switching.") +
+                    " This is not a complete file change preview." + Environment.NewLine +
+                    String.Join(Environment.NewLine, preview.Directories.Select(row => row.Change + "\t" + row.Path + "\t" + row.TargetPath + "\t" + row.Reason));
                 return;
             }
             if (options.Command == "switch-branch")
@@ -992,7 +1006,7 @@ namespace TortoiseSCM
             }
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
-                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch", "rename-branch", "delete-branch",
+                "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "partial-switch-preview", "create-branch", "rename-branch", "delete-branch",
                 "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "revision-graph", "labels", "label-resolve", "label-create", "label-delete", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
@@ -1021,11 +1035,12 @@ namespace TortoiseSCM
                 throw new ArgumentException("Shelveset commands require exactly one workspace path.");
             if (new[] { "shelves", "shelve-details", "shelve-diff" }.Contains(options.Command) && yes)
                 throw new ArgumentException("Read-only shelveset commands do not accept --yes.");
-            bool branchCommand = new[] { "branches", "branch-tree", "branch-head", "switch-branch", "create-branch", "rename-branch", "delete-branch" }.Contains(options.Command);
-            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "create-branch" || options.Command == "rename-branch" || options.Command == "delete-branch";
+            bool branchCommand = new[] { "branches", "branch-tree", "branch-head", "switch-branch", "partial-switch-preview", "create-branch", "rename-branch", "delete-branch" }.Contains(options.Command);
+            bool branchTarget = options.Command == "branch-head" || options.Command == "switch-branch" || options.Command == "partial-switch-preview" || options.Command == "create-branch" || options.Command == "rename-branch" || options.Command == "delete-branch";
+            if (options.Command == "partial-switch-preview" && yes) throw new ArgumentException("Read-only partial-switch-preview does not accept --yes.");
             if (branchCommand && options.Paths.Count != 1) throw new ArgumentException("Branch commands require exactly one workspace path.");
             if ((branchTarget && options.Branch == null) || (!branchTarget && options.Command != "history-page" && options.Branch != null))
-                throw new ArgumentException("--branch is required for branch-head, switch-branch, create-branch, rename-branch and delete-branch, and optional for history-page.");
+                throw new ArgumentException("--branch is required for branch-head, switch-branch, partial-switch-preview, create-branch, rename-branch and delete-branch, and optional for history-page.");
             if (options.Branch != null && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
             if (options.Filter != null && options.Command != "branch-tree" && options.Command != "labels") throw new ArgumentException("--filter is supported only for branch-tree and labels.");
             if (options.Ignore != null && options.Command != "blame") throw new ArgumentException("--ignore is supported only for blame.");

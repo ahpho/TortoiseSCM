@@ -53,6 +53,13 @@ namespace TortoiseSCM
         private static BranchForm Open(PlasticClient client, string root)
         {
             var form = new BranchForm(client, root);
+            Set(form, "previewPartialSwitch", new Func<string, string, CancellationToken, Task<PlasticPartialBranchSwitchPreview>>((path, branch, token) =>
+                Task.FromResult(new PlasticPartialBranchSwitchPreview { Repository = "ui-switch@local", Branch = branch, HeadChangeset = 2, CanSwitch = true,
+                    Directories = new List<PlasticPartialBranchSwitchDirectory>() })));
+            Set(form, "showPartialPreview", new Func<PlasticPartialBranchSwitchPreview, bool>(preview =>
+                Field<Func<string, bool>>(form, "confirmSwitch")(preview.Branch + "\r\n" + root + "\r\n" + PartialBranchSwitchPreviewForm.ScopeText)));
+            Set(form, "performPartialSwitch", new Func<string, PlasticPartialBranchSwitchPreview, CancellationToken, Task<PlasticCommandResult>>((path, preview, token) =>
+                Field<Func<string, string, CancellationToken, Task<PlasticCommandResult>>>(form, "performSwitch")(path, preview.Branch, token)));
             Set(form, "getWorkspace", new Func<string, CancellationToken, Task<PlasticWorkspace>>((path, token) => {
                 var workspace = client.DiscoverWorkspace(path); workspace.IsPartial = serverPartial; return Task.FromResult(workspace);
             }));

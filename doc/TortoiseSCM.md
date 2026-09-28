@@ -277,7 +277,9 @@ GUI 从“比较整个仓库”的固定快照差异列表打开新增/删除项
 
 “切换工作区…”在确认后切换 Standard 或 Partial 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、签出项、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Standard 更新整个工作区；Partial 使用原生 `partial switch` 更新加载范围，完整加载的目录会接收目标分支的新文件，排除文件和未选中的目录仍保持未加载。Partial 跨分支合并仍不开放。
 
-Partial 切换前核对目标 ID/GUID/父关系/头提交，工作区身份、原生模式及加载配置；加载树在预检期间发生变化会中止。切换后再次核对目标分支、干净状态和加载规则。加载规则缺失或无法识别时拒绝执行。某些目录结构变化可能使原生加载规则改变，此时即使命令已经执行也会报告结果未确认；应先刷新当前分支与工作区状态，并在 Gluon 检查加载配置，确认后再明确决定下一步。程序不自动恢复旧元数据、重试、暂存、撤销或反向切换。原生命令按名称执行，执行前后的核对不是服务器原子事务。参见 [Unity Partial switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-switch)。
+Partial 切换前显示只读目录结构预览，按固定目标头提交的真实 ItemId/路径核对已加载目录。移动、删除、同路径替换，以及完整加载范围内新增目录会阻止继续；已加载单个文件移入未加载父目录同样拒绝。未加载范围且不涉及已选文件的新目录，以及普通文件内容变化仍可切换。预览只说明目录结构和加载范围，不是完整文件变更清单。被拦截时请取消，在 Gluon 中核对目标与加载范围后重新预览，程序不会自动卸载或重配置。
+
+GUI 确认固定预览时的目标 ID/GUID/父关系/头提交、selector、加载树和配置，变化后要求重新预览；直接 CLI 切换也会执行结构检查。加载规则缺失、身份或目录层级数据无法验证时拒绝执行。切换后再次核对目标分支、干净状态和加载规则。原生写入仍有并发窗口；即使命令已经执行，后检不一致也会报告结果未确认。应先刷新当前分支与状态，并在 Gluon 检查加载配置，确认后再明确决定下一步。程序不自动恢复旧元数据、重试、暂存、撤销或反向切换。参见 [Unity Partial switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-switch)。
 
 选择非当前叶子分支后，可使用“重命名…”按钮或右键菜单填写新的短名称，并确认仓库、原/新完整名称、父分支和头提交。Standard/Partial 均支持；不切换、更新或签入工作区，保留本地待定内容。根分支、当前 selector 引用的分支、有子分支、身份缺失和名称与父关系不一致的分支不可重命名。过滤列表不会隐藏子分支保护。重命名会影响其他用户按名称保存的引用。
 
@@ -296,6 +298,8 @@ $head = & $exe --cli --command branch-head --path 'D:\workspace' --branch '/main
 & $exe --cli --command merge-preview --path 'D:\workspace' --changeset $head.data.changeset --json | ConvertFrom-Json
 # Standard/Partial 分支切换均需干净工作区、显式根目录和确认
 & $exe --cli --command switch-branch --path 'D:\workspace' --branch '/main/task' --yes --json | ConvertFrom-Json
+# Partial 专用只读目录预览，返回 canSwitch 和 directories；不接受 --yes
+& $exe --cli --command partial-switch-preview --path 'D:\workspace' --branch '/main/task' --json | ConvertFrom-Json
 # 创建子分支，固定历史起点；不自动切换，说明也可从 --commentsfile 读取
 & $exe --cli --command create-branch --path 'D:\workspace' --branch '/main/new-task' --changeset 123 --comment '新任务' --yes --json | ConvertFrom-Json
 # 先查看并确认分支身份和头提交，再重命名；--new-name 只接受短名称
@@ -311,6 +315,7 @@ $emptyBranch = $rows | Where-Object name -eq '/main/unused-empty-task'
 ```
 
 分支列表的 `data.branches` 提供 `name/branchId/guid/parent/owner/creationDate/comment/repository/headChangeset/isCurrent`。旧版输出缺少身份时仍可浏览，但不能重命名或删除。
+`partial-switch-preview` 返回 `headChangeset/canSwitch/loadedDirectoryCount/loadingRuleCount/isFullyLoaded/directories`；每个目录含 `path/targetPath/itemId/change/reason`。成功读取但被结构保护拦截时仍返回成功退出码，必须检查 `canSwitch=false`；查询错误或工作区变化则报错。CLI 预览与后续切换是两个独立调用，切换会重新检查当前目标，不把上一份 JSON 当作执行授权。
 `branch-tree` 只读，支持 Standard 和 Partial；`data.nodes` 是父节点在前的扁平序列，在分支字段之外包含 `depth/isMatch/parentMissing/childCount`，`data.filter` 为过滤条件。`childCount` 为未过滤数据中的直接子分支数；保留祖先的 `isMatch=false`，缺失父分支的根节点 `parentMissing=true`。`--filter` 按名称、作者、日期、说明或头提交匹配；不接受写操作确认 `--yes`。
 分支历史沿用有界扫描和游标，每次最多扫描 `--limit` 个仓库提交，再按分支与路径取交集。空页不代表结束：只要 `hasMore=true`，就可使用 `nextBeforeChangeset` 继续读取；`data.branch` 标明当前过滤条件。分支名精确匹配，不解释为查询表达式。
 `--branch` 使用完整分支名，不含 `br:` 前缀或仓库后缀；切换使用 [原生 cm switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/switch)，不创建提交。切换失败或超时后应先刷新核对状态，不自动回滚或撤销可能已完成的部分操作。
@@ -565,7 +570,7 @@ GUI 选择下方的普通文件或二进制文件后，点击“比较”、双�
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
 更完整的逐项差距与推进顺序见 [TortoiseGit 功能对照](TortoiseSCM-parity.md)。
-尚未提供：有历史分支的级联删除、当前/根/有子分支的重命名、Partial 跨分支合并及加载结构变化恢复向导、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建。
+尚未提供：有历史分支的级联删除、当前/根/有子分支的重命名、Partial 跨分支合并及被拦截加载结构变化的处理/恢复向导、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建。
 
 范围外：签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer，以及多 DPI、跨重启提交失败草稿恢复；这些不作为完成条件。现有 x64 安装与卸载继续维护。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。

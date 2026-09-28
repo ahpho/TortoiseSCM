@@ -13,7 +13,7 @@ namespace TortoiseSCM
     {
         // Called only while both workspace mutation gates are held. Native partial
         // switch retains loading rules; configure/force/automatic shelving are forbidden.
-        private async Task<PlasticCommandResult> SwitchPartialBranchAsync(PlasticWorkspace workspace, string branch, CancellationToken token)
+        private async Task<PlasticCommandResult> SwitchPartialBranchAsync(PlasticWorkspace workspace, string branch, CancellationToken token, PartialSwitchReview review = null)
         {
             string root = workspace.RootPath;
             var loading = CapturePartialSwitchLoading(root);
@@ -21,9 +21,12 @@ namespace TortoiseSCM
             string identity = PartialSwitchMetadataHash(root, "plastic.workspace", true);
             await ValidateBranchSwitchCleanAsync(root, token).ConfigureAwait(false);
             var expected = (await GetBranchesAsync(root, token).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch);
-            Guid guid;
-            if (expected == null || expected.BranchId <= 0 || !System.Guid.TryParse(expected.Guid, out guid) || guid == System.Guid.Empty || expected.HeadChangeset < 0)
-                throw new ArgumentException("Partial branch switch requires the target's native ID, GUID and head. Refresh the branch list.");
+            RequirePartialSwitchIdentity(expected);
+            if (review != null) RequirePartialSwitchTarget(expected, review.Branch);
+            var preview = await ReadPartialSwitchPreviewAsync(workspace, expected, token).ConfigureAwait(false);
+            if (!preview.CanSwitch)
+                throw new ArgumentException("Partial branch switch was not performed because loaded directory structure would change. Preview the target branch and resolve its directory loading scope first. " +
+                    String.Join("; ", preview.Directories.Where(item => item.Change != "Unchanged").Select(item => item.Change + ": " + item.Path)));
             ValidatePartialSwitchPreflight(workspace, loading, tree, identity);
             var refreshed = (await GetBranchesAsync(root, token).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch);
             RequirePartialSwitchTarget(refreshed, expected);
@@ -31,6 +34,7 @@ namespace TortoiseSCM
             var current = await GetWorkspaceAsync(root, token).ConfigureAwait(false);
             RequirePartialSwitchWorkspace(current, workspace);
             ValidatePartialSwitchPreflight(workspace, loading, tree, identity);
+            if (review != null) ValidatePartialSwitchPreflight(review.Workspace, review.Loading, review.Tree, review.Identity);
             token.ThrowIfCancellationRequested();
             const string advisory = " The Partial workspace may have changed. Refresh branches and workspace status, and inspect the loading configuration before continuing; no automatic undo, configuration restore or retry was performed.";
             try

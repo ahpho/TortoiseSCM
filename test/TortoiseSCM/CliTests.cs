@@ -59,6 +59,11 @@ internal static class CliTests
             Run(2, "--command", "changeset", "--path", temporary, "--changeset", "9223372036854775808");
             Run(2, "--command", "rollback", "--path", temporary, "--changeset", "1");
             Run(2, "--command", "switch", "--path", temporary, "--changeset", "1");
+            Run(2, "--command", "partial-switch-preview", "--path", temporary);
+            Run(2, "--command", "partial-switch-preview", "--branch", "/main/topic");
+            foreach (string[] extra in new[] { new[] { "--yes" }, new[] { "--changeset", "1" }, new[] { "--comment", "invalid" },
+                new[] { "--path", Path.Combine(temporary, "another-path") }, new[] { "--branch", "/main/duplicate" } })
+                Run(2, new[] { "--command", "partial-switch-preview", "--path", temporary, "--branch", "/main/topic" }.Concat(extra).ToArray());
             Run(2, "--command", "status", "--path", temporary, "--changeset", "1");
             Run(2, "--command", "settings", "--diff-tool", fakeCm);
             string[] renameArguments = { "--command", "rename-branch", "--path", temporary, "--branch", "/main/topic", "--branch-id", "42",

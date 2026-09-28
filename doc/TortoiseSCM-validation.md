@@ -427,3 +427,15 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 最终构建真实 CLI 集成仍为 38 项通过（`qa/partial-branch-switch-integration-final.log`），fixture `qa/integration-20260928-173815-82bee097/manifest.json`，相邻 `partial-branch-switch-results.json` 记录全部命令及断言。安装/升级回滚/卸载 45 项通过（`qa/partial-branch-switch-package.log`），实际 Explorer 注册未改变。
 - 原有真实分支流程回归 31 项通过（`qa/partial-switch-branch-regression.log`），保留 Standard 切换、待定/忽略/私有项与原生合并保护；旧 Partial 全面禁用断言改为验证有私有文件时拒绝且保留字节和 selector。
 - 全量 `build-tortoisescm.ps1 -Test` 回归通过（`qa/partial-branch-switch-regression.log`），包括 2,262 项主 CLI、Core、其他 CLI、Shell/现代菜单和完整 WinForms 回归，新增 Partial UI 63 项通过。运行期间最终补强了模式后检和界面原生模式提示；最终生产程序已重新构建（`qa/partial-branch-switch-final-build.log`），补强后的后端专项、最终真实集成和后续完整 GUI 均通过。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-partial-branch-switch-20260928-windows-x64.zip`。
+
+# Partial 分支切换目录结构预览（2026-09-28）
+
+- 分支窗口在 Partial 切换前显示只读结构预览；新增 `partial-switch-preview` CLI。按固定目标 head 的真实 ItemId/路径识别已加载目录保留、移动、删除、同路径替换和完整加载范围内新增目录，后四类在原生命令前阻止。普通文件变化和不影响已选项的未加载区域变化继续允许。CLI 读取成功但不可切换时仍返回成功，调用方须检查 `data.canSwitch`。
+- GUI 执行使用内部保存的目标身份、头提交、selector、工作区身份、加载树和加载配置证据，修改公开显示模型不能改写执行目标或把被拒绝的预览变成授权；确认后变化须重新预览。直接 `switch-branch` 同样执行结构保护。目录层级缺失、重复身份/路径、异常 XML、加载规则归属异常和链接等情况拒绝，不自动卸载、重配置、恢复元数据或反向切换。
+- 交叉审查补齐单文件稀疏加载边界：已选文件移入目标新目录或未加载父目录，即使没有完整目录加载规则也会阻止；目标文件每级父目录须与已加载路径和身份一致。已加载目录之间的普通文件移动继续允许。`PartialBranchSwitchPreviewTests` 最终 205 项及既有切换 133 项通过，C# 5 `/warnaserror` 编译通过，日志为 `qa/partial-switch-preview-core/preview-tests.log`。
+- 新预览 GUI 57 项与既有切换 GUI 63 项通过，覆盖默认取消、阻止时无执行入口、等待期间关闭保护、身份/模式变化与 Standard 行为。普通/最小尺寸截图为 `qa/partial-switch-preview-ui/partial-switch-preview*.png`，已目视检查；最小尺寸的长表格列使用水平滚动和工具提示。这是进程内 WinForms 验证。
+- 首轮真实测试曾将显式切回分支前的 selector 字节作为后续预览基线，原生切回添加空白导致断言失败；已改为比较每次预览紧邻前后的状态。修正后真实预览集成 61 项通过（`qa/integration-20260928-181132-81bc944e/`）；补齐稀疏文件新父目录保护后另用新 fixture 验证最终构建。
+- 原有 Partial 分支切换真实回归 38 项通过（`qa/partial-switch-preview-legacy-integration.log`，fixture `qa/integration-20260928-181132-cc33f189/`），包含文件增删改、切回及稀疏加载。原 TestSCM 与 Standard producer 保持不变。安装/升级回滚/卸载 45 项通过（`qa/partial-switch-preview-package-tests.log`），实际 Explorer 注册未改变。
+- 边界：预览不是完整文件差异清单；独立 CLI 预览 JSON 不绑定后续切换，后者会重新检查当前目标。原生按名称执行仍非服务器原子条件事务。当前读取目标完整树，部分匹配为二次复杂度，大仓库性能和长时间预览取消仍需优化，未声称已通过压力验收。受控目录结构处理、人工恢复向导及 Partial 跨分支合并仍未完成。
+- 最终构建真实预览集成 66 项通过（`qa/partial-switch-preview-integration-final2.log`，fixture `qa/integration-20260928-181447-a52cc2f5/`，相邻 `partial-switch-preview-results.json`）。覆盖目录移动/删除/替换/新增、未加载区域放行、内容更新、单文件稀疏范围、新父目录移动拦截及完整加载模式；拒绝时文件、selector 和加载规则不变，原 TestSCM 保持不变。
+- 全量 `build-tortoisescm.ps1 -Test` 通过（`qa/partial-switch-preview-regression.log`），包含最终 205 项预览核心、2,297 项主 CLI、其他 Core/CLI、Shell/现代菜单及完整 WinForms 回归。运行期间补齐稀疏文件保护，最终程序另行构建（`qa/partial-switch-preview-build-final2.log`），随后核心、CLI、GUI 和最终真实集成均验证了该版本。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-partial-switch-preview-20260928-windows-x64.zip`。

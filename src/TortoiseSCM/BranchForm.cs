@@ -45,6 +45,9 @@ namespace TortoiseSCM
         private bool partial;
         private readonly Func<string, bool> confirmSwitch;
         private readonly Func<string, string, CancellationToken, Task<PlasticCommandResult>> performSwitch;
+        private readonly Func<string, string, CancellationToken, Task<PlasticPartialBranchSwitchPreview>> previewPartialSwitch;
+        private readonly Func<PlasticPartialBranchSwitchPreview, bool> showPartialPreview;
+        private readonly Func<string, PlasticPartialBranchSwitchPreview, CancellationToken, Task<PlasticCommandResult>> performPartialSwitch;
         private readonly Func<string, CancellationToken, Task<PlasticWorkspace>> getWorkspace;
         private readonly Func<string, CancellationToken, Task<IList<PlasticBranch>>> getBranches;
 
@@ -54,6 +57,12 @@ namespace TortoiseSCM
             confirmSwitch = message => MessageBox.Show(this, message, Text, MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.OK;
             performSwitch = client.SwitchBranchAsync;
+            previewPartialSwitch = client.PreviewPartialBranchSwitchAsync;
+            performPartialSwitch = client.SwitchBranchAsync;
+            showPartialPreview = preview => {
+                using (var dialog = new PartialBranchSwitchPreviewForm(root, preview))
+                    return dialog.ShowDialog(this) == DialogResult.OK;
+            };
             getWorkspace = client.GetWorkspaceAsync; getBranches = client.GetBranchesAsync;
             var workspace = client.DiscoverWorkspace(path);
             if (workspace == null) throw new InvalidOperationException("请选择 Plastic 工作区。");
@@ -390,10 +399,28 @@ namespace TortoiseSCM
                 if (client.DiscoverWorkspace(root).Selector != selector || expected.Selector != selector)
                     throw new InvalidOperationException("工作区分支已改变，请刷新分支列表后重试。");
                 bool wasPartial = expected.IsPartial;
-                string scope = wasPartial ?
-                    "Partial 切换会更新已加载项；完整选中的目录会接收目标分支的新子项。未加载项仍遵循现有加载配置。\r\n不会主动扩大加载范围、自动暂存或撤销更改。" :
-                    "此操作会更新整个 Standard 工作区。不会自动暂存或撤销更改。";
-                if (!confirmSwitch("将工作区切换到分支：\r\n" + target + "\r\n\r\n" + root + "\r\n\r\n" + scope +
+                PlasticPartialBranchSwitchPreview preview = null;
+                if (wasPartial) {
+                    status.Text = "正在只读检查 Partial 目录结构，请等待预览…";
+                    preview = await previewPartialSwitch(root, target, CancellationToken.None);
+                    ValidateContext();
+                    if (client.DiscoverWorkspace(root).Selector != selector)
+                        throw new InvalidOperationException("工作区分支已改变，请刷新后重新预览。");
+                    if (preview == null || preview.Repository != repository || preview.Branch != target || preview.HeadChangeset < 0)
+                        throw new InvalidOperationException("切换目标与预览不一致，请刷新后重新预览。");
+                    long reviewedHead = preview.HeadChangeset;
+                    bool allowed = preview.CanSwitch && preview.Directories != null &&
+                        preview.Directories.All(row => row != null && row.Change == "Unchanged");
+                    bool accepted = showPartialPreview(preview);
+                    if (!allowed || !accepted) {
+                        status.Text = allowed ? "已取消切换；工作区未更改。" : "目录结构检查阻止切换；请核对加载配置后刷新预览。";
+                        return;
+                    }
+                    if (preview.Repository != repository || preview.Branch != target || preview.HeadChangeset != reviewedHead || !preview.CanSwitch)
+                        throw new InvalidOperationException("切换预览已改变，请刷新后重新预览。");
+                }
+                else if (!confirmSwitch("将工作区切换到分支：\r\n" + target + "\r\n\r\n" + root +
+                    "\r\n\r\n此操作会更新整个 Standard 工作区。不会自动暂存或撤销更改。" +
                     "\r\n请先处理待定更改、私有/忽略文件及合并会话。\r\n结果不确定时将刷新核对，不会自动反向切换。继续？")) return;
                 if (lifetime.IsCancellationRequested) return;
                 attempted = true;
@@ -405,7 +432,8 @@ namespace TortoiseSCM
                 if (client.DiscoverWorkspace(root).Selector != selector || beforeWrite.Selector != selector || beforeWrite.IsPartial != wasPartial)
                     throw new InvalidOperationException("工作区分支或模式已改变，请核对刷新后的工作区再重试。");
                 status.Text = wasPartial ? "正在按现有加载配置切换 Partial 工作区，请等待完成…" : "正在切换整个工作区，请等待完成…";
-                var result = await performSwitch(root, target, CancellationToken.None);
+                var result = wasPartial ? await performPartialSwitch(root, preview, CancellationToken.None) :
+                    await performSwitch(root, target, CancellationToken.None);
                 if (!result.Succeeded) throw new PlasticCommandException(result);
                 ValidateContext();
                 var afterWrite = await getWorkspace(root, CancellationToken.None);

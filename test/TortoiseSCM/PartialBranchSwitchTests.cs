@@ -160,6 +160,13 @@ internal static class PartialBranchSwitchTests
             if (mode != "no-identity") { branch.Add(new XElement("ID", alterId ? 42 : 41)); branch.Add(new XElement("GUID", alterGuid ? "0bb5eabf-1e04-4518-9066-10f8f3c7eeb9" : BranchGuid)); }
             Console.WriteLine(mode == "missing-target" ? new XElement("PLASTICQUERY") : new XElement("PLASTICQUERY", branch)); return 0;
         }
+        if (args[0] == "ls")
+        {
+            bool local = args[1] == root;
+            Console.WriteLine(new XElement("LsResults", new XElement("LsItems", new[] { "/", "/loaded" }.Select((path, index) => new XElement("LsItem",
+                new XElement("CurrentPath", local ? root + path.TrimEnd('/').Replace('/', '\\') : path), new XElement("ItemId", index == 0 ? 3 : 27),
+                new XElement("Type", "dir"), new XElement("Repository", "rep:" + Repository), new XElement("SymlinkTarget", "")))))); return 0;
+        }
         if (args.SequenceEqual(new[] { "partial", "switch", "br:/main/topic@" + Repository, "--report" }))
         {
             Write("switched", String.Join("|", args)); Increment("switch-count");
