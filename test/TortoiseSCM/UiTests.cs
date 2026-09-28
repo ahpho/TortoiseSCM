@@ -34,6 +34,10 @@ namespace TortoiseSCM
                 {
                     Directory.CreateDirectory(args[1]); CheckLiveBlame(args[1], args[2], args[3]); return 0;
                 }
+                if (args.Length == 3 && args[0] == "--locks-live")
+                {
+                    Directory.CreateDirectory(args[1]); CheckLiveLocks(args[1], args[2]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--bc-settings-ui")
                 {
                     BeyondCompareSettingsUiTests.Run(args[1]); return 0;
@@ -1511,6 +1515,42 @@ namespace TortoiseSCM
             }
             Require(File.ReadAllBytes(path).SequenceEqual(before) && File.ReadAllText(Path.Combine(workspace, ".plastic", "plastic.selector")) == selector,
                 "Annotate and refresh preserve working bytes and selector");
+        }
+
+        private static void CheckLiveLocks(string artifacts, string root)
+        {
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            var workspace = client.DiscoverWorkspace(root);
+            Require(workspace != null && workspace.RootPath.Equals(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase),
+                "Live lock fixture resolves to the workspace root");
+            var live = client.GetLocksAsync(root, CancellationToken.None).GetAwaiter().GetResult();
+            Require(live != null, "Live lock query returns a collection");
+            using (var form = new LocksForm(client, root))
+            {
+                Prepare(form);
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live lock list read completes");
+                var list = (ListView)Field(form, "items");
+                Require(list.Items.Count == live.Count, "Lock manager renders every live repository lock");
+                Require(((Label)Field(form, "status")).Text.Contains(live.Count + " 个锁"), "Lock manager reports the live lock count");
+                Require(!((Button)Field(form, "unlock")).Enabled, "Lock release requires an explicit selected owned lock");
+                var foreign = new ListViewItem(new[] { "/foreign.txt", "other-user", "other-workspace", "Locked" })
+                { Tag = new PlasticLockItem { CanUnlock = false } };
+                list.Items.Add(foreign); foreign.Selected = true; Application.DoEvents();
+                Require(!((Button)Field(form, "unlock")).Enabled, "Foreign repository lock cannot be released");
+                var owned = new ListViewItem(new[] { "/owned.txt", "current-user", workspace.Name, "Locked" })
+                { Tag = new PlasticLockItem { CanUnlock = true } };
+                list.Items.Add(owned); owned.Selected = true; Application.DoEvents();
+                Require(((Button)Field(form, "unlock")).Enabled, "Current workspace lock enables explicit release");
+                Save(form, Path.Combine(artifacts, "locks-live.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string name in new[] { "items", "status", "refresh", "unlock" })
+                {
+                    var control = (Control)Field(form, name);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)),
+                        "Live lock manager " + name + " fits at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "locks-live-minimum.png"));
+            }
+            Console.WriteLine("PASS: live lock manager GUI checks");
         }
 
         private static void CheckLabelsDialogs(string artifacts)
