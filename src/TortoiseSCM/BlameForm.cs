@@ -47,13 +47,13 @@ namespace TortoiseSCM
         {
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(DialogStyle.Margin), ColumnCount = 1, RowCount = 4 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 22)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 22)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             var fileLabel = new Label { Text = path, Dock = DockStyle.Fill, AutoEllipsis = true, UseMnemonic = false };
             summary.Text = "Loading annotate information..."; summary.Dock = DockStyle.Fill; summary.AutoEllipsis = true;
             header.Controls.Add(fileLabel, 0, 0); header.SetColumnSpan(fileLabel, 2);

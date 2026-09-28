@@ -87,6 +87,7 @@ if ($Test -or $Integration) {
     $uiSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
     $uiSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\UiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PathInputUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\RevisionGraphUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\TextEditorUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\TextMergePlanUiTests.cs'
@@ -183,7 +184,7 @@ if ($Test -or $Integration) {
         $messageSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
         $messageSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $messageSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CommitMessageIntegrationTests.cs'
-        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:CommitMessageIntegrationTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$messageOutput" $messageSources
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:CommitMessageIntegrationTests "/win32icon:$(Join-Path $PSScriptRoot 'src\Resources\gluon.ico')" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$messageOutput" $messageSources
         if ($LASTEXITCODE -ne 0) { throw 'Commit message integration compilation failed.' }
         $messageManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $messageManifest -or -not (Test-Path -LiteralPath $messageManifest)) { throw 'Commit message fixture setup failed.' }
@@ -194,7 +195,7 @@ if ($Test -or $Integration) {
         $creationSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
         $creationSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $creationSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkspaceCreationIntegrationTests.cs'
-        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:WorkspaceCreationIntegrationTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$creationOutput" $creationSources
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:WorkspaceCreationIntegrationTests "/win32icon:$(Join-Path $PSScriptRoot 'src\Resources\gluon.ico')" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$creationOutput" $creationSources
         if ($LASTEXITCODE -ne 0) { throw 'Workspace creation integration compilation failed.' }
         $creationManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $creationManifest -or -not (Test-Path -LiteralPath $creationManifest)) { throw 'Workspace creation fixture setup failed.' }

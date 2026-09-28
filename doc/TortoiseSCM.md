@@ -592,6 +592,8 @@ Git 后端、Git 状态缓存和原 GUI 暂留在上游工程，不能用于 Pla
 
 ## 验证
 
+完整用户流程自动化入口为 `test/TortoiseSCM/Run-GuiExperienceTests.ps1`：先构建并运行基础回归，再依次执行首次拉取、Standard/Gluon 日常操作、文件操作、提交说明、真实工作区窗口、Blame/关系图、Shell DLL、隔离安装事务，以及分支/暂存集/标签服务器检查。每阶段输出日志与 `results.json`，截图和隔离分支保留供复查；已完成同版本构建回归时可用 `-SkipBuild`。运行前需配置并登录 Plastic 客户端，服务器写入限定 `TestSCM` 的专用测试分支。GUI 控件测试、CLI 服务器检查和真实 Explorer/Beyond Compare 桌面点击分别记录，不能互相替代。见 [2026-09-29 用户流程测试](TortoiseSCM-gui-experience-20260929.md)。
+
 基础 GUI 服务器验收可运行 `test/TortoiseSCM/Run-BasicGuiAcceptance.ps1`（也已接入 `build-tortoisescm.ps1 -Integration`）。它分别创建隔离 `tortoisescm-autotest-*` 分支，测试 Standard/Gluon 的添加和删除后签入、历史比较与回滚、目录历史和更新，并保留截图及原生命令证据；需要已配置并登录的 Plastic 客户端。可选 `-BeyondComparePath '路径\BComp.exe'` 验证真实只读比较窗口正常打开和关闭。真实桌面 Explorer 鼠标点击、状态覆盖图标和三方人工编辑仍需单独验收。
 
 `build-tortoisescm.ps1 -Test` 编译并运行无服务器的后端测试、真实 EXE 的 CLI 黑盒测试、Shell 测试和设置窗口渲染。

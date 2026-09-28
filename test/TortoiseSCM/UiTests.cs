@@ -38,6 +38,10 @@ namespace TortoiseSCM
                 {
                     BeyondCompareSettingsUiTests.Run(args[1]); return 0;
                 }
+                if (args.Length == 2 && args[0] == "--path-input-ui")
+                {
+                    PathInputUiTests.Run(args[1]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--launch-routing-ui")
                 {
                     LaunchRoutingUiTests.Run(args[1]); return 0;
@@ -56,9 +60,9 @@ namespace TortoiseSCM
                 {
                     Directory.CreateDirectory(args[1]); RevisionGraphUiTests.Run(args[1]); return 0;
                 }
-                if (args.Length == 4 && args[0] == "--graph-live")
+                if ((args.Length == 3 || args.Length == 4) && args[0] == "--graph-live")
                 {
-                    Directory.CreateDirectory(args[1]); RevisionGraphUiTests.RunLive(args[1], args[2], Int64.Parse(args[3])); return 0;
+                    Directory.CreateDirectory(args[1]); RevisionGraphUiTests.RunLive(args[1], args[2], args.Length == 4 ? (long?)Int64.Parse(args[3]) : null); return 0;
                 }
                 if (args.Length == 2 && args[0] == "--labels-ui")
                 {
@@ -108,6 +112,7 @@ namespace TortoiseSCM
                 try { LaunchRequest.Parse(new[] { "--pathfile", Path.Combine(artifacts, "foreign.txt") }); throw new Exception("Foreign path file accepted"); }
                 catch (ArgumentException) { }
                 BeyondCompareSettingsUiTests.Run(artifacts);
+                PathInputUiTests.Run(artifacts);
                 HistoricalBeyondCompareUiTests.Run(artifacts);
                 CheckinUiTests.Run(artifacts);
                 CommitMessageUiTests.Run(artifacts);
@@ -1490,14 +1495,16 @@ namespace TortoiseSCM
                 lines.Items[0].Selected = true;
                 Require(lines.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "Show history") &&
                     lines.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "Copy line"), "Annotate row exposes history and copy actions");
+                Require(((Button)Field(form, "refresh")).Height >= DialogStyle.ButtonHeight, "Annotate refresh keeps standard button height at normal size");
                 Save(form, Path.Combine(artifacts, "blame-live.png"));
                 form.Size = form.MinimumSize; Application.DoEvents();
-                foreach (string name in new[] { "lines", "cancel", "history", "close" })
+                foreach (string name in new[] { "lines", "refresh", "cancel", "history", "close" })
                 {
                     var control = (Control)Field(form, name);
                     Require(control.Visible && control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)),
                         "Live annotate " + name + " fits at minimum size");
                 }
+                Require(((Button)Field(form, "refresh")).Height >= DialogStyle.ButtonHeight, "Annotate refresh keeps standard button height at minimum size");
                 Save(form, Path.Combine(artifacts, "blame-live-minimum.png"));
                 ((Button)Field(form, "refresh")).PerformClick();
                 WaitUntil(() => !(bool)Field(form, "busy") && lines.Items.Count > 0, "Live annotate refresh completes");

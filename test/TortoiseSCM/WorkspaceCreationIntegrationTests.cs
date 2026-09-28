@@ -109,11 +109,12 @@ internal static class WorkspaceCreationIntegrationTests
         Write(destination, "selected 中文.txt", "GUI checkin after first checkout\n"); Write(destination, "excluded.txt", "must remain local\n");
         using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", destination }), false))
         {
-            Set(form, "client", client); Set(form, "workspace", workspace); Set(form, "loaded", true);
+            Check(Path.GetFullPath(PlasticClientConfig.Load().CmPath).Equals(Path.GetFullPath(cm), StringComparison.OrdinalIgnoreCase), "GUI uses the fixture client");
             Set(form, "messageStore", new CommitMessageStore(Path.Combine(run, "message-library")));
             string error = ""; int reviews = 0;
             Set(form, "reportError", new Action<string>(text => error = text));
-            form.Show(); Application.DoEvents(); Await(form, "RefreshAsync", null);
+            form.Show(); Application.DoEvents(); Await(form, "InitializeAsync", null);
+            Check(Field<bool>(form, "loaded") && Field<Label>(form, "scope").Text.IndexOf(destination, StringComparison.OrdinalIgnoreCase) >= 0, "New workspace GUI completes real initialization and displays its scope");
             var rows = Field<ListView>(form, "files");
             foreach (ListViewItem row in rows.Items) row.Checked = String.Equals(((PlasticStatusItem)row.Tag).Path, selected, StringComparison.OrdinalIgnoreCase);
             Check(rows.CheckedItems.Count == 1, "New workspace pending dialog selects only the intended file");
@@ -122,7 +123,18 @@ internal static class WorkspaceCreationIntegrationTests
             Await(form, "CheckinSelectionAsync", new object[] { null });
             Check(error == "" && reviews == 1 && Field<TextBox>(form, "comment").Text == "", "Actual MainForm preview and checkin succeed in the new workspace");
             Check(rows.Items.Count == 1 && String.Equals(((PlasticStatusItem)rows.Items[0].Tag).Path, Path.Combine(destination, "excluded.txt"), StringComparison.OrdinalIgnoreCase), "Unselected file remains pending after commit");
-            using (var picture = new System.Drawing.Bitmap(form.Width, form.Height)) { form.DrawToBitmap(picture, form.ClientRectangle); picture.Save(Path.Combine(run, "first-checkout-main.png")); }
+            foreach (bool minimum in new[] { false, true })
+            {
+                if (minimum) form.Size = form.MinimumSize;
+                Application.DoEvents();
+                var checkin = Field<Button>(form, "checkin");
+                Check(form.RectangleToScreen(form.ClientRectangle).Contains(checkin.RectangleToScreen(checkin.ClientRectangle)), "Checkin button visible after first checkout at " + (minimum ? "minimum" : "normal") + " size");
+                using (var picture = new System.Drawing.Bitmap(form.Width, form.Height))
+                {
+                    form.DrawToBitmap(picture, new System.Drawing.Rectangle(System.Drawing.Point.Empty, form.Size));
+                    picture.Save(Path.Combine(run, "first-checkout-main" + (minimum ? "-minimum" : "") + ".png"));
+                }
+            }
         }
         Native(consumer, "update", consumer, "--dontmerge");
         Check(File.ReadAllText(Path.Combine(consumer, "selected 中文.txt"), Utf8) == "GUI checkin after first checkout\n" && File.ReadAllText(Path.Combine(consumer, "excluded.txt"), Utf8) == "baseline\r\n", "Independent consumer confirms selected-only GUI commit");

@@ -13,17 +13,24 @@ namespace TortoiseSCM
         internal PathInputForm(string source)
         {
             DialogStyle.Apply(this); Text = "重命名 / 移动 - TortoiseSCM";
-            ClientSize = new Size(650, 175); MinimumSize = new Size(570, 214);
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 4 };
+            ClientSize = new Size(650, 230); MinimumSize = new Size(570, 269);
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 6 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-            layout.Controls.Add(new Label { Text = "源：" + source + "\r\n在同一工作区内指定不存在的新路径；不会覆盖已有文件。", Dock = DockStyle.Fill, UseMnemonic = false }, 0, 0);
-            layout.Controls.Add(new Label { Text = "目标完整路径 (&D)", Dock = DockStyle.Fill }, 0, 1);
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+            layout.Controls.Add(new Label { Text = "源路径 (&S)", Dock = DockStyle.Fill }, 0, 0);
+            layout.Controls.Add(new TextBox { Name = "sourcePath", Text = source, ReadOnly = true, Dock = DockStyle.Fill,
+                AccessibleName = "源路径", HideSelection = false }, 0, 1);
+            layout.Controls.Add(new Label { Name = "instructions", Text = "在同一工作区内指定不存在的新路径；不会覆盖已有文件。",
+                Dock = DockStyle.Fill, UseMnemonic = false }, 0, 2);
+            layout.Controls.Add(new Label { Text = "目标完整路径 (&D)", Dock = DockStyle.Fill }, 0, 3);
+            destination.Name = "destinationPath"; destination.AccessibleName = "目标完整路径";
             destination.Dock = DockStyle.Fill; destination.Text = source;
-            layout.Controls.Add(destination, 0, 2);
+            layout.Controls.Add(destination, 0, 4);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
             var cancel = DialogStyle.Button("取消"); cancel.DialogResult = DialogResult.Cancel;
             var move = DialogStyle.Button("移动 / 重命名"); move.Width = 120;
@@ -33,8 +40,9 @@ namespace TortoiseSCM
                 { MessageBox.Show(this, "请输入目标完整绝对路径。"); return; }
                 DialogResult = DialogResult.OK;
             };
-            buttons.Controls.Add(cancel); buttons.Controls.Add(move); layout.Controls.Add(buttons, 0, 3);
+            buttons.Controls.Add(cancel); buttons.Controls.Add(move); layout.Controls.Add(buttons, 0, 5);
             Controls.Add(layout); AcceptButton = move; CancelButton = cancel;
+            ActiveControl = destination;
         }
     }
 }
