@@ -145,11 +145,11 @@ namespace TortoiseSCM
             {
                 var workspace = await GetWorkspaceAsync(root, token).ConfigureAwait(false);
                 ValidateBranchRepository(workspace.Repository);
-                if (workspace.IsPartial) throw new ArgumentException("Switch branch currently requires a Standard workspace. Partial workspaces can browse branches; their loaded configuration is preserved.");
                 if (Regex.Matches(workspace.Selector, @"(?m)^\s*repository\s+").Count != 1 ||
                     Regex.Matches(workspace.Selector, @"(?m)^\s*path\s+").Count != 1 ||
                     !Regex.IsMatch(workspace.Selector, @"(?m)^\s*path\s+""/""\s*$"))
                     throw new ArgumentException("Switch branch requires a single repository mapped at the workspace root.");
+                if (workspace.IsPartial) return await SwitchPartialBranchAsync(workspace, branch, token).ConfigureAwait(false);
                 await ValidateBranchSwitchCleanAsync(root, token).ConfigureAwait(false);
                 await ResolveBranchHeadAsync(root, branch, token).ConfigureAwait(false);
                 // Recheck after the server lookup, while holding both local mutation gates.

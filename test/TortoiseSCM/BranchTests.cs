@@ -39,7 +39,7 @@ internal static class BranchTests
             SetMode("partial");
             Selector("br \"/main\"\n co \"/main\"");
             Check(client.GetBranchesAsync(root, token).GetAwaiter().GetResult().Single(b => b.IsCurrent).Name == "/main", "Partial br/co selector identifies current branch");
-            Reject<ArgumentException>(() => client.SwitchBranchAsync(root, "/main/topic", token).GetAwaiter().GetResult(), "Partial switch rejected");
+            Reject<ArgumentException>(() => client.SwitchBranchAsync(root, "/main/topic", token).GetAwaiter().GetResult(), "Partial switch without loading metadata rejected");
             SetMode("");
             Selector("smartbranch \"/main\"");
             foreach (string branch in new[] { "main", "br:/main", "/main@other", "/main#cs:2", "/main\n/topic", "/main//x", "/main/../x", "/main/", "/main\\x", "/main\"x" })

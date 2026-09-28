@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'WorkingBeyondCompareTests', 'ShelveBeyondCompareTests', 'HistoricalBeyondCompareTests', 'CheckinPreflightTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchRenameTests', 'BranchDeleteTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'WorkingBeyondCompareTests', 'ShelveBeyondCompareTests', 'HistoricalBeyondCompareTests', 'CheckinPreflightTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchRenameTests', 'BranchDeleteTests', 'PartialBranchSwitchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -95,6 +95,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CheckinUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchRenameUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchDeleteUiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialBranchSwitchUiTests.cs'
     $uiOutput = Join-Path $out 'UiTests.exe'
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.UiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$uiOutput" $uiSources
     if ($LASTEXITCODE -ne 0) { throw 'UI test compilation failed.' }
@@ -176,6 +177,10 @@ if ($Test -or $Integration) {
         if (-not $branchManifest -or -not (Test-Path -LiteralPath $branchManifest)) { throw 'Branch setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-branches.txt'), $branchManifest)
         & (Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchIntegrationTests.ps1') -Manifest $branchManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
+        $partialSwitchManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $partialSwitchManifest -or -not (Test-Path -LiteralPath $partialSwitchManifest)) { throw 'Partial branch switch fixture setup failed.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-partial-branch-switch.txt'), $partialSwitchManifest)
+        & (Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialBranchSwitchIntegrationTests.ps1') -Manifest $partialSwitchManifest -Executable (Join-Path $out 'TortoiseSCM.exe')
         $branchCreationManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $branchCreationManifest -or -not (Test-Path -LiteralPath $branchCreationManifest)) { throw 'Branch creation setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-branch-create.txt'), $branchCreationManifest)

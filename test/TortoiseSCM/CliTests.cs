@@ -404,7 +404,7 @@ internal static class CliTests
             File.WriteAllText(partial, "partial");
             Run(0, "--command", "branches", "--path", temporary, "--cm", fakeCm);
             Run(2, "--command", "switch-branch", "--path", temporary, "--branch", "/main/feature 中文", "--yes", "--cm", fakeCm);
-            Check(!File.ReadAllLines(calls).Skip(callStart).Any(line => line.StartsWith("[\"switch\"")), "File scope and Partial branch switch rejection never mutate the workspace");
+            Check(!File.ReadAllLines(calls).Skip(callStart).Any(line => line.StartsWith("[\"switch\"")), "File scope and incomplete Partial loading metadata never reach native switch");
             File.Delete(partial);
             var switched = Run(0, "--command", "switch-branch", "--path", temporary, "--branch", "/main/feature 中文", "--yes", "--cm", fakeCm);
             Check(switched["output"].ToString().StartsWith("switch\nbr:/main/feature 中文@test@server:8087\n"), "Branch switch uses the repository-qualified branch selector");

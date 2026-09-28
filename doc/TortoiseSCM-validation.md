@@ -415,3 +415,15 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 最终构建的真实服务器 CLI 集成 54 项通过（`qa/branch-delete-integration-final.log`），fixture 为 `qa/integration-20260928-172006-dbd57e69/manifest.json`，结果在相邻 `branch-delete-results.json`。覆盖中文空分支、根/当前/子分支保护、真实分支属性、已发布提交、继承头暂存引用、Standard/Partial 成功删除、保留父提交、旧身份拒绝同名替代分支。两个工作区已有私有文件、状态及 selector 和原 TestSCM 内容均保持不变。
 - 全量回归的 Core 套件全部通过（`qa/branch-delete-regression.log`）。首轮新增 CLI 多路径拒绝测试误用了同一路径，CLI 按既有规则去重后进入工作区查询，导致测试期望不匹配；已改成两个不同路径，并从 CLI 阶段继续执行完整 CLI、Shell/现代菜单及 GUI 检查，未重复运行已通过的 Core 套件。
 - 后续全量回归通过（`qa/branch-delete-regression-resumed.log`）：2,262 项主 CLI 检查及全部其他 CLI、Shell/现代菜单和 WinForms 检查，新增删除 UI 48 项亦通过。安装/升级回滚/卸载 45 项通过（`qa/branch-delete-package.log`），未改变实际 Explorer 注册。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-branch-delete-20260928-windows-x64.zip`。
+
+# 保留加载配置的 Partial 分支切换（2026-09-28）
+
+- `switch-branch` CLI 与分支窗口“切换工作区…”现支持干净 Partial 工作区。保留单仓库根映射、结构/合并互斥锁、未完成会话和嵌套工作区保护；待定修改、签出、私有或忽略项均拒绝。执行前再次核对分支 ID/GUID/父关系/头提交、工作区身份、原生模式及加载树和配置，执行后核对当前分支、干净状态及加载配置。
+- 原生 11.0.16.10330 实测采用工作区根目录作为 CWD，命令为 `cm partial switch br:<name>@<repo> --report`；本机实际拒绝帮助中列出的 `--workspace`。不传 `--configure`、强制选项或会跳过询问的 `--noinput`。工作区 `.plastic/plastic.workspace` 在 Partial 下仍可能写 Standard，后端和 GUI 均以原生 status XML 判断模式。
+- `PartialBranchSwitchTests` 133 项及原有 `BranchTests` 83 项通过，C# 5 `/warnaserror` 编译通过（`qa/partial-branch-switch-core/`）。覆盖配置缺失/异常、完整及稀疏规则、目标身份/头提交竞态、selector/模式/工作区/加载树变化、待定与会话保护、超时、执行和验证期间取消、失败不重试或写回旧元数据。切换后允许 selector/wktree 正常改变；加载规则和 fullupdate 的存在性/字节要求保持一致。
+- `PartialBranchSwitchUiTests` 63 项通过：真实按钮路线、拒绝确认、挂起期间关闭/重复操作保护、成功/不确定结果刷新、selector 和模式变化，以及 Standard 行为。Partial 测试均使用写着 Standard 的工作区元数据，确认原生模式决定提示和流程。`qa/partial-branch-switch-ui/partial-branch-switch*.png` 普通/最小尺寸截图已目视检查，Partial 提示和按钮完整；这些是进程内窗口验证。
+- 首轮真实 CLI 集成 38 项通过（`qa/partial-branch-switch-integration.log`，fixture `qa/integration-20260928-173359-31356963/`）：完整加载目录的新增/修改/删除、切回源分支、排除文件和单文件选择保持稀疏、拒绝修改/签出/私有/忽略文件和未完成会话。Producer 和原 TestSCM 均保持不变。最终模式后检补强后另以新 fixture 验证最终构建。
+- 已知边界：原生按名称切换不是原子条件事务；其他客户端仍可能在预检与命令间改变目标/工作区。新增或移动加载目录等结构变化可能改变原生加载规则，程序会报告结果未确认，要求刷新状态并在 Gluon 核对配置，不自动恢复旧元数据或反向切换。结构预览/人工恢复向导和 Partial 跨分支合并仍未完成。
+- 最终构建真实 CLI 集成仍为 38 项通过（`qa/partial-branch-switch-integration-final.log`），fixture `qa/integration-20260928-173815-82bee097/manifest.json`，相邻 `partial-branch-switch-results.json` 记录全部命令及断言。安装/升级回滚/卸载 45 项通过（`qa/partial-branch-switch-package.log`），实际 Explorer 注册未改变。
+- 原有真实分支流程回归 31 项通过（`qa/partial-switch-branch-regression.log`），保留 Standard 切换、待定/忽略/私有项与原生合并保护；旧 Partial 全面禁用断言改为验证有私有文件时拒绝且保留字节和 selector。
+- 全量 `build-tortoisescm.ps1 -Test` 回归通过（`qa/partial-branch-switch-regression.log`），包括 2,262 项主 CLI、Core、其他 CLI、Shell/现代菜单和完整 WinForms 回归，新增 Partial UI 63 项通过。运行期间最终补强了模式后检和界面原生模式提示；最终生产程序已重新构建（`qa/partial-branch-switch-final-build.log`），补强后的后端专项、最终真实集成和后续完整 GUI 均通过。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-partial-branch-switch-20260928-windows-x64.zip`。

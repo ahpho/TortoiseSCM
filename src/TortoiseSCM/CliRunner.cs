@@ -35,7 +35,7 @@ namespace TortoiseSCM
             "Branches: branches --path <workspace>; branch-head --path <workspace> --branch </main/name>\r\n" +
             "  branch-tree --path <workspace> [--filter <text>] (native parent hierarchy, not commit or merge ancestry)\r\n" +
             "  Matching branches retain visible ancestors as context; missing parents are marked explicitly.\r\n" +
-            "  switch-branch --path <root> --branch </main/name> --yes (clean Standard workspaces only)\r\n" +
+            "  switch-branch --path <root> --branch </main/name> --yes (clean Standard/Partial; Partial retains loading configuration)\r\n" +
             "  rename-branch --path <workspace> --branch <old> --branch-id <id> --branch-guid <guid> --changeset <head> --new-name <leaf> --yes\r\n" +
             "  delete-branch --path <workspace> --branch <empty-leaf> --branch-id <id> --branch-guid <guid> --changeset <head> --yes\r\n" +
             "  create-branch --path <workspace> --branch </main/new> --changeset N --comment <text> --yes\r\n" +

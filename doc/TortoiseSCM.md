@@ -275,7 +275,9 @@ GUI 从“比较整个仓库”的固定快照差异列表打开新增/删除项
 该层级描述分支的父子组织关系，不表示提交之间的继承或合并边；创建时指定其他历史起点不会改变这一区别。
 选择其他分支后，“合并到当前…”解析其最新变更集并打开现有合并窗口，固定来源版本。打开窗口只读取状态，仍须预检、确认开始合并、解决冲突及单独提交。
 
-“切换工作区…”在确认后切换整个 Standard 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Partial 可浏览分支及历史，本阶段不提供分支切换或跨分支合并，以保留加载规则。
+“切换工作区…”在确认后切换 Standard 或 Partial 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、签出项、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Standard 更新整个工作区；Partial 使用原生 `partial switch` 更新加载范围，完整加载的目录会接收目标分支的新文件，排除文件和未选中的目录仍保持未加载。Partial 跨分支合并仍不开放。
+
+Partial 切换前核对目标 ID/GUID/父关系/头提交，工作区身份、原生模式及加载配置；加载树在预检期间发生变化会中止。切换后再次核对目标分支、干净状态和加载规则。加载规则缺失或无法识别时拒绝执行。某些目录结构变化可能使原生加载规则改变，此时即使命令已经执行也会报告结果未确认；应先刷新当前分支与工作区状态，并在 Gluon 检查加载配置，确认后再明确决定下一步。程序不自动恢复旧元数据、重试、暂存、撤销或反向切换。原生命令按名称执行，执行前后的核对不是服务器原子事务。参见 [Unity Partial switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/partial-switch)。
 
 选择非当前叶子分支后，可使用“重命名…”按钮或右键菜单填写新的短名称，并确认仓库、原/新完整名称、父分支和头提交。Standard/Partial 均支持；不切换、更新或签入工作区，保留本地待定内容。根分支、当前 selector 引用的分支、有子分支、身份缺失和名称与父关系不一致的分支不可重命名。过滤列表不会隐藏子分支保护。重命名会影响其他用户按名称保存的引用。
 
@@ -292,7 +294,7 @@ GUI 从“比较整个仓库”的固定快照差异列表打开新增/删除项
 & $exe --cli --command branch-tree --path 'D:\workspace' --filter 'task' --json | ConvertFrom-Json
 $head = & $exe --cli --command branch-head --path 'D:\workspace' --branch '/main/task' --json | ConvertFrom-Json
 & $exe --cli --command merge-preview --path 'D:\workspace' --changeset $head.data.changeset --json | ConvertFrom-Json
-# 分支切换需要显式工作区根目录和确认
+# Standard/Partial 分支切换均需干净工作区、显式根目录和确认
 & $exe --cli --command switch-branch --path 'D:\workspace' --branch '/main/task' --yes --json | ConvertFrom-Json
 # 创建子分支，固定历史起点；不自动切换，说明也可从 --commentsfile 读取
 & $exe --cli --command create-branch --path 'D:\workspace' --branch '/main/new-task' --changeset 123 --comment '新任务' --yes --json | ConvertFrom-Json
@@ -563,7 +565,7 @@ GUI 选择下方的普通文件或二进制文件后，点击“比较”、双�
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
 更完整的逐项差距与推进顺序见 [TortoiseGit 功能对照](TortoiseSCM-parity.md)。
-尚未提供：分支删除、当前/根/有子分支的重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建。
+尚未提供：有历史分支的级联删除、当前/根/有子分支的重命名、Partial 跨分支合并及加载结构变化恢复向导、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建。
 
 范围外：签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer，以及多 DPI、跨重启提交失败草稿恢复；这些不作为完成条件。现有 x64 安装与卸载继续维护。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。

@@ -92,8 +92,13 @@ try {
     $partial=Invoke-BranchCli 'branches' @() 0 $m.partial
     Assert (@($partial.data.branches | Where-Object name -ceq $branch).Count -eq 1) 'Partial workspace can browse repository branches'
     $partialSelector=[IO.File]::ReadAllText((Join-Path $m.partial '.plastic/plastic.selector'))
-    Invoke-BranchCli 'switch-branch' @('--branch',$branch,'--yes') 2 $m.partial | Out-Null
-    Assert ([IO.File]::ReadAllText((Join-Path $m.partial '.plastic/plastic.selector')) -ceq $partialSelector) 'Partial switch rejection preserves selector'
+    $partialPrivate=Join-Path $m.partial ('switch-guard-'+[Guid]::NewGuid().ToString('N')+'.txt')
+    [IO.File]::WriteAllText($partialPrivate,'Private content blocks Partial switch',$utf8)
+    try {
+        Invoke-BranchCli 'switch-branch' @('--branch',$branch,'--yes') 2 $m.partial | Out-Null
+        Assert ([IO.File]::ReadAllText((Join-Path $m.partial '.plastic/plastic.selector')) -ceq $partialSelector -and
+            [IO.File]::ReadAllText($partialPrivate) -ceq 'Private content blocks Partial switch') 'Dirty Partial switch rejection preserves selector and private bytes'
+    } finally { Remove-Item -LiteralPath $partialPrivate }
     Invoke-BranchCli 'switch-branch' @('--branch',$branch) 2 | Out-Null
     Invoke-BranchCli 'switch-branch' @('--branch',$branch,'--yes') 2 (Join-Path $m.producer 'common.txt') | Out-Null
     Write-File 'common.txt' "local modified bytes`n"

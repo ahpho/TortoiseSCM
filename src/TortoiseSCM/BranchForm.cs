@@ -43,10 +43,18 @@ namespace TortoiseSCM
         private bool busy;
         private bool writing;
         private bool partial;
+        private readonly Func<string, bool> confirmSwitch;
+        private readonly Func<string, string, CancellationToken, Task<PlasticCommandResult>> performSwitch;
+        private readonly Func<string, CancellationToken, Task<PlasticWorkspace>> getWorkspace;
+        private readonly Func<string, CancellationToken, Task<IList<PlasticBranch>>> getBranches;
 
         public BranchForm(PlasticClient client, string path)
         {
             this.client = client;
+            confirmSwitch = message => MessageBox.Show(this, message, Text, MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.OK;
+            performSwitch = client.SwitchBranchAsync;
+            getWorkspace = client.GetWorkspaceAsync; getBranches = client.GetBranchesAsync;
             var workspace = client.DiscoverWorkspace(path);
             if (workspace == null) throw new InvalidOperationException("请选择 Plastic 工作区。");
             root = workspace.RootPath; repository = workspace.Repository; partial = workspace.IsPartial;
@@ -144,7 +152,8 @@ namespace TortoiseSCM
             cancel.Enabled = busy && !writing; close.Enabled = !writing;
             head.Enabled = !busy && selected != null;
             branchHistory.Enabled = createChild.Enabled = !busy && selected != null;
-            merge.Enabled = switchBranch.Enabled = !busy && !partial && selected != null && !selected.IsCurrent;
+            merge.Enabled = !busy && !partial && selected != null && !selected.IsCurrent;
+            switchBranch.Enabled = !busy && selected != null && !selected.IsCurrent;
             rename.Enabled = renameBranch.Enabled = !busy && BranchRenameForm.CanRename(selected) &&
                 !entries.Any(branch => String.Equals(branch.Parent, selected.Name, StringComparison.OrdinalIgnoreCase));
             renameBranch.ToolTipText = rename.Enabled ? "重命名服务器分支，不切换当前工作区。" :
@@ -180,12 +189,12 @@ namespace TortoiseSCM
             status.Text = "正在读取分支…";
             bool loaded = false;
             await WorkAsync(async token => {
-                var workspace = await client.GetWorkspaceAsync(root, token); ValidateContext();
-                var result = await client.GetBranchesAsync(root, token); token.ThrowIfCancellationRequested(); ValidateContext();
+                var workspace = await getWorkspace(root, token); ValidateContext();
+                var result = await getBranches(root, token); token.ThrowIfCancellationRequested(); ValidateContext();
                 if (result.Any(branch => branch.Repository != repository)) throw new InvalidOperationException("分支仓库不匹配。");
                 partial = workspace.IsPartial; entries = result;
                 loaded = true;
-                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：可浏览、创建、重命名及删除空分支，不能切换或合并）" : "（Standard）");
+                context.Text = "仓库：" + repository + (partial ? "（Partial：切换遵循现有加载配置；不能合并）" : "（Standard）") + "\r\n工作区：" + root;
             }, false);
             if (!lifetime.IsCancellationRequested && loaded) RenderBranches();
         }
@@ -370,18 +379,50 @@ namespace TortoiseSCM
         private async Task SwitchAsync()
         {
             if (!switchBranch.Enabled) return;
-            var selected = SelectedBranch();
-            if (MessageBox.Show(this, "将整个工作区切换到分支：\r\n" + selected.Name + "\r\n\r\n" + root +
-                "\r\n\r\n此操作会更新整个工作区，要求没有待定更改及合并会话。继续？", Text, MessageBoxButtons.OKCancel,
-                MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-            status.Text = "正在切换整个工作区，请等待完成…";
-            bool success = false;
-            await WorkAsync(async token => {
-                var result = await client.SwitchBranchAsync(root, selected.Name, token);
-                if (result.ExitCode != 0) throw new PlasticCommandException(result);
-                success = true;
-            }, true);
-            if (success) { OverlayCacheHost.TrackAndStart(root); await LoadAsync(); }
+            string target = SelectedBranch().Name;
+            bool attempted = false; string failure = null;
+            busy = writing = true; UpdateButtons();
+            try {
+                ValidateContext();
+                string selector = client.DiscoverWorkspace(root).Selector;
+                var expected = await getWorkspace(root, CancellationToken.None);
+                ValidateContext();
+                if (client.DiscoverWorkspace(root).Selector != selector || expected.Selector != selector)
+                    throw new InvalidOperationException("工作区分支已改变，请刷新分支列表后重试。");
+                bool wasPartial = expected.IsPartial;
+                string scope = wasPartial ?
+                    "Partial 切换会更新已加载项；完整选中的目录会接收目标分支的新子项。未加载项仍遵循现有加载配置。\r\n不会主动扩大加载范围、自动暂存或撤销更改。" :
+                    "此操作会更新整个 Standard 工作区。不会自动暂存或撤销更改。";
+                if (!confirmSwitch("将工作区切换到分支：\r\n" + target + "\r\n\r\n" + root + "\r\n\r\n" + scope +
+                    "\r\n请先处理待定更改、私有/忽略文件及合并会话。\r\n结果不确定时将刷新核对，不会自动反向切换。继续？")) return;
+                if (lifetime.IsCancellationRequested) return;
+                attempted = true;
+                ValidateContext(); var current = client.DiscoverWorkspace(root);
+                if (current.Selector != selector)
+                    throw new InvalidOperationException("工作区分支已改变，请核对刷新后的工作区再重试。");
+                var beforeWrite = await getWorkspace(root, CancellationToken.None);
+                ValidateContext();
+                if (client.DiscoverWorkspace(root).Selector != selector || beforeWrite.Selector != selector || beforeWrite.IsPartial != wasPartial)
+                    throw new InvalidOperationException("工作区分支或模式已改变，请核对刷新后的工作区再重试。");
+                status.Text = wasPartial ? "正在按现有加载配置切换 Partial 工作区，请等待完成…" : "正在切换整个工作区，请等待完成…";
+                var result = await performSwitch(root, target, CancellationToken.None);
+                if (!result.Succeeded) throw new PlasticCommandException(result);
+                ValidateContext();
+                var afterWrite = await getWorkspace(root, CancellationToken.None);
+                ValidateContext();
+                if (afterWrite.IsPartial != wasPartial)
+                    throw new InvalidOperationException("工作区模式已改变，请核对刷新后的工作区。");
+                OverlayCacheHost.TrackAndStart(root);
+            }
+            catch (Exception ex) { failure = ex.Message; }
+            finally { busy = writing = false; UpdateButtons(); }
+            if (attempted || failure != null) {
+                // Even a failed/uncertain write can have changed the selector. Discard
+                // cached targets and reload the actual current branch before retry.
+                await LoadAsync();
+                if (failure != null) status.Text = (attempted ? "切换结果未确认；已尝试刷新，请核对当前分支及工作区状态。不会自动反向切换。 " :
+                    "无法切换；已尝试刷新，请核对当前分支及工作区状态。 ") + failure + " " + status.Text;
+            }
         }
 
         private BranchRenameForm CreateRenameDialog()

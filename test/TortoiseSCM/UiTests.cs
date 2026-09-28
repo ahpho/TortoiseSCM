@@ -93,6 +93,7 @@ namespace TortoiseSCM
                 CheckinUiTests.Run(artifacts);
                 BranchRenameUiTests.Run(artifacts);
                 BranchDeleteUiTests.Run(artifacts);
+                PartialBranchSwitchUiTests.Run(artifacts);
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);
@@ -857,8 +858,8 @@ namespace TortoiseSCM
                 view.SelectedIndex = 0; Application.DoEvents();
                 typeof(BranchForm).GetField("partial", flags).SetValue(form, true);
                 typeof(BranchForm).GetMethod("UpdateButtons", flags).Invoke(form, null);
-                Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled && ((Button)Field(form, "head")).Enabled,
-                    "Partial branch browser permits detail reads but disables workspace switch and merge");
+                Require(!((Button)Field(form, "merge")).Enabled && ((Button)Field(form, "switchBranch")).Enabled == !treeBranch.IsCurrent && ((Button)Field(form, "head")).Enabled,
+                    "Partial branch browser permits guarded switching and detail reads but disables merge");
                 Require(((ToolStripMenuItem)Field(form, "createChild")).Enabled && ((ToolStripMenuItem)Field(form, "branchHistory")).Enabled,
                     "Partial branch browser permits metadata creation and exact branch history");
                 typeof(BranchForm).GetField("writing", flags).SetValue(form, true);
@@ -1107,9 +1108,9 @@ namespace TortoiseSCM
                     tree.SelectedNode.Parent.IsExpanded && tree.SelectedNode.Parent.Parent.IsExpanded,
                     "Locate current clears hidden filters and expands its ancestor path");
                 typeof(BranchForm).GetField("partial", flags).SetValue(form, true); tree.SelectedNode = nodes["/independent-name"]; Application.DoEvents();
-                Require(!((Button)Field(form, "merge")).Enabled && !((Button)Field(form, "switchBranch")).Enabled &&
+                Require(!((Button)Field(form, "merge")).Enabled && ((Button)Field(form, "switchBranch")).Enabled &&
                     ((ToolStripMenuItem)Field(form, "branchHistory")).Enabled && ((ToolStripMenuItem)Field(form, "createChild")).Enabled,
-                    "Partial hierarchy supports metadata actions while disabling workspace switch and merge");
+                    "Partial hierarchy supports metadata actions and guarded switching while disabling merge");
                 Save(form, Path.Combine(artifacts, "branch-hierarchy.png")); form.Size = form.MinimumSize; Application.DoEvents();
                 foreach (string field in new[] { "viewMode", "locateCurrent", "filter", "head", "switchBranch", "close" })
                 {
