@@ -14,11 +14,15 @@ namespace TortoiseSCM
     {
         private readonly PlasticClient client;
         private readonly string root;
+        private readonly IList<string> selectedPaths;
+        private readonly ComboBox resolution = new ComboBox();
+        private Func<string, string, CancellationToken, Task<PlasticMergeConflictFiles>> prepareConflict;
+        private Func<string, string, string, string, CancellationToken, Task<PlasticCommandResult>> mergeTool;
         private readonly ListView items = new ListView();
         private readonly TextBox details = new TextBox();
         private readonly Label status = new Label();
         private readonly Button refresh = DialogStyle.Button("预检 / 恢复会话");
-        private readonly Button prepare = DialogStyle.Button("三方合并…");
+        private readonly Button prepare = DialogStyle.Button("准备结果…");
         private readonly Button apply = DialogStyle.Button("确认应用结果…");
         private readonly Button cancelPreparation = DialogStyle.Button("取消未应用准备…");
         private readonly Button close = DialogStyle.Button("关闭");
@@ -28,11 +32,16 @@ namespace TortoiseSCM
         private IList<PlasticPartialConflict> conflicts = new List<PlasticPartialConflict>();
         private PlasticPartialConflictSession session;
         private bool busy;
-        private const string Guidance = "此窗口处理 Partial 工作区内已加载文件的传入内容冲突；新增、移动、删除冲突请点击“结构冲突”。\r\n先在三方工具中编辑独立的结果文件，再明确确认应用；加载范围保持不变，结果留作待定更改，请回主窗口单独签入。\r\n中断时请保留会话中的原始文件及审核结果，先检查备份，再明确撤销受影响文件并重新预检。";
+        private const string Guidance = "此窗口处理 Partial 工作区内已加载文件的传入内容冲突；新增、移动、删除冲突请点击“结构冲突”（该窗口显示整个工作区）。\r\n文本可通过三方工具合并，二进制可保留本地或采用服务器版本；先准备独立结果，再明确确认应用；加载范围保持不变，有差异的结果留作待定更改，完全采用服务器版本则无需再签入。\r\n中断时请保留会话中的原始文件及审核结果，先检查备份，再明确撤销受影响文件并重新预检。";
 
-        internal PartialConflictForm(PlasticClient client, string root)
+        internal PartialConflictForm(PlasticClient client, string root) : this(client, root, null) { }
+
+        internal PartialConflictForm(PlasticClient client, string root, IList<string> selectedPaths)
         {
             this.client = client; this.root = root;
+            this.selectedPaths = selectedPaths == null ? null : selectedPaths.Select(Path.GetFullPath).ToList();
+            prepareConflict = client.PreparePartialConflictAsync;
+            mergeTool = client.RunMergeToolAsync;
             DialogStyle.Apply(this); Text = "Partial 传入冲突 - TortoiseSCM";
             Size = new Size(960, 660); MinimumSize = new Size(840, 550);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 5 };
@@ -45,7 +54,11 @@ namespace TortoiseSCM
             layout.Controls.Add(new Label { Text = root, Dock = DockStyle.Fill, AutoEllipsis = true, UseMnemonic = false }, 0, 0);
             var top = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             refresh.Width = 145; top.Controls.Add(refresh); structure.Width = 115; top.Controls.Add(structure);
-            top.Controls.Add(new Label { Text = "保留当前加载范围；不自动签入。", AutoSize = true, Padding = new Padding(8, 5, 0, 0) });
+            resolution.DropDownStyle = ComboBoxStyle.DropDownList; resolution.Width = 220;
+            resolution.Items.AddRange(new object[] { "文本：Beyond Compare 三方合并", "保留本地版本（准备独立结果）", "采用服务器版本（准备独立结果）" });
+            resolution.SelectedIndex = 0; resolution.AccessibleName = "冲突处理方式";
+            top.Controls.Add(resolution);
+            top.Controls.Add(new Label { Text = "准备不改工作文件；需确认应用。", AutoSize = true, Padding = new Padding(4, 5, 0, 0) });
             layout.Controls.Add(top, 0, 1);
             var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Size = new Size(900, 450),
                 SplitterDistance = 270, Panel1MinSize = 120, Panel2MinSize = 110 };
@@ -93,6 +106,7 @@ namespace TortoiseSCM
             var selected = SelectedConflict();
             bool safe = session == null || (session.Ready && !session.Applying);
             refresh.Enabled = !busy;
+            resolution.Enabled = !busy;
             structure.Enabled = !busy;
             prepare.Enabled = !busy && safe && selected != null && selected.CanResolve && !selected.Resolved;
             apply.Enabled = prepare.Enabled && IsPrepared(selected);
@@ -106,21 +120,32 @@ namespace TortoiseSCM
             items.Items.Clear();
             foreach (var conflict in conflicts)
             {
-                string state = conflict.Resolved ? "已应用，待单独签入" : !conflict.CanResolve ? "不可处理：" + conflict.Reason :
-                    IsPrepared(conflict) ? "已准备，待审核结果" : "待准备三方文件";
+                if (!InSelectedScope(root, selectedPaths, conflict.RepositoryPath)) continue;
+                string state = conflict.Resolved ? "已应用，请核对待定状态" : !conflict.CanResolve ? "不可处理：" + conflict.Reason :
+                    IsPrepared(conflict) ? "已准备，待审核结果" : conflict.IsBinary ? "待选择保留哪一侧" : "待准备三方文件";
+                if (conflict.IsBinary) state = "二进制 · " + state;
                 var row = new ListViewItem(new[] { conflict.RepositoryPath, conflict.BaseChangeset.ToString(), conflict.IncomingChangeset.ToString(), state }) { Tag = conflict };
                 items.Items.Add(row); if (conflict.RepositoryPath == selected) row.Selected = true;
             }
-            status.Text = conflicts.Count + " 个项目 · " + conflicts.Count(item => !item.Resolved && item.CanResolve) + " 个待处理内容冲突";
+            status.Text = items.Items.Count + " 个范围内项目；选择处理方式后准备结果，不自动签入。";
             if (session != null && (!session.Ready || session.Applying))
             {
                 status.Text = "上次应用未完成。请先检查会话备份；当前禁止继续应用和签入。";
                 details.Text = "会话：" + session.SessionId + "\r\n恢复备份目录：" + session.RecoveryDirectory + "\r\n" + Guidance;
             }
             else if (session != null && conflicts.Count > 0 && conflicts.All(item => item.Resolved))
-                status.Text = "准备的结果均已应用。关闭窗口，检查待定更改后单独签入。";
+                status.Text = "准备的结果均已应用。有差异的结果需单独签入；采用服务器原样内容无需签入。";
             else if (conflicts.Count == 0) status.Text = "没有检测到已加载文件的传入内容冲突。";
             UpdateButtons();
+        }
+
+        internal static bool InSelectedScope(string root, IList<string> paths, string repositoryPath)
+        {
+            if (paths == null) return true;
+            string local = Path.GetFullPath(Path.Combine(root, repositoryPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            return paths.Any(path => String.Equals(local, path, StringComparison.OrdinalIgnoreCase) ||
+                local.StartsWith(path.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(local.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
         }
 
         private async Task ReadStateAsync()
@@ -156,15 +181,39 @@ namespace TortoiseSCM
         {
             if (!prepare.Enabled) return;
             var conflict = SelectedConflict();
+            int choice = resolution.SelectedIndex;
+            if (choice == 0 && conflict.IsBinary)
+            {
+                status.Text = "二进制文件不能进行文本三方合并，请选择保留本地或采用服务器版本。";
+                return;
+            }
             await WorkAsync(async delegate {
-                var files = await client.PreparePartialConflictAsync(root, conflict.RepositoryPath, lifetime.Token);
+                var files = await prepareConflict(root, conflict.RepositoryPath, lifetime.Token);
                 prepared[conflict.RepositoryPath] = files;
                 await ReadStateAsync();
                 details.Text = "独立结果文件：" + files.ResultPath + "\r\n原始内容与传入版本备份：" + Path.GetDirectoryName(files.BasePath) + "\r\n\r\n" + Guidance;
-                var result = await client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, lifetime.Token);
+                if (choice != 0)
+                {
+                    PrepareChosenResult(files, choice);
+                    details.Text = (choice == 1 ? "已准备：保留本地版本。" : "已准备：采用服务器版本；确认应用后将替换此文件的本地修改。") + "\r\n" + details.Text;
+                    status.Text = "独立结果已准备；工作区尚未改变。请点击“确认应用结果”。";
+                    return;
+                }
+                // Re-check the server type returned by preparation before launching a text merger.
+                if (session != null && session.Conflicts.Any(item => item.RepositoryPath == conflict.RepositoryPath && item.IsBinary))
+                    throw new InvalidOperationException("此文件现在标记为二进制，请选择保留本地或采用服务器版本。");
+                var result = await mergeTool(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, lifetime.Token);
                 if (!result.Succeeded) throw new InvalidOperationException(result.Error + "\r\n" + result.Output);
                 status.Text = "三方工具已关闭。请审核独立结果，再点击“确认应用结果”；尚未改变工作区文件。";
             });
+        }
+
+        internal static void PrepareChosenResult(PlasticMergeConflictFiles files, int choice)
+        {
+            if (choice != 1 && choice != 2) throw new ArgumentException("Choose local or incoming bytes.");
+            // Only a prepared, independent result is replaced. Workspace and immutable backups stay untouched.
+            File.Copy(choice == 1 ? files.LocalPath : files.RemotePath, files.ResultPath, true);
+            File.SetAttributes(files.ResultPath, FileAttributes.Normal);
         }
 
         private async Task ApplyAsync()
@@ -177,7 +226,7 @@ namespace TortoiseSCM
                 if (picker.ShowDialog(this) != DialogResult.OK) return;
                 if (MessageBox.Show(this, "将此文件更新到已确认的传入版本，再应用审核结果：\r\n" + conflict.RepositoryPath +
                     "\r\n版本：cs:" + conflict.BaseChangeset + " → cs:" + conflict.IncomingChangeset +
-                    "\r\n\r\n结果：" + picker.FileName + "\r\n\r\n原始内容保存在会话备份中。只处理此文件，结果保留为待定更改，不自动签入。继续？",
+                    "\r\n\r\n结果：" + picker.FileName + "\r\n\r\n原始内容保存在会话备份中。只处理此文件；有差异的结果保留为待定更改，完全采用服务器内容则无需签入。不自动签入。继续？",
                     Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
                 await WorkAsync(async delegate {
                     // Never silently replace contributors after the result was reviewed.

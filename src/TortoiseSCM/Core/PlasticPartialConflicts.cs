@@ -17,6 +17,7 @@ namespace TortoiseSCM
         public long IncomingChangeset { get; set; }
         public long ItemId { get; set; }
         public bool CanResolve { get; set; }
+        public bool IsBinary { get; set; }
         public string Reason { get; set; }
         public bool Resolved { get; set; }
     }
@@ -195,8 +196,11 @@ namespace TortoiseSCM
                         if (!GetFileInformationByHandle(output.SafeFileHandle, out information) || information.Links != 1) throw new IOException("The workspace file has multiple hard links; the result was not written.");
                         using (var hash = System.Security.Cryptography.SHA256.Create())
                             if (BitConverter.ToString(hash.ComputeHash(output)).Replace("-", "") != MergeHash(files.RemotePath)) throw new IOException("The local file changed before applying the reviewed result.");
-                        output.Position = 0;
-                        byte[] bytes = File.ReadAllBytes(approved); output.Write(bytes, 0, bytes.Length); output.SetLength(bytes.Length); output.Flush(true);
+                        if (approvedHash != MergeHash(files.RemotePath))
+                        {
+                            output.Position = 0;
+                            byte[] bytes = File.ReadAllBytes(approved); output.Write(bytes, 0, bytes.Length); output.SetLength(bytes.Length); output.Flush(true);
+                        }
                     }
                     if (MergeHash(local) != approvedHash) throw new IOException("The applied result changed before verification.");
                     var after = await ReadPartialConflictAsync(workspace, repositoryPath, cancellationToken).ConfigureAwait(false);
@@ -205,7 +209,18 @@ namespace TortoiseSCM
                     ValidatePartialConfiguration(state, workspace);
                     conflict.Resolved = true; state.ResultHashes[repositoryPath] = approvedHash;
                     state.Session.Applying = false; state.Session.Ready = true; state.ApplyingPath = ""; SavePartialState(state);
-                    return new PlasticCommandResult { ExitCode = 0, Output = "Applied the reviewed result over the pinned incoming revision. Changes remain pending for explicit checkin." };
+                    if (approvedHash == MergeHash(files.RemotePath))
+                    {
+                        // Identical incoming bytes have no pending result to check in. Detach
+                        // this completed decision so an incoming-only session cannot block a
+                        // later branch/structure operation forever. Keep the recovery files.
+                        state.Session.Conflicts.Remove(conflict);
+                        if (state.Session.Conflicts.Count == 0) File.Delete(PartialIndex(workspace.RootPath));
+                        else SavePartialState(state);
+                    }
+                    return new PlasticCommandResult { ExitCode = 0, Output = approvedHash == MergeHash(files.RemotePath)
+                        ? "Accepted the pinned incoming version without rewriting identical bytes."
+                        : "Applied the reviewed result over the pinned incoming revision. Changes remain pending for explicit checkin." };
                 }
                 catch (Exception error)
                 {
@@ -321,6 +336,7 @@ namespace TortoiseSCM
             var conflict = new PlasticPartialConflict { RepositoryPath = path, BaseChangeset = -1, IncomingChangeset = -1, Reason = "Incoming deletion, move, Xlink or replaced path needs a separate structural decision.", CanResolve = false };
             if (!Int64.TryParse((string)info.Element("RevisionChangeset"), out loaded) || !Int64.TryParse((string)info.Element("RevisionHeadChangeset"), out incoming) || loaded < 0 || incoming < 0) return conflict;
             conflict.BaseChangeset = loaded; conflict.IncomingChangeset = incoming;
+            conflict.IsBinary = (string)info.Element("Type") == "bin";
             if ((string)info.Element("ServerPath") != path || (string)info.Element("RepSpec") != workspace.Repository || (string)info.Element("IsUnderXlink") != "false" ||
                 ((string)info.Element("Type") != "txt" && (string)info.Element("Type") != "bin") || !File.Exists(local)) return conflict;
             // A parent-directory move can preserve the file revision number.
@@ -405,7 +421,7 @@ namespace TortoiseSCM
                 var files = PartialFiles(state, conflict.RepositoryPath); string resultHash;
                 state.ResultHashes.TryGetValue(conflict.RepositoryPath, out resultHash);
                 document.Add(new XElement("Conflict", new XAttribute("path", conflict.RepositoryPath), new XAttribute("directory", state.InputDirectories[conflict.RepositoryPath]), new XAttribute("base", conflict.BaseChangeset), new XAttribute("incoming", conflict.IncomingChangeset),
-                    new XAttribute("item", conflict.ItemId), new XAttribute("resolved", conflict.Resolved), new XAttribute("localHash", state.LocalHashes[conflict.RepositoryPath]),
+                    new XAttribute("item", conflict.ItemId), new XAttribute("binary", conflict.IsBinary), new XAttribute("resolved", conflict.Resolved), new XAttribute("localHash", state.LocalHashes[conflict.RepositoryPath]),
                     new XAttribute("baseHash", MergeHash(files.BasePath)), new XAttribute("incomingHash", MergeHash(files.RemotePath)), new XAttribute("resultHash", resultHash ?? "")));
             }
             string target = Path.Combine(directory, "partial.xml"), temporary = target + ".new"; RejectReparsePath(target); RejectReparsePath(temporary);
@@ -429,7 +445,7 @@ namespace TortoiseSCM
                 string directory = (string)entry.Attribute("directory"); Guid directoryId;
                 if (!Guid.TryParseExact(directory, "N", out directoryId)) throw new InvalidDataException("Invalid Partial contributor directory.");
                 state.InputDirectories.Add(path, directory);
-                var conflict = new PlasticPartialConflict { RepositoryPath = path, BaseChangeset = MergeNumber((string)entry.Attribute("base")), IncomingChangeset = MergeNumber((string)entry.Attribute("incoming")), ItemId = MergeNumber((string)entry.Attribute("item")), Resolved = (bool)entry.Attribute("resolved"), CanResolve = true, Reason = "" };
+                var conflict = new PlasticPartialConflict { RepositoryPath = path, BaseChangeset = MergeNumber((string)entry.Attribute("base")), IncomingChangeset = MergeNumber((string)entry.Attribute("incoming")), ItemId = MergeNumber((string)entry.Attribute("item")), IsBinary = (bool?)entry.Attribute("binary") ?? false, Resolved = (bool)entry.Attribute("resolved"), CanResolve = true, Reason = "" };
                 state.Session.Conflicts.Add(conflict); state.LocalHashes.Add(path, (string)entry.Attribute("localHash")); state.ResultHashes.Add(path, (string)entry.Attribute("resultHash"));
                 var files = PartialFiles(state, path);
                 if (MergeHash(files.BasePath) != (string)entry.Attribute("baseHash") || MergeHash(files.RemotePath) != (string)entry.Attribute("incomingHash") || MergeHash(files.LocalPath) != state.LocalHashes[path]) throw new InvalidDataException("An immutable Partial contributor backup was changed.");

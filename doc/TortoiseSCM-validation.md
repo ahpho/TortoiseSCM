@@ -2,6 +2,17 @@
 
 范围说明（2026-09-28）：用户已排除多 DPI、提交失败草稿跨重启恢复，以及签名/自动更新/ARM64 等发布与平台产品化工作。以下历史记录中的未验收事实保留；历史“下一步/待完成”描述不覆盖 [当前路线图](../ROADMAP.md) 的范围约定。
 
+## Gluon 脏目录更新：文本与二进制（2026-09-29）
+
+- 在专用 `tortoisescm-autotest-*` 分支及独立 producer/consumer/Partial 工作区模拟：选中目录内文本、二进制有本地及服务器修改，另有可直接更新的文件，范围外保留待定修改。真实 Core 场景 37 项通过，证据 `bin/TortoiseSCM/qa/integration-20260929-020031-5bd2dd44/partial-dirty-update-results.json`；可用 `test/TortoiseSCM/Run-PartialDirtyUpdateIntegration.ps1` 重现。
+- 证实原生 `partial update --dontmerge` 会保留冲突本地字节，但失败前可已更新目录内无冲突文件。新增 GUI 选定范围只读预检、明确停止及丢弃/冲突处理入口，不自动续跑；范围匹配排除相似前缀兄弟目录，包含可能影响所选子项的祖先结构冲突。结构冲突独立窗口仍显示整个工作区，已明确提示。
+- 验证文本独立审核结果应用后待签入；二进制保留本地/采用服务器均字节精确，取消准备不改工作文件并保留备份；已解决但仍待签入的目录可继续更新。显式签入后独立 consumer 内容与修订父节点正确。显式撤销所选目录后可更新到服务器内容，范围外字节、pending、已加载版本和 Gluon 配置保留。
+- 修正采用服务器内容时重复写入相同字节引起的伪 CH；完全采用传入内容的决定完成后，从活动会话移除，避免干净文件无可签入内容却被遗留会话阻挡。最新 Core 补充 9 项真实生命周期检查通过（同目录 `incoming-only-lifecycle-results.json`），确认 clean、无活动会话、原始/审核备份仍保留，未准备的其他冲突不受影响。
+- 实际 UpdateForm/PartialConflictForm 使用真实 client 的衔接检查 18 项通过（`dirty-gui-proof-results.json`）：预检在任何更新前阻挡，干净 incoming 文件也未下载；二进制文本合并入口拒绝启动，择一准备只生成独立结果，应用仍需确认，取消保留所有文件。普通/最小尺寸截图 `dirty-update-native-{normal,minimum}.png` 与 `dirty-binary-native-{normal,minimum}.png` 已目视核对。
+- 新 GUI 回归 39 项、旧启动路由 70 项及既有 Partial 冲突按钮/恢复检查通过，证据 `qa/partial-dirty-ui/ui-tests.log`。原有丢弃确认继续默认取消，不新增自动丢弃操作。
+- 全量 `build-tortoisescm.ps1 -Test` 通过（`qa/partial-dirty-regression.log`），包括 Core、2,297 项主 CLI、Shell/现代菜单及 WinForms；最后补充的 incoming-only 会话移除按上述 9 项真实检查复验，随后重建最终 Release。tracked 集成用例新增清理断言后为 38 项，本轮对应证据分别为原 37 项与补充 9 项，未将其冒充整套 38 项重跑。
+- 验证边界：桌面控制通道不可用，GUI 由进程内真实窗口驱动；本轮未模拟人工在 Beyond Compare 中编辑文本，而是使用明确的独立审核结果测试真实应用、更新和签入。原生 `cm status` 对同秒同尺寸二进制改写可能漏报，实际 update 仍拒绝覆盖；fixture 使用不同修改时间模拟正常编辑。预检不能承诺目录级原子性或发现全部并发修改。原 TestSCM/TestSCM2、用户配置、当前安装和 Explorer 均未改动。
+
 ## Gluon 应用图标（2026-09-29）
 
 - 从本机 Plastic SCM 安装目录原样复制橘黄色 `gluon.ico`，保留 16/32/48/256 图层；替换主程序、Shell DLL 和安装器图标，以及现代菜单包的三张 PNG 标识。所有业务窗口均沿用 `DialogStyle`，历史记录等子窗口无需单独嵌入另一份图标。来源路径与 SHA-256 记录于使用文档。

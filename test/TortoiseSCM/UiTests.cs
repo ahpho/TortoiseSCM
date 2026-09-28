@@ -38,6 +38,10 @@ namespace TortoiseSCM
                 {
                     LaunchRoutingUiTests.Run(args[1]); return 0;
                 }
+                if (args.Length == 2 && args[0] == "--partial-dirty-update-ui")
+                {
+                    PartialDirtyUpdateUiTests.Run(args[1]); LaunchRoutingUiTests.Run(args[1]); CheckConflictDialogs(args[1]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--history-experience-ui")
                 {
                     WorkspacePickerUiTests.Run(args[1]);
@@ -106,6 +110,7 @@ namespace TortoiseSCM
                 WorkspaceCreationUiTests.Run(artifacts);
                 VersionInfoUiTests.Run(artifacts);
                 LaunchRoutingUiTests.Run(artifacts);
+                PartialDirtyUpdateUiTests.Run(artifacts);
                 WorkspacePickerUiTests.Run(artifacts);
                 HistoryLoadingUiTests.Run(artifacts);
                 HistoryDirectDiffUiTests.Run(artifacts);

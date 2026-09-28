@@ -112,6 +112,7 @@ namespace TortoiseSCM
                 }
                 using (var update = (UpdateForm)Program.CreateLaunchForm(Request("update", file, Path.Combine(first, "second.txt"))))
                 {
+                    Inject(update, "previewConflicts", new Func<string, CancellationToken, Task<System.Collections.Generic.IList<PlasticPartialConflict>>>((path, token) => Task.FromResult<System.Collections.Generic.IList<PlasticPartialConflict>>(new System.Collections.Generic.List<PlasticPartialConflict>())));
                     Inject(update, "getWorkspace", new Func<string, CancellationToken, Task<PlasticWorkspace>>((path, token) => Task.FromResult(Workspace(first, true))));
                     PlasticCommandRequest captured = null;
                     Inject(update, "run", new Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>>((request, token) => { captured = request; throw new IOException("native process launch failed"); }));
@@ -133,6 +134,7 @@ namespace TortoiseSCM
         {
             var form = Program.CreateLaunchForm(Request("update", selected)) as UpdateForm;
             Require(form != null, "Production routing opens standalone UpdateForm");
+            Inject(form, "previewConflicts", new Func<string, CancellationToken, Task<System.Collections.Generic.IList<PlasticPartialConflict>>>((path, token) => Task.FromResult<System.Collections.Generic.IList<PlasticPartialConflict>>(new System.Collections.Generic.List<PlasticPartialConflict>())));
             Inject(form, "getWorkspace", new Func<string, CancellationToken, Task<PlasticWorkspace>>((path, token) => Task.FromResult(Workspace(root, partial))));
             return form;
         }

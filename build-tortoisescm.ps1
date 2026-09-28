@@ -97,6 +97,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkspaceCreationUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\VersionInfoUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\LaunchRoutingUiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialDirtyUpdateUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkspacePickerUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\HistoryLoadingUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\HistoryDirectDiffUiTests.cs'
