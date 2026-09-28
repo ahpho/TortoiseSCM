@@ -140,7 +140,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
         require(FAILED(child->Invoke(cross.Get(), nullptr)), "modern cross-workspace invocation rejected");
         if (index == 6) diff = child;
     }
-    require(fileCount == 23 && directoryCount == 21 && multiCount == 8, "modern selection counts match classic filtering");
+    require(fileCount == 24 && directoryCount == 22 && multiCount == 8, "modern selection counts match classic filtering");
     require(FAILED(diff->Invoke(directory.Get(), nullptr)) && FAILED(diff->Invoke(nullptr, nullptr)), "modern invoke validates fresh selection");
     ComPtr<IExplorerCommand> exhausted;
     ULONG fetched = 99;
@@ -166,7 +166,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     {
         exhausted->GetState(nullptr, TRUE, &state); backgroundCount += state == ECS_ENABLED; exhausted.Reset();
     }
-    require(backgroundCount == 21, "modern children inherit background site");
+    require(backgroundCount == 22, "modern children inherit background site");
     require(SUCCEEDED(withSite->SetSite(nullptr)) && SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_HIDDEN, "modern clearing site clears background context");
     HWND classicWindow = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, nullptr, nullptr);
     require(classicWindow != nullptr, "modern classic site fixture window");

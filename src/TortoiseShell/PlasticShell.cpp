@@ -52,7 +52,8 @@ constexpr Command commands[] = {
     {L"branches", L"Branches...", L"分支..."},
     {L"shelves", L"Shelvesets...", L"暂存集..."},
     {L"blame", L"Annotate / Blame...", L"Annotate / Blame..."},
-    {L"repository-browser", L"Repository browser...", L"仓库浏览器..."}
+    {L"repository-browser", L"Repository browser...", L"仓库浏览器..."},
+    {L"labels", L"Labels...", L"标签..."}
 };
 
 const wchar_t* Label(const Command& command)

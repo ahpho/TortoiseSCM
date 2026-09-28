@@ -152,6 +152,7 @@ namespace TortoiseSCM
             operations.Items.Add("当前范围历史 / 恢复", null, async delegate { await ShowScopeHistoryAsync(); });
             operations.Items.Add("分支…", null, async delegate { await ShowBranchesAsync(); });
             operations.Items.Add("暂存集…", null, delegate { ShowShelves(); });
+            operations.Items.Add("标签…", null, delegate { ShowLabels(); });
             operations.Items.Add("仓库浏览器…", null, delegate { ShowRepositoryBrowser(null); });
             operations.Items.Add("保存勾选项为暂存集…", null, async delegate { await SaveShelveAsync(); });
             operations.Items.Add("合并变更集 / 解决冲突…", null, async delegate {
@@ -327,6 +328,7 @@ namespace TortoiseSCM
                 }
                 else if (launch.Command == "branches") await ShowBranchesAsync();
                 else if (launch.Command == "shelves") ShowShelves();
+                else if (launch.Command == "labels") ShowLabels();
                 else if (launch.Command == "repository-browser") ShowRepositoryBrowser(launch.Changeset);
                 else if (launch.Command == "merge")
                 {
@@ -364,6 +366,13 @@ namespace TortoiseSCM
         {
             return launch.Paths.Any(p => string.Equals(path, p, StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(p.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void ShowLabels()
+        {
+            if (busy || !loaded) return;
+            try { using (var dialog = new LabelsForm(client, workspace.RootPath)) dialog.ShowDialog(this); }
+            catch (Exception ex) { ShowError(ex); }
         }
 
         private void ShowShelves()

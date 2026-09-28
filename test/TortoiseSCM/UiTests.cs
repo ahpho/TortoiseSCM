@@ -29,6 +29,14 @@ namespace TortoiseSCM
                 uiContext = new WindowsFormsSynchronizationContext();
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 2 && args[0] == "--labels-ui")
+                {
+                    Directory.CreateDirectory(args[1]); CheckLabelsDialogs(args[1]); return 0;
+                }
+                if (args.Length == 4 && args[0] == "--labels-live")
+                {
+                    Directory.CreateDirectory(args[1]); CheckLiveLabels(args[1], args[2], args[3]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--repository-browser-ui")
                 {
                     Directory.CreateDirectory(args[1]); CheckRepositoryBrowser(args[1]); return 0;
@@ -91,6 +99,7 @@ namespace TortoiseSCM
                 CheckShelvesDialogs(artifacts);
                 CheckBlameDialog(artifacts);
                 CheckRepositoryBrowser(artifacts);
+                CheckLabelsDialogs(artifacts);
                 if (args.Length > 1)
                 {
                     CheckLiveRepositoryBrowser(artifacts, args[1]);
@@ -1410,6 +1419,219 @@ namespace TortoiseSCM
                 form.Size = form.MinimumSize; form.CreateControl(); Application.DoEvents();
                 Save(form, Path.Combine(artifacts, "blame-minimum.png"));
             }
+        }
+
+        private static void CheckLabelsDialogs(string artifacts)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            string root = Path.GetFullPath(Path.Combine(artifacts, "labels-fixture-" + Guid.NewGuid().ToString("N")));
+            string metadata = Path.Combine(root, ".plastic"); Directory.CreateDirectory(metadata);
+            File.WriteAllText(Path.Combine(metadata, "plastic.workspace"), "ui-labels\nunused\nPartial\n");
+            string selectorFile = Path.Combine(metadata, "plastic.selector");
+            string selector = "repository \"ui-labels@local\"\n  path \"/\"\n    branch \"/main\"\n";
+            File.WriteAllText(selectorFile, selector);
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            Require(LaunchRequest.Parse(new[] { "--command", "labels", "--path", root }).Command == "labels", "Explorer labels launch is accepted");
+            int created = 0;
+            using (var form = new LabelCreateForm(client, root, "ui-labels@local", 17))
+            {
+                Prepare(form);
+                Require(!((Button)Field(form, "create")).Enabled && !((NumericUpDown)Field(form, "revision")).Enabled, "Label creation requires name and message and locks reviewed historical changeset");
+                ((TextBox)Field(form, "name")).Text = "release 中文 & 1"; ((TextBox)Field(form, "comment")).Text = "发布版本\r\n经过验证";
+                Require(((Button)Field(form, "create")).Enabled, "Partial workspace permits explicit changeset label creation");
+                Func<string, long, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>> create = (label, cs, comment, token) => {
+                    created++; Require(label == "release 中文 & 1" && cs == 17 && comment.Contains("经过验证"), "Label creation preserves reviewed Unicode name, target and message");
+                    return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                };
+                typeof(LabelCreateForm).GetField("createLabel", flags).SetValue(form, create);
+                ((TextBox)Field(form, "name")).Text = "invalid@repository";
+                var invalidName = (System.Threading.Tasks.Task)typeof(LabelCreateForm).GetMethod("ConfirmCreateAsync", flags).Invoke(form, null);
+                WaitUntil(() => invalidName.IsCompleted, "Invalid label name is rejected locally");
+                Require(created == 0 && !(bool)Field(form, "attempted") && ((Button)Field(form, "create")).Enabled,
+                    "Local label validation leaves form editable without recording uncertain write");
+                ((TextBox)Field(form, "name")).Text = "release 中文 & 1";
+                typeof(LabelCreateForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => {
+                    Require(message.Contains("ui-labels@local") && message.Contains("release 中文 & 1 → cs:17"), "Label confirmation identifies exact repository, name and changeset"); return DialogResult.Cancel;
+                }));
+                var rejected = (System.Threading.Tasks.Task)typeof(LabelCreateForm).GetMethod("ConfirmCreateAsync", flags).Invoke(form, null);
+                WaitUntil(() => rejected.IsCompleted, "Cancelled label create completes"); Require(created == 0, "Cancelled label confirmation never calls writer");
+                Save(form, Path.Combine(artifacts, "label-create.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "name", "revision", "comment", "create", "close", "status" }) {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Label create " + field + " fits at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "label-create-minimum.png"));
+                typeof(LabelCreateForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => {
+                    File.WriteAllText(selectorFile, selector.Replace("ui-labels@local", "changed@local")); return DialogResult.OK;
+                }));
+                var switched = (System.Threading.Tasks.Task)typeof(LabelCreateForm).GetMethod("ConfirmCreateAsync", flags).Invoke(form, null);
+                WaitUntil(() => switched.IsCompleted, "Changed repository label create is rejected");
+                Require(created == 0 && ((TextBox)Field(form, "status")).Text.Contains("仓库已改变"), "Repository switch during label confirmation prevents server mutation");
+                File.WriteAllText(selectorFile, selector);
+                var pending = new System.Threading.Tasks.TaskCompletionSource<PlasticCommandResult>();
+                typeof(LabelCreateForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => DialogResult.OK));
+                typeof(LabelCreateForm).GetField("createLabel", flags).SetValue(form,
+                    new Func<string, long, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((label, cs, message, token) => { created++; return pending.Task; }));
+                var submitted = (System.Threading.Tasks.Task)typeof(LabelCreateForm).GetMethod("ConfirmCreateAsync", flags).Invoke(form, null);
+                Require(created == 1 && !((Button)Field(form, "create")).Enabled && !((Button)Field(form, "close")).Enabled, "Pending label write prevents duplicate submit and close");
+                form.Close(); Require(!form.IsDisposed, "Label create cannot close during native write");
+                pending.SetResult(new PlasticCommandResult { ExitCode = 1, Error = "fixture failure" }); WaitUntil(() => submitted.IsCompleted, "Failed label write completes");
+                Require(!((Button)Field(form, "create")).Enabled && ((TextBox)Field(form, "status")).Text.Contains("结果未确认"), "Uncertain label result requires list refresh before retry");
+                form.Close();
+            }
+            using (var form = new LabelCreateForm(client, root, "ui-labels@local", null))
+            {
+                Prepare(form); Require(((NumericUpDown)Field(form, "revision")).Enabled, "Label manager allows explicitly choosing a target changeset");
+                ((TextBox)Field(form, "name")).Text = "confirmed 中文"; ((TextBox)Field(form, "comment")).Text = "reviewed target"; ((NumericUpDown)Field(form, "revision")).Value = 19;
+                typeof(LabelCreateForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => DialogResult.OK));
+                typeof(LabelCreateForm).GetField("createLabel", flags).SetValue(form,
+                    new Func<string, long, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((label, cs, message, token) => {
+                        Require(label == "confirmed 中文" && cs == 19 && message == "reviewed target", "Confirmed label create submits chosen identity and message");
+                        return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                    }));
+                var submitted = (System.Threading.Tasks.Task)typeof(LabelCreateForm).GetMethod("ConfirmCreateAsync", flags).Invoke(form, null);
+                WaitUntil(() => submitted.IsCompleted, "Successful label creation completes"); Require(form.Saved, "Successful create reports saved result");
+            }
+            int listed = 0, deleted = 0; long requestedCs = -1; bool fail = false;
+            var first = new PlasticLabel { Id = 111, Name = "release 中文 & 1", Changeset = 17, Repository = "ui-labels@local", Branch = "/main", Owner = "作者", Date = "2026-09-28", Comment = "发布标签\n第二行" };
+            var second = new PlasticLabel { Id = 112, Name = "v2", Changeset = 18, Repository = "ui-labels@local", Branch = "/main/feature", Owner = "other", Date = "2026-09-27", Comment = "Second" };
+            var entries = new System.Collections.Generic.List<PlasticLabel> { first, second };
+            Func<CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticLabel>>> list = token => {
+                listed++; if (fail) throw new InvalidDataException("fixture label read failure");
+                return System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<PlasticLabel>>(entries.ToArray());
+            };
+            Func<long, CancellationToken, System.Threading.Tasks.Task<PlasticChangesetDetails>> details = (cs, token) => {
+                requestedCs = cs;
+                return System.Threading.Tasks.Task.FromResult(new PlasticChangesetDetails { Changeset = new PlasticHistoryItem { Changeset = cs, Comment = "目标提交说明" }, Files = new[] {
+                    new PlasticChangesetFile { Status = "Changed", Path = "/未加载 中文目录/file.txt", OldPath = "" }
+                } });
+            };
+            using (var form = new LabelsForm(client, root))
+            {
+                typeof(LabelsForm).GetField("getLabels", flags).SetValue(form, list); typeof(LabelsForm).GetField("getChanges", flags).SetValue(form, details);
+                Prepare(form); var labels = (ListView)Field(form, "labels"); var files = (ListView)Field(form, "files");
+                Require(labels.Items.Count == 2 && !((Button)Field(form, "delete")).Enabled, "Labels list loads all branch labels and requires selection for deletion");
+                labels.Items[0].Selected = true; Application.DoEvents();
+                Require(requestedCs == 17 && files.Items.Count == 1 && ((TextBox)Field(form, "description")).Text.Contains("目标提交说明"), "Selecting label reads exact target changeset and complete changed files");
+                using (var browser = (RepositoryBrowserForm)typeof(LabelsForm).GetMethod("CreateSnapshotBrowser", flags).Invoke(form, null))
+                    Require((long?)Field(browser, "initialChangeset") == 17 && (string)Field(browser, "expectedRepository") == "ui-labels@local", "Labels snapshot browser is pinned to selected changeset and repository");
+                Save(form, Path.Combine(artifacts, "labels.png")); form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string field in new[] { "labels", "files", "filter", "description", "create", "delete", "browse", "refresh", "cancel", "close" }) {
+                    var control = (Control)Field(form, field);
+                    Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Labels " + field + " fits at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "labels-minimum.png"));
+                ((TextBox)Field(form, "filter")).Text = "feature"; Application.DoEvents();
+                Require(labels.Items.Count == 1 && files.Items.Count == 0 && ((TextBox)Field(form, "description")).Text.Length == 0, "Label filter includes branch and clears stale details");
+                ((TextBox)Field(form, "filter")).Clear(); labels.Items[0].Selected = true; Application.DoEvents();
+                var pendingDetails = new System.Threading.Tasks.TaskCompletionSource<PlasticChangesetDetails>();
+                typeof(LabelsForm).GetField("getChanges", flags).SetValue(form,
+                    new Func<long, CancellationToken, System.Threading.Tasks.Task<PlasticChangesetDetails>>((cs, token) => pendingDetails.Task));
+                var loading = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("LoadDetailsAsync", flags).Invoke(form, null);
+                Require((bool)Field(form, "busy") && !labels.Enabled && ((Button)Field(form, "cancel")).Enabled, "Label details request disables competing actions and supports cancellation");
+                ((Button)Field(form, "cancel")).PerformClick(); pendingDetails.SetResult(details(17, CancellationToken.None).Result);
+                WaitUntil(() => loading.IsCompleted, "Cancelled label details completes");
+                Require(files.Items.Count == 0 && ((TextBox)Field(form, "description")).Text.Length == 0, "Cancelled label details cannot publish stale content");
+                Require(labels.SelectedItems.Count == 0 && !((Button)Field(form, "browse")).Enabled && !((Button)Field(form, "delete")).Enabled,
+                    "Cancelled label details clears selection and disables stale target actions");
+                typeof(LabelsForm).GetField("getChanges", flags).SetValue(form, details);
+                labels.Items[0].Selected = true; Application.DoEvents();
+                typeof(LabelsForm).GetField("deleteLabel", flags).SetValue(form,
+                    new Func<PlasticLabel, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((label, token) => { deleted++; return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0 }); }));
+                typeof(LabelsForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => {
+                    Require(message.Contains("release 中文 & 1 → cs:17") && message.Contains("ID 111") && message.Contains("ui-labels@local"), "Delete confirmation shows repository, name, target and immutable id"); return DialogResult.No;
+                }));
+                var cancelled = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                WaitUntil(() => cancelled.IsCompleted, "Cancelled label delete completes"); Require(deleted == 0, "Cancelled deletion never calls writer");
+                typeof(LabelsForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => {
+                    File.WriteAllText(selectorFile, selector.Replace("ui-labels@local", "changed@local")); return DialogResult.Yes;
+                }));
+                var switched = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                WaitUntil(() => switched.IsCompleted, "Changed repository label delete is rejected");
+                Require(deleted == 0 && ((Label)Field(form, "status")).Text.Contains("仓库已改变"), "Delete rechecks repository after confirmation");
+                File.WriteAllText(selectorFile, selector);
+                ((Button)Field(form, "refresh")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Labels refresh after rejected write");
+                labels.Items[0].Selected = true; Application.DoEvents();
+                var pendingDelete = new System.Threading.Tasks.TaskCompletionSource<PlasticCommandResult>();
+                typeof(LabelsForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => DialogResult.Yes));
+                typeof(LabelsForm).GetField("deleteLabel", flags).SetValue(form,
+                    new Func<PlasticLabel, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((label, token) => {
+                        deleted++; Require(label.Id == 111 && label.Changeset == 17 && label.Name == "release 中文 & 1" && label.Repository == "ui-labels@local", "Deletion submits reviewed immutable identity"); return pendingDelete.Task;
+                    }));
+                var deleting = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                Require((bool)Field(form, "writing") && !((Button)Field(form, "cancel")).Enabled && !((Button)Field(form, "close")).Enabled, "Label mutation disables cancellation and close");
+                form.Close(); Require(!form.IsDisposed, "Label manager cannot close during delete");
+                entries.Remove(first); pendingDelete.SetResult(new PlasticCommandResult { ExitCode = 0 }); WaitUntil(() => deleting.IsCompleted, "Successful label delete refreshes list");
+                Require(deleted == 1 && labels.Items.Count == 1 && ((Label)Field(form, "status")).Text.Contains("删除成功"), "Successful deletion removes stale selection after server refresh");
+                labels.Items[0].Selected = true; Application.DoEvents();
+                typeof(LabelsForm).GetField("deleteLabel", flags).SetValue(form,
+                    new Func<PlasticLabel, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((label, token) =>
+                        System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 1, Error = "uncertain native result" })));
+                var failedDelete = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                WaitUntil(() => failedDelete.IsCompleted, "Uncertain label deletion completes");
+                Require(labels.Items.Count == 0 && !((Button)Field(form, "delete")).Enabled && ((Label)Field(form, "status")).Text.Contains("结果未确认"),
+                    "Uncertain deletion clears targets until explicit refresh");
+                ((Button)Field(form, "refresh")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Refresh uncertain label result");
+                labels.Items[0].Selected = true; Application.DoEvents();
+                typeof(LabelsForm).GetField("deleteLabel", flags).SetValue(form,
+                    new Func<PlasticLabel, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((label, token) => {
+                        fail = true; return System.Threading.Tasks.Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                    }));
+                var refreshFailed = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                WaitUntil(() => refreshFailed.IsCompleted, "Successful delete with failed refresh completes");
+                Require(labels.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("删除成功") && ((Label)Field(form, "status")).Text.Contains("fixture label read failure"),
+                    "Successful delete preserves refresh failure instead of presenting empty list as authoritative");
+                fail = false; second.Name = "release/legacy";
+                ((Button)Field(form, "refresh")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Read-only legacy label name refreshes");
+                labels.Items[0].Selected = true; Application.DoEvents();
+                using (var browser = (RepositoryBrowserForm)typeof(LabelsForm).GetMethod("CreateSnapshotBrowser", flags).Invoke(form, null))
+                    Require((long?)Field(browser, "initialChangeset") == 18, "Unsupported mutation name still browses its snapshot");
+                bool unsupportedConfirmation = false;
+                typeof(LabelsForm).GetField("confirm", flags).SetValue(form, new Func<string, DialogResult>(message => { unsupportedConfirmation = true; return DialogResult.Yes; }));
+                var unsupportedDelete = (System.Threading.Tasks.Task)typeof(LabelsForm).GetMethod("DeleteAsync", flags).Invoke(form, null);
+                WaitUntil(() => unsupportedDelete.IsCompleted, "Unsupported label deletion is rejected locally");
+                Require(!unsupportedConfirmation && !fail && ((Label)Field(form, "status")).Text.StartsWith("无法删除标签：") && !((Label)Field(form, "status")).Text.Contains("结果未确认"),
+                    "Unsupported delete name fails before confirmation and is not reported as uncertain mutation");
+                fail = true; ((Button)Field(form, "refresh")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Failed label refresh finishes");
+                Require(labels.Items.Count == 0 && files.Items.Count == 0 && ((Label)Field(form, "status")).Text.Contains("fixture label read failure"), "Failed label refresh clears obsolete records");
+                fail = false; int before = listed; File.WriteAllText(selectorFile, selector.Replace("ui-labels@local", "changed@local"));
+                ((Button)Field(form, "refresh")).PerformClick(); WaitUntil(() => !(bool)Field(form, "busy"), "Label repository mismatch finishes");
+                Require(listed == before && labels.Items.Count == 0, "Repository mismatch rejects reads before invoking provider");
+                File.WriteAllText(selectorFile, selector); form.Close();
+            }
+            using (var history = new HistoryForm(client, root, root))
+            {
+                // Create the native list handle without showing the form (no live server request).
+                var revisions = (ListView)Field(history, "revisions"); IntPtr handle = revisions.Handle;
+                typeof(HistoryForm).GetField("filtering", flags).SetValue(history, true);
+                typeof(HistoryForm).GetField("historyRepository", flags).SetValue(history, "ui-labels@local");
+                revisions.Items.Add(new ListViewItem("cs:19") { Tag = new PlasticHistoryItem { Changeset = 19 } }).Selected = true;
+                using (var dialog = (LabelCreateForm)typeof(HistoryForm).GetMethod("CreateLabelDialog", flags).Invoke(history, null))
+                    Require(((NumericUpDown)Field(dialog, "revision")).Value == 19 && !((NumericUpDown)Field(dialog, "revision")).Enabled, "History creates labels at precisely the selected reviewed revision");
+                Require(revisions.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Any(item => item.Text == "在此版本创建标签…"), "History exposes native create-label context action");
+            }
+            Require(File.ReadAllText(selectorFile) == selector, "All label GUI navigation preserves workspace selector");
+        }
+
+        private static void CheckLiveLabels(string artifacts, string workspacePath, string labelName)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var client = new PlasticClient(PlasticClientConfig.Load()); var workspace = client.DiscoverWorkspace(workspacePath);
+            string selector = workspace.Selector;
+            using (var form = new LabelsForm(client, workspacePath))
+            {
+                Prepare(form); WaitUntil(() => !(bool)Field(form, "busy"), "Live labels list finishes");
+                var labels = (ListView)Field(form, "labels");
+                var row = labels.Items.Cast<ListViewItem>().SingleOrDefault(item => ((PlasticLabel)item.Tag).Name == labelName);
+                Require(row != null, "Live labels GUI finds exact created Unicode label"); row.Selected = true;
+                WaitUntil(() => !(bool)Field(form, "busy"), "Live label changeset detail finishes");
+                var selected = (PlasticLabel)row.Tag;
+                Require(((TextBox)Field(form, "description")).Text.Contains("cs:" + selected.Changeset), "Live label GUI renders exact target commit details");
+                using (var browser = (RepositoryBrowserForm)typeof(LabelsForm).GetMethod("CreateSnapshotBrowser", flags).Invoke(form, null))
+                    Require((long?)Field(browser, "initialChangeset") == selected.Changeset, "Live label snapshot navigation pins exact target");
+                Save(form, Path.Combine(artifacts, "labels-live.png")); form.Size = form.MinimumSize; Application.DoEvents(); Save(form, Path.Combine(artifacts, "labels-live-minimum.png")); form.Close();
+            }
+            Require(client.DiscoverWorkspace(workspacePath).Selector == selector, "Read-only live labels GUI preserves selector");
         }
 
         private static void CheckRepositoryBrowser(string artifacts)

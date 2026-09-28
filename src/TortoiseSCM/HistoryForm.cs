@@ -112,6 +112,7 @@ namespace TortoiseSCM
             revisionMenu.Items.Add("复制变更集编号", null, delegate { CopyText(SelectedRevisionText(false)); });
             revisionMenu.Items.Add("复制提交说明", null, delegate { CopyText(SelectedRevisionText(true)); });
             revisionMenu.Items.Add("浏览此版本的完整仓库…", null, delegate { OpenRepositoryBrowser(); });
+            revisionMenu.Items.Add("在此版本创建标签…", null, delegate { OpenCreateLabel(); });
             revisionMenu.Items.Add(new ToolStripSeparator());
             revisionMenu.Items.Add("标记为比较起点", null, delegate { MarkComparisonChangeset(); });
             compareMarkedChangeset.Click += delegate { OpenChangesetComparison(); };
@@ -391,6 +392,20 @@ namespace TortoiseSCM
             if (!compareMarkedChangeset.Enabled) return;
             try { using (var dialog = CreateChangesetComparison()) dialog.ShowDialog(this); }
             catch (Exception ex) { status.Text = "无法打开变更集比较：" + ex.Message; }
+        }
+
+        private void OpenCreateLabel()
+        {
+            if (writing || revisions.SelectedItems.Count != 1) return;
+            try { using (var dialog = CreateLabelDialog()) dialog.ShowDialog(this); }
+            catch (Exception ex) { status.Text = "无法创建标签：" + ex.Message; }
+        }
+
+        private LabelCreateForm CreateLabelDialog()
+        {
+            ValidateHistoryContext();
+            if (revisions.SelectedItems.Count != 1) throw new InvalidOperationException("请选择提交。");
+            return new LabelCreateForm(client, workspaceRoot, historyRepository, ((PlasticHistoryItem)revisions.SelectedItems[0].Tag).Changeset);
         }
 
         private void OpenRepositoryBrowser()

@@ -1,6 +1,6 @@
 # 与 TortoiseGit 的功能差距
 
-审计日期：2026-09-27。对象是 `src/TortoiseSCM.sln` 实际编译的 Plastic 产品；仓库保留的 Git 源码不代表这些功能已经移植。对照基于本仓库上游源码，而非对最新 TortoiseGit 发行版的完整认证。
+审计日期：2026-09-28。对象是 `src/TortoiseSCM.sln` 实际编译的 Plastic 产品；仓库保留的 Git 源码不代表这些功能已经移植。对照基于本仓库上游源码，而非对最新 TortoiseGit 发行版的完整认证。
 
 ## 日常工作流
 
@@ -12,7 +12,7 @@
 | 差异与三方合并 | 外部工具配置、历史文件/整个快照比较、冲突处理；对应 CLI | 未移植完整 TortoiseGitMerge 编辑器；Partial 冲突与分支操作仍有明确支持范围 |
 | 分支管理 | 列表/父子层级、创建、Standard 切换、分支历史、固定头提交合并；对应 CLI | 父子树不是提交/合并关系图；缺少分支重命名、删除、Partial 切换 |
 | Stash | shelveset 保存、列表、文件明细、应用、删除、内容比较和导出均有 GUI/CLI | 应用仅允许干净 Standard 工作区；Partial 可保存/比较/导出但不能应用；未实现应用冲突向导和自动 pop；目录/链接导出仍受限 |
-| 标签 | 无专用 GUI/CLI | 需实现 Plastic labels 的列表、创建、历史定位与生命周期 |
+| 标签 | 标签列表/筛选、创建、按 ID/变更集核对后删除、目标提交文件明细和固定快照浏览；`labels/label-resolve/label-create/label-delete` | 尚无用户重命名、移动或按标签切换；原生按名称删除不能原子防止跨客户端竞争 |
 | Blame | blame CLI, Annotate/Blame GUI, Explorer single-file entry | Implemented Plastic native annotate line, owner, changeset, date, branch and content; read-only, directories and binaries are rejected |
 | Repository browser | 固定变更集目录树、目录文件列表、只读文本预览、单文件导出；`repository-list` 与 `export` | 尚无递归整目录导出、跨仓库链接浏览；文本预览限 UTF-8 / 2 MiB |
 | Clone / Create repository | 选择已有 Plastic 工作区 | 缺少服务器/仓库浏览、新建工作区/仓库向导 |
@@ -26,7 +26,7 @@
 2. 后续补暂存集应用冲突向导与目录/链接导出；不能以保存成功推断可以安全撤销本地工作。
 3. 已补只读仓库浏览：按固定快照逐层读取完整目录树，提供历史文件预览与导出，GUI/CLI 共享后端。后续完善递归目录导出和历史路径身份跟踪。
 4. 已实现 Windows 11 现代右键菜单接口及可选预览包，与经典菜单共享命令。后续完成受信任签名和真实 Explorer 现代菜单显示验收；当前非管理员环境阻止未签名部署。
-5. 变更集/合并关系图、标签管理，再补分支重命名/删除与 Partial 切换。图必须使用服务器真实父关系和合并边，不能用时间或分支名称猜测。
+5. 已补标签列表、创建、核验删除、目标提交明细与快照浏览。后续实现变更集/合并关系图，再补分支重命名/删除与 Partial 切换。图必须使用服务器真实父关系和合并边，不能用时间或分支名称猜测。
 6. Changelist、提交说明历史/模板、批量操作、补丁及发布平台完善。
 
 每个里程碑都应包含相关自动检查、隔离 Plastic 实测、普通/最小尺寸 GUI 渲染、commit/push 和安装后验证。此列表是优先级，不是已实现承诺。

@@ -1,0 +1,19 @@
+Repository labels milestone, 2026-09-28
+Release application SHA256: C79D3A0B9E5ABE3AE5AF89F85FE9F19D786771F6029B5E4BD6CF27532B510571
+Release shell SHA256: 9FF32CFEF92263E0B09A791E1DDC29217A38F8506BD9748D98C6817BFFFAD6DA
+Final build: build-tortoisescm.ps1 -Configuration Release -Test, exit 0.
+All Core suites, 2068 existing CLI, 5 blame CLI, 21 shelves content CLI, 21 repository browser CLI, 200 label CLI, native Shell/source/production DLL and complete WinForms regression pass.
+Labels backend: 130 assertions. GUI-specific private final run: 69 assertions, /warnaserror compile.
+GUI follows IDD_BROWSE_REFS / IDD_NEW_BRANCH_TAG native dialog layout; list, details, fixed snapshot, creation, deletion, main/history/Explorer launch wiring.
+Server suite: LabelIntegrationTests.ps1 -Manifest bin/TortoiseSCM/qa/integration-20260928-011857-5cfb79d9/manifest.json -UiExecutable bin/TortoiseSCM/qa/labels-gui-agent/UiTests.exe; exit 0, 43 assertions.
+Live UI executable is separately compiled from the same final GUI/Core sources, not desktop automation. Real server read checks cover Standard and Partial selection/details/fixed snapshot creation; writes exercised through release CLI and GUI write orchestration via injected providers.
+Server evidence: fixture/labels-fb483d2137ae4ce3ad45f5d83b85e0eb/results.json. Normal/minimum live renders under producer and partial subdirectories, visually inspected.
+Native probe: temporary-label creation plus colliding rename rejects overwrite and preserves both IDs. Own probes removed. Final repository label inventory empty.
+Native tests: Unicode label with space and &, CRLF multiline comment, exact id/repository/changeset, duplicate create, stale delete id/cs, no-yes refusal, snapshot listing in three workspaces, identity-reviewed cleanup.
+Standard dirty/clean and Partial status, selector, wktree and nonmetadata file hashes unchanged. Original TestSCM clean on /main.
+44 package/isolated install/uninstall assertions pass; actual Explorer registration unchanged. System installation not replaced.
+Package: bin/TortoiseSCM/packages/TortoiseSCM-0.2.0-labels-preview-20260928-windows-x64.zip
+Package SHA256: df72b3c756097401fdc029a7f4987d585be9a88acc16e75fb53807ff6c3290e7
+Logs: bin/TortoiseSCM/qa/labels-final-build.log, labels-live-final.log, labels-package-tests.log, labels-package-final.log.
+Boundary: native name-only delete cannot provide atomic cross-client ID compare/delete. Failed creation can leave explicitly reported temporary labels; no automatic cleanup. Special names may be read but strict mutation subset remains. User rename/move labels and direct label switch remain unimplemented.
+No claim of real Explorer desktop/modern menu activation or multiple-DPI validation; previous unsigned modern-menu deployment limitation remains.

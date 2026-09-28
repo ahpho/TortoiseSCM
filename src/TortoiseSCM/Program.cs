@@ -94,7 +94,7 @@ namespace TortoiseSCM
             // through MainForm so they retain the same confirmation and
             // workspace safety checks as the in-app menus.
             string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "blame", "gluon", "settings",
-                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "repository-browser", "export", "rollback", "recover" };
+                "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "export", "rollback", "recover" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             if (result.Changeset.HasValue && result.Command != "repository-browser") throw new ArgumentException("--changeset 仅适用于仓库浏览器。");
             return result;

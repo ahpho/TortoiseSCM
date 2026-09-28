@@ -19,6 +19,7 @@ namespace TortoiseSCM
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +
             "          locks, unlock, cache-refresh, history-page, branches, branch-tree, branch-head, switch-branch, create-branch\r\n" +
             "          shelves, shelve-details, shelve-create, shelve-apply, shelve-delete, shelve-diff, shelve-export, blame, repository-list\r\n" +
+            "          labels, label-resolve, label-create, label-delete\r\n" +
             "Options: --json --yes --recursive --comment <text> --commentsfile <UTF-8-file>\r\n" +
             "         --timeout <seconds> --cm <absolute-exe-path> --help\r\n" +
             "History: --changeset <number> (required for changeset, rollback, switch)\r\n" +
@@ -34,6 +35,12 @@ namespace TortoiseSCM
             "  A nonempty creation comment is required; --commentsfile <UTF-8-file> can replace --comment.\r\n" +
             "  Creation writes repository metadata only; it never switches the workspace and supports Partial workspaces.\r\n" +
             "  Resolve branch-head first, then pass its fixed changeset to merge-preview or merge-start.\r\n" +
+            "Labels: labels --path <workspace> [--filter <text>]; label-resolve --path <workspace> --label <name>\r\n" +
+            "  label-create --path <workspace> --label <name> --changeset N --comment <text> --yes\r\n" +
+            "  label-delete --path <workspace> --label <name> --label-id N --changeset N --yes\r\n" +
+            "  Resolve first and pass the reviewed label identity and changeset to delete; changed labels are refused.\r\n" +
+            "  Labels cover the repository; --path only locates the workspace. These commands never switch the workspace.\r\n" +
+            "  Label creation requires a nonempty comment; --commentsfile may replace --comment.\r\n" +
             "Shelvesets: shelves --path <workspace>; shelve-details --path <workspace> --shelve N\r\n" +
             "  Lists and details cover the repository; --path locates the workspace, not a filter.\r\n" +
             "  shelve-create --path <selected controlled pending file> [--path ...] --comment <text> --yes\r\n" +
@@ -77,7 +84,7 @@ namespace TortoiseSCM
             "Locks: locks --path <root>; unlock --path <root> --lock-id <guid> --yes (current user's lock only)\r\n" +
             "Settings: --diff-tool <exe> --diff-args <template> --merge-tool <exe> --merge-args <template>\r\n" +
             "          --settings-file <file> (optional isolated configuration); no tool options reads settings.\r\n" +
-            "Write commands require --yes. Checkin, create-branch and shelve-create require a nonempty comment.\r\n" +
+            "Write commands require --yes. Checkin, create-branch, shelve-create and label-create require a nonempty comment.\r\n" +
             "Exit codes: 0 success; 1 SCM/runtime error; 2 invalid arguments; 124 timeout.\r\n" +
             "--json writes exactly one UTF-8 JSON object to stdout, including errors.\r\n" +
             "Timeout applies to each cm process. Paths must belong to one workspace.";
@@ -144,6 +151,44 @@ namespace TortoiseSCM
             workspace = client.GetWorkspaceAsync(options.Paths[0], CancellationToken.None).GetAwaiter().GetResult();
             var workspaceData = new { rootPath = workspace.RootPath, name = workspace.Name,
                 repository = workspace.Repository, selector = workspace.Selector, isPartial = workspace.IsPartial };
+            if (options.Command == "labels")
+            {
+                var labels = client.GetLabelsAsync(options.Paths[0], workspace.Repository, CancellationToken.None).GetAwaiter().GetResult();
+                var matching = labels.Where(label => String.IsNullOrEmpty(options.Filter) ||
+                    label.Name.IndexOf(options.Filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    label.Comment.IndexOf(options.Filter, StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
+                response.data = new { workspace = workspaceData, filter = options.Filter, labels = matching.Select(LabelData).ToArray() };
+                response.output = String.Join(Environment.NewLine, matching.Select(label => label.Name + "\tcs:" +
+                    label.Changeset.ToString(CultureInfo.InvariantCulture) + "\tid:" + label.Id.ToString(CultureInfo.InvariantCulture) +
+                    "\t" + label.Owner + "\t" + label.Comment));
+                return;
+            }
+            if (options.Command == "label-resolve")
+            {
+                var label = client.ResolveLabelAsync(options.Paths[0], options.Label, workspace.Repository, CancellationToken.None).GetAwaiter().GetResult();
+                response.data = new { workspace = workspaceData, label = LabelData(label) };
+                response.output = label.Name + "\tcs:" + label.Changeset.ToString(CultureInfo.InvariantCulture) +
+                    "\tid:" + label.Id.ToString(CultureInfo.InvariantCulture) + "\t" + label.Repository;
+                return;
+            }
+            if (options.Command == "label-create")
+            {
+                SetResult(response, client.CreateLabelAsync(options.Paths[0], options.Label, options.Changeset.Value, options.Comment,
+                    workspace.Repository, CancellationToken.None).GetAwaiter().GetResult());
+                if (response.exitCode != 0) return;
+                response.data = new { workspace = workspaceData, operation = "label-create", name = options.Label,
+                    changeset = options.Changeset.Value, repository = workspace.Repository };
+                return;
+            }
+            if (options.Command == "label-delete")
+            {
+                SetResult(response, client.DeleteLabelAsync(options.Paths[0], options.Label, options.LabelId.Value, options.Changeset.Value,
+                    workspace.Repository, CancellationToken.None).GetAwaiter().GetResult());
+                if (response.exitCode != 0) return;
+                response.data = new { workspace = workspaceData, operation = "label-delete", name = options.Label,
+                    id = options.LabelId.Value, changeset = options.Changeset.Value, repository = workspace.Repository };
+                return;
+            }
             if (options.Command == "repository-list")
             {
                 var listing = client.GetRepositoryDirectoryAsync(options.Paths[0], options.Item ?? "/", options.Changeset.Value,
@@ -609,6 +654,12 @@ namespace TortoiseSCM
                 response.error = "Plastic SCM exited with code " + result.ExitCode.ToString(CultureInfo.InvariantCulture) + ".";
         }
 
+        private static object LabelData(PlasticLabel item)
+        {
+            return new { id = item.Id, name = item.Name, changeset = item.Changeset, owner = item.Owner, date = item.Date,
+                comment = item.Comment, repository = item.Repository, branch = item.Branch };
+        }
+
         private static object ShelveData(PlasticShelve item)
         {
             return new { objectId = item.ObjectId, shelveId = item.ShelveId, parentChangeset = item.ParentChangeset, owner = item.Owner, date = item.Date,
@@ -718,11 +769,11 @@ namespace TortoiseSCM
     internal sealed class CliOptions
     {
         internal string Command = "status", Comment, Cm, DiffTool, DiffArgs, MergeTool, MergeArgs, SettingsFile;
-        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result, Branch, Filter, Ignore;
+        internal string Base, Local, Remote, Output, Item, FromItem, Destination, Result, Branch, Filter, Ignore, Label;
         internal bool Help, Recursive, External, Overwrite;
         internal int? Timeout, Limit, Conflict;
         internal string Resolution, Rename;
-        internal long? Changeset, From, To, Before, Shelve;
+        internal long? Changeset, From, To, Before, Shelve, LabelId;
         internal Guid? LockId;
         internal bool ChangesSettings { get { return DiffTool != null || DiffArgs != null || MergeTool != null || MergeArgs != null; } }
         internal readonly List<string> Paths = new List<string>();
@@ -736,7 +787,7 @@ namespace TortoiseSCM
                 {
                     case "--json": return true;
                     case "--command": case "--path": case "--comment": case "--commentsfile": case "--cm": case "--timeout": ++i; break;
-                    case "--changeset": case "--shelve": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
+                    case "--changeset": case "--shelve": case "--label": case "--label-id": case "--diff-tool": case "--diff-args": case "--merge-tool": case "--merge-args":
                     case "--settings-file": case "--base": case "--local": case "--remote": case "--output": ++i; break;
                     case "--item": case "--from-item": case "--from": case "--to": case "--destination": case "--result": case "--lock-id": case "--before": case "--limit":
                     case "--conflict": case "--resolution": case "--rename": case "--branch": case "--filter": case "--ignore": ++i; break;
@@ -784,6 +835,12 @@ namespace TortoiseSCM
                     case "--from-item": options.FromItem = Value(args, ref i); break;
                     case "--branch": options.Branch = Value(args, ref i); break;
                     case "--filter": options.Filter = Value(args, ref i); break;
+                    case "--label": options.Label = Value(args, ref i); break;
+                    case "--label-id":
+                        long labelId;
+                        if (!Int64.TryParse(Value(args, ref i), NumberStyles.None, CultureInfo.InvariantCulture, out labelId) || labelId < 1)
+                            throw new ArgumentException("--label-id must be a positive label identity.");
+                        options.LabelId = labelId; break;
                     case "--ignore": options.Ignore = Value(args, ref i); break;
                     case "--destination": options.Destination = AbsolutePath(Value(args, ref i)); break;
                     case "--result": options.Result = AbsolutePath(Value(args, ref i)); break;
@@ -829,14 +886,21 @@ namespace TortoiseSCM
             if (options.Help) return options;
             if (!new[] { "status", "workspace", "add", "checkout", "checkin", "undo", "update", "history", "diff", "changeset", "rollback", "switch", "settings", "merge", "export", "diff-history", "diff-changesets", "remove", "move", "ignore",
                 "merge-preview", "merge-start", "merge-status", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue", "merge-directory-cancel", "locks", "unlock", "cache-refresh", "history-page", "branches", "branch-tree", "branch-head", "switch-branch", "create-branch",
-                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
+                "shelves", "shelve-details", "shelve-create", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export", "blame", "repository-list", "labels", "label-resolve", "label-create", "label-delete", "partial-conflicts", "partial-conflict-status", "partial-conflict-prepare", "partial-conflict-tool", "partial-conflict-resolve", "partial-conflict-cancel",
                 "partial-structure-preview", "partial-structure-status", "partial-structure-prepare", "partial-structure-resolve", "partial-structure-cancel", "partial-structure-recover",
                 "partial-directory-preview", "partial-directory-status", "partial-directory-prepare", "partial-directory-resolve", "partial-directory-cancel", "partial-directory-recover" }.Contains(options.Command))
                 throw new ArgumentException("Unsupported CLI command: " + options.Command);
             if (options.Command != "settings" && options.Command != "merge" && options.Paths.Count == 0) throw new ArgumentException("At least one explicit --path is required.");
             if ((options.Command == "settings" || options.Command == "merge") && options.Paths.Count != 0) throw new ArgumentException("This command does not accept --path.");
-            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "shelve-create", "shelve-apply", "shelve-delete", "shelve-export", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
+            bool write = new[] { "add", "checkout", "checkin", "undo", "update", "rollback", "switch", "switch-branch", "create-branch", "label-create", "label-delete", "shelve-create", "shelve-apply", "shelve-delete", "shelve-export", "merge", "export", "remove", "move", "ignore", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "unlock" }.Contains(options.Command) || options.ChangesSettings;
             if (write && !yes) throw new ArgumentException("Write commands require explicit --yes confirmation.");
+            bool labelCommand = new[] { "labels", "label-resolve", "label-create", "label-delete" }.Contains(options.Command);
+            bool labelTarget = labelCommand && options.Command != "labels";
+            if (labelCommand && options.Paths.Count != 1) throw new ArgumentException("Label commands require exactly one workspace path.");
+            if (labelTarget != (options.Label != null)) throw new ArgumentException("--label is required only for label-resolve, label-create and label-delete.");
+            if (options.Label != null && String.IsNullOrWhiteSpace(options.Label)) throw new ArgumentException("--label requires a nonempty label name.");
+            if ((options.Command == "label-delete") != options.LabelId.HasValue) throw new ArgumentException("--label-id is required only for label-delete; resolve and review the label first.");
+            if ((options.Command == "labels" || options.Command == "label-resolve") && yes) throw new ArgumentException("Read-only label commands do not accept --yes.");
             if (new[] { "shelve-details", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export" }.Contains(options.Command) != options.Shelve.HasValue)
                 throw new ArgumentException("--shelve is required only for shelve-details, shelve-apply, shelve-delete, shelve-diff and shelve-export.");
             if (new[] { "shelves", "shelve-details", "shelve-apply", "shelve-delete", "shelve-diff", "shelve-export" }.Contains(options.Command) && options.Paths.Count != 1)
@@ -849,7 +913,7 @@ namespace TortoiseSCM
             if ((branchTarget && options.Branch == null) || (!branchTarget && options.Command != "history-page" && options.Branch != null))
                 throw new ArgumentException("--branch is required for branch-head, switch-branch and create-branch, and optional for history-page.");
             if (options.Branch != null && String.IsNullOrWhiteSpace(options.Branch)) throw new ArgumentException("--branch requires a nonempty full branch name.");
-            if (options.Filter != null && options.Command != "branch-tree") throw new ArgumentException("--filter is supported only for branch-tree.");
+            if (options.Filter != null && options.Command != "branch-tree" && options.Command != "labels") throw new ArgumentException("--filter is supported only for branch-tree and labels.");
             if (options.Ignore != null && options.Command != "blame") throw new ArgumentException("--ignore is supported only for blame.");
             if ((options.Command == "branches" || options.Command == "branch-tree" || options.Command == "branch-head") && yes) throw new ArgumentException("Read-only branch commands do not accept --yes.");
             if (options.Command == "blame" && (options.Paths.Count != 1 || yes))
@@ -886,7 +950,7 @@ namespace TortoiseSCM
             if ((options.Command == "locks" || options.Command == "unlock") && options.Paths.Count != 1) throw new ArgumentException("Lock operations require exactly one workspace root.");
             bool mergeWorkflow = options.Command.StartsWith("merge-", StringComparison.Ordinal);
             bool conflictFile = partialFile || options.Command == "partial-structure-prepare" || options.Command == "partial-directory-prepare" || options.Command == "merge-prepare" || options.Command == "merge-resolve" || options.Command == "merge-conflict-tool";
-            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "export", "repository-list", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
+            bool needsChangeset = new[] { "changeset", "rollback", "switch", "create-branch", "label-create", "label-delete", "export", "repository-list", "merge-preview", "merge-start", "merge-prepare", "merge-resolve", "merge-conflict-tool", "merge-directory-resolve", "merge-continue" }.Contains(options.Command);
             if (needsChangeset != options.Changeset.HasValue) throw new ArgumentException("This command " + (needsChangeset ? "requires" : "does not accept") + " --changeset.");
             if (needsChangeset && options.Paths.Count != 1) throw new ArgumentException("Select exactly one file or directory scope for this command.");
             if (mergeWorkflow && options.Paths.Count != 1) throw new ArgumentException("Workspace merge operations require exactly one explicit workspace root.");
@@ -912,8 +976,8 @@ namespace TortoiseSCM
             if (options.Command == "merge" && (options.Base == null || options.Local == null || options.Remote == null || options.Output == null))
                 throw new ArgumentException("Merge requires --base, --local, --remote and --output.");
             if (options.Comment != null && commentsFile != null) throw new ArgumentException("Use either --comment or --commentsfile.");
-            if ((options.Comment != null || commentsFile != null) && options.Command != "checkin" && options.Command != "create-branch" && options.Command != "shelve-create")
-                throw new ArgumentException("Comments are valid only for checkin, create-branch and shelve-create.");
+            if ((options.Comment != null || commentsFile != null) && options.Command != "checkin" && options.Command != "create-branch" && options.Command != "shelve-create" && options.Command != "label-create")
+                throw new ArgumentException("Comments are valid only for checkin, create-branch, shelve-create and label-create.");
             if (options.Recursive && options.Command != "add" && options.Command != "checkout" && options.Command != "undo")
                 throw new ArgumentException("--recursive is supported for add, checkout and undo only.");
             if (commentsFile != null)
@@ -926,6 +990,7 @@ namespace TortoiseSCM
             if (options.Command == "checkin" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("Checkin requires a nonempty comment.");
             if (options.Command == "create-branch" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("create-branch requires a nonempty --comment or --commentsfile.");
             if (options.Command == "shelve-create" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("shelve-create requires a nonempty --comment or --commentsfile.");
+            if (options.Command == "label-create" && String.IsNullOrWhiteSpace(options.Comment)) throw new ArgumentException("label-create requires a nonempty --comment or --commentsfile.");
             return options;
         }
 

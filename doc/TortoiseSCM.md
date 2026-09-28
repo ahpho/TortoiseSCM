@@ -33,6 +33,28 @@ Explorer 单选文件、目录或工作区背景右键的“仓库浏览器”�
 
 `repository-list` 必须显式指定变更集，`--item` 默认为 `/`，返回直接子项的仓库路径、ItemId、类型及字节数。目录或文件在该快照不存在时报告错误。所有浏览操作不会切换分支、更新、签入或回滚工作区；导出仅写入指定目标。
 
+### 标签管理
+
+Explorer 单选文件、目录或工作区背景右键的“标签”，以及主窗口操作菜单，可打开仓库标签列表。标签覆盖整个仓库，不按所选目录裁剪。上方列表支持筛选；选中标签后，下方显示目标提交说明及更改文件，双击可浏览该固定变更集的完整快照。历史记录右键“创建标签”会固定选中提交，也可在标签窗口输入目标变更集。
+
+GUI 和 CLI 均支持列表、查询、创建和删除，适用于 Standard / Partial 工作区，不更新或切换工作区。创建要求名称、明确变更集与非空说明；删除需确认标签名称、ID 和变更集。
+
+现有特殊名称标签仍可列出、精确查询和浏览。为避免原生对象规格歧义，创建/删除拒绝 `@ # : " / \`、控制字符、开头短横线及首尾空白；这些名称的标签需使用官方客户端管理。CLI 筛选匹配名称和说明；GUI 还可按变更集、分支、作者或日期筛选。
+
+```powershell
+$exe = '.\bin\TortoiseSCM\Release\TortoiseSCM.exe'
+$workspace = 'D:\Work\Juscent\SCM_Study\TestSCM'
+& $exe --command labels --path $workspace
+& $exe --cli --json --command labels --path $workspace --filter release
+& $exe --cli --json --command label-create --path $workspace --label release-example --changeset 1 --comment 'Release snapshot' --yes
+$resolved = (& $exe --cli --json --command label-resolve --path $workspace --label release-example | ConvertFrom-Json).data.label
+& $exe --cli --json --command repository-list --path $workspace --changeset $resolved.changeset
+# 核对查询结果后再删除；以实际查询到的 ID 和变更集为准。
+& $exe --cli --json --command label-delete --path $workspace --label $resolved.name --label-id $resolved.id --changeset $resolved.changeset --yes
+```
+
+创建不会覆盖或移动已有同名标签：先使用唯一临时名称创建并核验，再通过原生重命名发布；同名冲突会失败。网络中断、取消或发布失败可能留下临时标签，错误会给出名称和仓库；请刷新核对后处理，程序不会自动删除。底层 `cm label delete` 仅支持按名称删除，因此 ID/变更集检查与删除之间的跨客户端竞争无法做到原子保护。暂不提供用户标签重命名、移动标签或直接按标签切换工作区；可以解析标签后使用固定变更集的现有浏览/恢复操作。
+
 ### 可安装包
 
 ```powershell

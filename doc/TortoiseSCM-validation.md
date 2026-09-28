@@ -1,5 +1,14 @@
 # TortoiseSCM 验证记录
 
+## 仓库标签管理（2026-09-28）
+
+- 新增 GUI 标签列表/筛选、目标提交文件明细、固定快照浏览、创建和删除确认，入口包括主窗口、Explorer 和历史右键。布局参考上游 `IDD_BROWSE_REFS`、`IDD_NEW_BRANCH_TAG`，使用原生控件及既有 DialogStyle。CLI 新增 `labels/label-resolve/label-create/label-delete`，提供 JSON、精确身份及严格参数范围检查。
+- 后端 130 项、标签 CLI 200 项检查通过；覆盖特殊名称只读解析、Unicode/多行说明、异常 XML、固定仓库、读取及写入期间 selector/仓库改变、创建冲突、过期删除身份及不确定服务器结果。GUI 专项 69 项通过，覆盖确认取消、异步读取取消、写入防重复/防关闭、失败清除旧选择、删除后的刷新失败提示，以及普通/最小尺寸布局。
+- 原生探测确认 `cm label create` 可重新应用已有标签，故创建采用唯一临时名称与重命名发布；服务器实测同名重命名失败且保留双方 ID。探测标签均在隔离分支 cs719 上创建并清理。原生未提供可用的按 ID 条件删除，因此不能承诺跨客户端原子删除；失败后的临时标签名称与仓库均保留在可复制错误提示中。
+- `LabelIntegrationTests.ps1` 最终 43 项通过，复用 `qa/integration-20260928-011857-5cfb79d9/`。对 Standard/Partial 创建中文带空格和 `&` 的标签及 CRLF 多行说明，在脏 Standard、干净 Standard、Partial 中查询并浏览固定快照；重复创建和过期 ID/变更集删除均拒绝。真实 WinForms 窗口分别连接 Standard/Partial，选中标签、加载 cs719 提交明细并构造固定仓库/变更集的浏览器。原生标签清单完整恢复，三工作区 status、selector、wktree 及所有非元数据文件 SHA256 不变。
+- 最终 Release `-Test` 覆盖全部 Core、既有 CLI、原生 Shell/正式 DLL 接口及完整 WinForms 回归。44 项打包/隔离安装/卸载检查通过，实际 Explorer 注册未改变。正常/最小尺寸渲染已查看；这是进程内 WinForms 验证，不是 Explorer 桌面点击或多 DPI 验收。现代菜单仍保留上一阶段的未签名部署限制。
+- 日志：`qa/labels-final-build.log`、`labels-live-final.log`、`labels-package-tests.log`；真实服务器命令与 GUI 输出：隔离 fixture 下 `labels-fb483d2137ae4ce3ad45f5d83b85e0eb/results.json`，截图见其 `producer/` 与 `partial/`。保留原 TestSCM 的干净 `/main`，未替换系统安装。
+
 ## Windows 11 现代菜单接口与预览包（2026-09-28）
 
 - 新增独立 CLSID 的 `IExplorerCommand`、`IObjectWithSite` 和子命令枚举器，复用经典菜单的命令表、范围规则和启动器。快速菜单状态查询推迟文件系统探测，不运行 Plastic CLI。枚举 GUID 稳定；点击时重新读取选择，拒绝跨工作区/元数据/无效路径。目录背景通过 Shell site 解析；导航树缺失明确选中项时拒绝操作，避免误用当前文件夹。经典菜单重复项抑制参考保留的上游实现。
