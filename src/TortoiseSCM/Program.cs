@@ -59,7 +59,7 @@ namespace TortoiseSCM
                         request.Paths.Add(picker.SelectedPath);
                     }
                 }
-                Application.Run(new MainForm(request));
+                Application.Run(CreateLaunchForm(request));
                 return 0;
             }
             catch (Exception ex)
@@ -67,6 +67,37 @@ namespace TortoiseSCM
                 MessageBox.Show(ex.Message, "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
+        }
+
+        // Keep shell dispatch independent of the pending-change/checkin surface.
+        internal static Form CreateLaunchForm(LaunchRequest request)
+        {
+            if (request.Command != "history" && request.Command != "update") return new MainForm(request);
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            Form form;
+            if (request.Command == "update") form = new UpdateForm(client, request.Paths);
+            else
+            {
+                var workspace = ValidateWorkspacePaths(client, request.Paths);
+                if (request.Paths.Count != 1) throw new ArgumentException("历史记录需要一个文件或目录范围，请仅选择一项。");
+                form = new HistoryForm(client, request.Paths[0], workspace.RootPath);
+            }
+            client.ToolHost = new WinFormsPlasticToolHost(form);
+            return form;
+        }
+
+        internal static PlasticWorkspace ValidateWorkspacePaths(PlasticClient client, IList<string> paths)
+        {
+            if (paths == null || paths.Count == 0) throw new ArgumentException("请选择 Plastic SCM 工作区内的路径。");
+            var workspace = client.DiscoverWorkspace(paths[0]);
+            if (workspace == null) throw new ArgumentException("此路径不属于 Plastic SCM 工作区：" + paths[0]);
+            foreach (string path in paths)
+            {
+                var other = client.DiscoverWorkspace(path);
+                if (other == null || !String.Equals(other.RootPath, workspace.RootPath, StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("请一次只选择同一 Plastic 工作区内的文件。");
+            }
+            return workspace;
         }
     }
 

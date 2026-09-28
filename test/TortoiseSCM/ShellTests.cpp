@@ -222,6 +222,93 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
 
 #include "ModernShellTests.h"
 
+// Exercise Explorer's actual numeric invocation contract against the shipping
+// DLL, with a recorder executable instead of the GUI. No registration or SCM
+// operations are performed; every selected path belongs to this test fixture.
+void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binaryDirectory)
+{
+    const auto stage = first.parent_path() / L"classic handoff";
+    std::filesystem::create_directory(stage);
+    const auto dll = stage / L"TortoiseSCMShell.dll";
+    std::filesystem::copy_file(std::filesystem::path(binaryDirectory) / L"TortoiseSCMShell.dll", dll);
+    wchar_t self[32768]{}; GetModuleFileNameW(nullptr, self, ARRAYSIZE(self));
+    const auto executable = stage / L"TortoiseSCM.exe";
+    std::filesystem::copy_file(self, executable);
+    HMODULE loaded = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    require(loaded != nullptr, "classic handoff production DLL staged");
+    auto getClass = reinterpret_cast<HRESULT(WINAPI*)(REFCLSID, REFIID, void**)>(GetProcAddress(loaded, "DllGetClassObject"));
+    {
+        ComPtr<IClassFactory> factory;
+        require(getClass && SUCCEEDED(getClass(ShellClsid, IID_PPV_ARGS(&factory))), "classic handoff production factory");
+        ComPtr<IContextMenu> context;
+        require(SUCCEEDED(factory->CreateInstance(nullptr, IID_PPV_ARGS(&context))), "classic handoff production context menu");
+        ComPtr<IShellExtInit> initialize;
+        require(SUCCEEDED(context.As(&initialize)), "classic handoff shell initialization interface");
+        const auto file = (first / L"child/selected \u4e2d\u6587 & item.txt").make_preferred();
+        std::ofstream(file) << "fixture";
+        for (unsigned selectionKind = 0; selectionKind != 3; ++selectionKind)
+        {
+            const auto selectedPath = selectionKind == 0 ? file : first;
+            Selection selection({selectedPath.native()});
+            PIDLIST_ABSOLUTE folder = nullptr;
+            if (selectionKind == 2)
+                require(SUCCEEDED(SHParseDisplayName(first.c_str(), nullptr, &folder, 0, nullptr)), "classic handoff background folder PIDL");
+            const HRESULT initialized = initialize->Initialize(folder, selectionKind == 2 ? nullptr : &selection, nullptr);
+            CoTaskMemFree(folder);
+            require(SUCCEEDED(initialized), "classic handoff file directory or background initialized");
+            HMENU menu = CreatePopupMenu();
+            const HRESULT queried = context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL);
+            require(SUCCEEDED(queried) && HRESULT_CODE(queried) == (selectionKind == 0 ? 26 : 24), "classic handoff filtered menu populated");
+            for (const wchar_t* command : {L"update", L"checkin", L"history", L"version"})
+            {
+                const std::wstring canonical = L"tortoisescm." + std::wstring(command);
+                UINT offset = 0;
+                for (; offset < HRESULT_CODE(queried); ++offset)
+                {
+                    wchar_t verb[80]{};
+                    require(SUCCEEDED(context->GetCommandString(offset, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))), "classic handoff canonical menu verb");
+                    if (canonical == verb) break;
+                }
+                require(offset < HRESULT_CODE(queried), "classic handoff requested command is visible");
+                const auto capturePath = stage / (std::to_wstring(selectionKind) + L"-" + command + L".txt");
+                wchar_t oldCapture[32768]{};
+                const DWORD oldLength = GetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", oldCapture, ARRAYSIZE(oldCapture));
+                require(SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", capturePath.c_str()) != FALSE, "classic handoff capture environment");
+                CMINVOKECOMMANDINFOEX invocation{};
+                invocation.cbSize = sizeof(invocation);
+                invocation.fMask = CMIC_MASK_UNICODE;
+                invocation.lpVerb = MAKEINTRESOURCEA(offset);
+                invocation.lpVerbW = nullptr;
+                invocation.nShow = SW_SHOWNORMAL;
+                const HRESULT invoked = context->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation));
+                SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", oldLength && oldLength < ARRAYSIZE(oldCapture) ? oldCapture : nullptr);
+                require(SUCCEEDED(invoked), "classic handoff invokes production process launcher");
+                const std::wstring wideExpected = std::wstring(command) + L"\n" + selectedPath.native() + L"\n";
+                const int length = WideCharToMultiByte(CP_UTF8, 0, wideExpected.c_str(), static_cast<int>(wideExpected.size()), nullptr, 0, nullptr, nullptr);
+                std::string expected(length, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, wideExpected.c_str(), static_cast<int>(wideExpected.size()), expected.data(), length, nullptr, nullptr);
+                std::string contents;
+                const auto deadline = GetTickCount64() + 10000;
+                do
+                {
+                    std::ifstream capture(capturePath, std::ios::binary);
+                    contents.assign(std::istreambuf_iterator<char>(capture), std::istreambuf_iterator<char>());
+                    if (contents == expected) break;
+                    Sleep(20);
+                } while (GetTickCount64() < deadline);
+                const std::string label = "classic production dispatch " + Ascii(command) + " selection=" + std::to_string(selectionKind);
+                if (contents != expected) std::cerr << "Expected: " << expected << "Actual: " << contents;
+                require(contents == expected, label.c_str());
+            }
+            DestroyMenu(menu);
+        }
+    }
+    FreeLibrary(loaded);
+    const auto deadline = GetTickCount64() + 10000;
+    while (!DeleteFileW(executable.c_str()) && GetTickCount64() < deadline) Sleep(20);
+    require(GetFileAttributesW(executable.c_str()) == INVALID_FILE_ATTRIBUTES, "classic handoff recorder exits");
+}
+
 int wmain(int argc, wchar_t** argv) {
     const int recorder = ModernHandoffRecorder(argc, argv);
     if (recorder >= 0) return recorder;
@@ -235,7 +322,8 @@ int wmain(int argc, wchar_t** argv) {
     const bool registered = argc == 2 && wcscmp(argv[1], L"--registered") == 0;
     const bool modernRegistered = argc == 3 && wcscmp(argv[1], L"--modern-registered") == 0;
     const bool modernDll = argc == 3 && wcscmp(argv[1], L"--modern-dll") == 0;
-    if (argc > 1 && !registered && !modernRegistered && !modernDll) { std::cerr << "Usage: ShellTests.exe [--registered | --modern-registered <binary-directory> | --modern-dll <binary-directory> | --overlay-probe <path> <state 0..8>]\n"; return 2; }
+    const bool classicDll = argc == 3 && wcscmp(argv[1], L"--classic-dll") == 0;
+    if (argc > 1 && !registered && !modernRegistered && !modernDll && !classicDll) { std::cerr << "Usage: ShellTests.exe [--registered | --modern-registered <binary-directory> | --modern-dll <binary-directory> | --classic-dll <binary-directory> | --overlay-probe <path> <state 0..8>]\n"; return 2; }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     auto base = std::filesystem::temp_directory_path() / (L"TortoiseSCMShellTest-" + std::to_wstring(GetCurrentProcessId()));
     std::filesystem::create_directories(base / L"first/.plastic");
@@ -249,8 +337,10 @@ int wmain(int argc, wchar_t** argv) {
     if (modernRegistered || modernDll)
     {
         ModernShellTests(first, second, argv[2], modernDll);
-        if (modernDll) ModernHandoffTest(first, argv[2]);
+        if (modernDll) { ModernHandoffTest(first, argv[2]); ClassicHandoffTest(first, argv[2]); }
     }
+    else if (classicDll)
+        ClassicHandoffTest(first, argv[2]);
     else if (registered)
         RegisteredSmoke(first, second);
     else
@@ -269,14 +359,21 @@ int wmain(int argc, wchar_t** argv) {
     invocation.cbSize = sizeof(invocation); invocation.fMask = CMIC_MASK_UNICODE;
     invocation.lpVerb = nullptr; invocation.lpVerbW = L"tortoisescm.diff";
     require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==6,"Unicode verb with null ANSI field");
-    invocation.lpVerb = "unrelated"; invocation.lpVerbW = MAKEINTRESOURCEW(4);
-    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==4,"Unicode ordinal with ANSI string");
+    invocation.lpVerb = MAKEINTRESOURCEA(2); invocation.lpVerbW = nullptr;
+    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==2,"Explorer Unicode invocation reads ordinal from ANSI field");
+    invocation.lpVerb = MAKEINTRESOURCEA(4); invocation.lpVerbW = MAKEINTRESOURCEW(1);
+    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==4,"Unicode numeric wide field does not override ANSI ordinal");
     invocation.lpVerb = MAKEINTRESOURCEA(2); invocation.lpVerbW = L"tortoisescm.history";
     require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==7,"Unicode verb overrides ANSI ordinal");
     invocation.lpVerbW = L"not-a-command";
     require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==ARRAYSIZE(commands),"unknown Unicode verb rejected");
-    invocation.lpVerbW = MAKEINTRESOURCEW(99);
-    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==ARRAYSIZE(commands),"invalid Unicode ordinal rejected");
+    invocation.lpVerb = MAKEINTRESOURCEA(99); invocation.lpVerbW = nullptr;
+    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==ARRAYSIZE(commands),"invalid ANSI ordinal rejected with Unicode flag");
+    invocation.lpVerb = "tortoisescm.undo";
+    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==5,"Unicode flag without wide verb permits ANSI canonical verb");
+    const std::vector<size_t> filtered{0,1,2,3,4,5,7,25};
+    invocation.lpVerb = MAKEINTRESOURCEA(6);
+    require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),filtered)==7,"Unicode ordinal maps through filtered directory commands");
     invocation.fMask = 0; invocation.lpVerb = "tortoisescm.undo";
     require(ResolveCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invocation),visible)==5,"ANSI canonical verb");
     invocation.lpVerb = MAKEINTRESOURCEA(3);

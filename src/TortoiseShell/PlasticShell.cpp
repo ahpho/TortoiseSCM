@@ -134,9 +134,12 @@ size_t ResolveCommand(const CMINVOKECOMMANDINFO* info, const std::vector<size_t>
     if (!info) return ARRAYSIZE(commands);
     const bool unicode = info->cbSize >= sizeof(CMINVOKECOMMANDINFOEX) && (info->fMask & CMIC_MASK_UNICODE);
     const wchar_t* wideVerb = unicode ? reinterpret_cast<const CMINVOKECOMMANDINFOEX*>(info)->lpVerbW : nullptr;
-    // The selected encoding determines BOTH ordinal and string interpretation.
-    const auto rawVerb = unicode ? reinterpret_cast<UINT_PTR>(wideVerb) : reinterpret_cast<UINT_PTR>(info->lpVerb);
-    if (rawVerb <= 0xffff)
+    // CMIC_MASK_UNICODE selects lpVerbW only for a Unicode string verb.
+    // Explorer still passes numeric menu offsets in lpVerb, often leaving
+    // lpVerbW null even when the Unicode flag is present.
+    const bool wideString = unicode && reinterpret_cast<UINT_PTR>(wideVerb) > 0xffff;
+    const auto rawVerb = reinterpret_cast<UINT_PTR>(info->lpVerb);
+    if (!wideString && rawVerb <= 0xffff)
     {
         const size_t offset = LOWORD(rawVerb);
         return offset < visible.size() ? visible[offset] : ARRAYSIZE(commands);
@@ -144,7 +147,7 @@ size_t ResolveCommand(const CMINVOKECOMMANDINFO* info, const std::vector<size_t>
     for (const size_t index : visible)
     {
         const std::wstring verb = L"tortoisescm." + std::wstring(commands[index].name);
-        if (unicode ? _wcsicmp(verb.c_str(), wideVerb) == 0 : _stricmp(Ascii(verb).c_str(), info->lpVerb) == 0)
+        if (wideString ? _wcsicmp(verb.c_str(), wideVerb) == 0 : _stricmp(Ascii(verb).c_str(), info->lpVerb) == 0)
             return index;
     }
     return ARRAYSIZE(commands);

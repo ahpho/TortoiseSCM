@@ -381,7 +381,7 @@ namespace TortoiseSCM
                 OverlayCacheHost.TrackAndStart(workspace.RootPath);
                 SetBusy(false, "");
                 await RefreshAsync();
-                if (launch.Command == "history") await ExecuteAsync(PlasticCommand.History);
+                if (launch.Command == "history") await ExecuteAsync(PlasticCommand.History, new List<string>(launch.Paths));
                 else if (launch.Command == "blame") await ShowBlameAsync(launch.Paths);
                 else if (launch.Command == "diff") await ExecuteAsync(PlasticCommand.Diff);
                 else if (launch.Command == "gluon") await ExecuteAsync(PlasticCommand.Gluon);
@@ -692,10 +692,17 @@ namespace TortoiseSCM
         {
             if (busy || !loaded) return;
             if (command == PlasticCommand.Checkin) { await CheckinSelectionAsync(explicitPaths); return; }
+            if (command == PlasticCommand.Update)
+            {
+                var updatePaths = explicitPaths ?? (workspace.IsPartial ? SelectedPaths(false, true) : new List<string>(launch.Paths));
+                if (updatePaths.Count == 0) { MessageBox.Show(this, "请先勾选要操作的项。", "TortoiseSCM"); return; }
+                using (var update = new UpdateForm(client, updatePaths)) update.ShowDialog(this);
+                await RefreshAsync();
+                return;
+            }
             bool read = command == PlasticCommand.History || command == PlasticCommand.Diff || command == PlasticCommand.Gluon;
             var paths = explicitPaths ?? SelectedPaths(read, command != PlasticCommand.Checkin && command != PlasticCommand.Undo);
             if (command == PlasticCommand.Gluon) paths = new List<string> { workspace.RootPath };
-            if (command == PlasticCommand.Update && !workspace.IsPartial) paths = new List<string> { workspace.RootPath };
             if (paths.Count == 0) { MessageBox.Show(this, "请先勾选要操作的项。", "TortoiseSCM"); return; }
             if ((command == PlasticCommand.History || command == PlasticCommand.Diff) && paths.Count != 1)
             { MessageBox.Show(this, "请仅选择一个文件或目录。", "TortoiseSCM"); return; }
@@ -708,8 +715,6 @@ namespace TortoiseSCM
             if (!read)
             {
                 string note = command == PlasticCommand.Undo ? "所选项的本地更改将丢失。\r\n" : "";
-                if (command == PlasticCommand.Update && !workspace.IsPartial)
-                    note += "完整工作区需整体更新：这将更新整个工作区中的受控文件。\r\n";
                 if (paths.Any(Directory.Exists) || files.CheckedItems.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).IsDirectory))
                     note += "目录操作会包含其全部子项，包括没有单独勾选的子项。\r\n";
                 if (MessageBox.Show(this, note + "\r\n" + string.Join("\r\n", paths.Take(12).ToArray()) +

@@ -2,6 +2,14 @@
 
 范围说明（2026-09-28）：用户已排除多 DPI、提交失败草稿跨重启恢复，以及签名/自动更新/ARM64 等发布与平台产品化工作。以下历史记录中的未验收事实保留；历史“下一步/待完成”描述不覆盖 [当前路线图](../ROADMAP.md) 的范围约定。
 
+## Explorer 命令分派与独立更新窗口修复（2026-09-28）
+
+- 复现用户报告：Explorer 设置 Unicode 标志、数字菜单编号放在 `lpVerb` 且 `lpVerbW` 为空时，旧代码将所有菜单项误读为编号 0（status）。新增测试先在旧源码失败，并通过旧生产 DLL 捕获 `Expected: update / Actual: status`。根据 [Microsoft IContextMenu 实现说明](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-implement-the-icontextmenu-interface)，数字编号从 `lpVerb` 读取，Unicode 字符串才使用 `lpVerbW`。
+- 修复后 ShellTests 345 项、正式 DLL 路径 392 项通过；后者增加了文件/目录/目录背景中 update、checkin、history、version 共 12 次实际 DLL → 子进程 argv 检查。原生测试不注册 Explorer、不执行 SCM 写入。日志为 `bin/TortoiseSCM/shell-dispatch-{red,build,green}.log` 与 `shell-production-dispatch-{red,green}.log`。
+- 程序入口将历史直接路由到原选择范围的日志窗口；更新进入独立窗口，明确 Standard 整体范围或 Partial 原始所选范围，点击更新才写入。主窗口更新菜单复用同一窗口；执行前核对工作区身份/分支/模式，执行中禁止重复或关闭，失败/超时保留结果且不自动重试。
+- 更新及路由专项最终 70 项通过；完整 WinForms 回归通过。已查看更新窗口普通/最小尺寸截图 `qa/launch-routing/update-dialog*.png`。最终 Release EXE 分别以 history/update/checkin 启动，验证对应三个窗口并正常关闭，没有点击写操作。日志 `qa/shell-dispatch-fix/{release-build,full-ui,real-window-launches}.log`。
+- 只读诊断确认用户活动安装指向新版，但 Explorer 内存仍加载旧 `0.13.0-preview.1` 扩展；安装目录切换无法替换已加载的 DLL。诊断记录在 `qa/shell-dispatch-fix/reported-*.json`。版本信息需从重启后的右键菜单打开核对，安装前已打开的程序窗口也需重新打开。
+
 ## 双击安装/卸载与版本信息（2026-09-28）
 
 - 安装包新增 `Install.cmd`、`Uninstall.cmd` 和 PowerShell 协调入口。双击使用 64 位 Windows PowerShell、显示结果并等待回车；安装后打开欢迎窗口，升级保留已有系统级图标选项。卸载先显示并确认当前活动目录，绑定确认时的版本，保留工作区及用户设置；部分卸载保留双击重试入口。CMD 入口结束时关闭其命令窗口，终端自动化继续使用 PS1。

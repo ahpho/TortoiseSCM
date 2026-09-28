@@ -33,6 +33,10 @@ namespace TortoiseSCM
                 {
                     BeyondCompareSettingsUiTests.Run(args[1]); return 0;
                 }
+                if (args.Length == 2 && args[0] == "--launch-routing-ui")
+                {
+                    LaunchRoutingUiTests.Run(args[1]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--graph-ui")
                 {
                     Directory.CreateDirectory(args[1]); RevisionGraphUiTests.Run(args[1]); return 0;
@@ -94,6 +98,7 @@ namespace TortoiseSCM
                 CommitMessageUiTests.Run(artifacts);
                 WorkspaceCreationUiTests.Run(artifacts);
                 VersionInfoUiTests.Run(artifacts);
+                LaunchRoutingUiTests.Run(artifacts);
                 Require(LaunchRequest.Parse(new[] { "--command", "create-workspace" }).Paths.Count == 0, "Workspace creation opens without an existing workspace");
                 Require(LaunchRequest.Parse(new[] { "--command", "create-workspace", "--path", Path.Combine(artifacts, "new workspace") }).Paths.Count == 1, "Workspace creation accepts a proposed destination");
                 try { LaunchRequest.Parse(new[] { "--command", "create-workspace", "--path", artifacts, "--path", artifacts }); throw new Exception("Multiple workspace destinations accepted"); }
