@@ -439,3 +439,14 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 边界：预览不是完整文件差异清单；独立 CLI 预览 JSON 不绑定后续切换，后者会重新检查当前目标。原生按名称执行仍非服务器原子条件事务。当前读取目标完整树，部分匹配为二次复杂度，大仓库性能和长时间预览取消仍需优化，未声称已通过压力验收。受控目录结构处理、人工恢复向导及 Partial 跨分支合并仍未完成。
 - 最终构建真实预览集成 66 项通过（`qa/partial-switch-preview-integration-final2.log`，fixture `qa/integration-20260928-181447-a52cc2f5/`，相邻 `partial-switch-preview-results.json`）。覆盖目录移动/删除/替换/新增、未加载区域放行、内容更新、单文件稀疏范围、新父目录移动拦截及完整加载模式；拒绝时文件、selector 和加载规则不变，原 TestSCM 保持不变。
 - 全量 `build-tortoisescm.ps1 -Test` 通过（`qa/partial-switch-preview-regression.log`），包含最终 205 项预览核心、2,297 项主 CLI、其他 Core/CLI、Shell/现代菜单及完整 WinForms 回归。运行期间补齐稀疏文件保护，最终程序另行构建（`qa/partial-switch-preview-build-final2.log`），随后核心、CLI、GUI 和最终真实集成均验证了该版本。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-partial-switch-preview-20260928-windows-x64.zip`。
+
+# Partial 目录预览索引与取消（2026-09-28）
+
+- 将逐项遍历目标/已加载树替换为 ItemId、大小写不敏感路径和精确路径索引；解析时验证并关联父目录，范围和最近异常祖先以缓存沿父链计算，不因加载规则数或深层目录重复扫描整树。目录匹配整体按节点处理，最终预览行仍按路径稳定排序。保留同路径替换、大小写移动、稀疏文件新父目录、链接、跨仓库和异常层级的既有拒绝语义。
+- XML 分块读取、节点解析、目录规则、范围/身份匹配和排序检查取消；XML 仍禁止 DTD 且不解析外部资源。核心专项 210 项通过，包含读取原生命令输出时取消、不发出切换、释放工作区互斥锁后重新预览；C# 5 `/warnaserror` 编译通过。
+- 新增 `PartialBranchSwitchScaleTests` 22 项：每树 11,001 / 110,001 个项目、1,000 / 10,000 条加载规则，目标树父节点逆序，末尾规则新增目录、范围外相似前缀目录、大小写重复/移动/父链校验、读取中确定性取消和 DTD 拒绝。首轮本机解析与匹配为 95 / 777 ms，新增目录匹配为 5 / 53 ms；门槛为解析与匹配 30 秒、纯匹配 10 秒，用于发现二次复杂度回退，不是服务器响应时限。
+- 分支窗口在初始模式查询和 Partial 只读预览时复用“取消预览”按钮；关闭/Escape 也请求取消并等待异步结束，窗口保留以供重试。迟到的成功结果不能打开确认或发出写入；确认切换后恢复既有不可取消写入与关闭保护。GUI 专项 130 项及原切换 GUI 63 项通过；普通/最小尺寸截图为 `qa/partial-switch-preview-cancel-ui/partial-switch-preview-pending*.png`，已目视确认按钮和状态可见。
+- 安装/升级回滚/卸载检查 45 项通过（`qa/partial-switch-scale-package-tests.log`），实际 Explorer 注册未改变。新增规模套件已加入标准 `build-tortoisescm.ps1 -Test`。
+- 边界：仍需传输并保存目标完整树及 XML，尚未验证真实十万项服务器端到端性能与超大预览列表呈现；工作区元数据哈希等既有同步操作不承诺立即中断。结构处理/恢复向导、Partial 跨分支合并继续列为未完成。
+- 最终构建真实 Plastic 结构预览/切换集成 66 项通过（`qa/partial-switch-scale-integration.log`，fixture `qa/integration-20260928-182548-a20ddf1d/`，相邻 `partial-switch-preview-results.json`）。目录移动/删除/替换/新增及稀疏文件新父目录仍在写前拒绝，允许的内容更新与稀疏切换保持原行为；原 TestSCM、producer、selector 与加载配置检查通过。
+- 最终全量 `build-tortoisescm.ps1 -Test` 通过（`qa/partial-switch-scale-regression.log`）：210 项预览核心、22 项规模/取消、2,297 项主 CLI、既有 Core/CLI、Shell/现代菜单和完整 WinForms 检查；预览 GUI 130 项与既有切换 UI 63 项在全量中通过。该次规模测量为 94 / 855 ms，新增目录匹配 2 / 47 ms。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-partial-switch-scale-20260928-windows-x64.zip`。

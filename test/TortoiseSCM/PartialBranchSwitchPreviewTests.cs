@@ -68,6 +68,16 @@ internal static class PartialBranchSwitchPreviewTests
             }
             Reset(""); using (var cancellation = new CancellationTokenSource())
             { cancellation.Cancel(); Reject<OperationCanceledException>(() => client.PreviewPartialBranchSwitchAsync(root, "/main/topic", cancellation.Token).GetAwaiter().GetResult(), "Precancel preview"); NoWrite(); }
+            Reset("cancel-ls"); using (var cancellation = new CancellationTokenSource())
+            {
+                var pending = client.PreviewPartialBranchSwitchAsync(root, "/main/topic", cancellation.Token);
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (!File.Exists(Meta("ls-started")) && DateTime.UtcNow < deadline) Thread.Sleep(10);
+                Check(File.Exists(Meta("ls-started")), "Preview reaches active native tree read");
+                cancellation.Cancel();
+                Reject<OperationCanceledException>(() => pending.GetAwaiter().GetResult(), "Cancel active native read before any switch"); NoWrite();
+            }
+            Reset(""); Check(Preview().CanSwitch, "Cancelled read releases workspace gates for a fresh preview");
             Console.WriteLine("PASS: " + assertions + " Partial branch switch preview assertions"); return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
@@ -115,6 +125,7 @@ internal static class PartialBranchSwitchPreviewTests
             var items = new[] { Item("/", 3, "目录", local), Item("/loaded", 27, "dir", local), Item("/loaded/sub", 28, "directory", local), Item("/loaded/file.txt", 29, "文本文件", local) }.ToList();
             if (!local)
             {
+                if (mode == "cancel-ls") { Write("ls-started", "true"); Thread.Sleep(30000); }
                 Write("tree-argument", args.Single(arg => arg.StartsWith("--tree=")));
                 if (mode == "moved" || mode == "case-moved") foreach (var item in items.Skip(1)) item.Element("CurrentPath").Value = item.Element("CurrentPath").Value.Replace("/loaded", mode == "moved" ? "/renamed" : "/LOADED");
                 if (mode == "deleted") items.RemoveRange(1, 3);

@@ -33,7 +33,11 @@ namespace TortoiseSCM
             try {
                 var client = new PlasticClient(new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location });
                 TestButton(client, root, false, true); TestButton(client, root, false, false); TestButton(client, root, true, true);
-                TestPending(client, root); TestInvalidPreview(client, root); TestStaleExecution(client, root); TestStandard(client, root);
+                TestPending(client, root);
+                TestCancel(client, root, artifacts, false, false); TestCancel(client, root, artifacts, false, true);
+                TestCancel(client, root, artifacts, true, false); TestCancel(client, root, artifacts, true, true);
+                TestCooperativeCancel(client, root); TestPendingWrite(client, root);
+                TestInvalidPreview(client, root); TestStaleExecution(client, root); TestStandard(client, root);
             }
             finally { Directory.Delete(root, true); }
             Console.WriteLine("PASS: Partial branch switch preview UI (" + assertions + " assertions)");
@@ -119,11 +123,100 @@ namespace TortoiseSCM
                 Set(form, "showPartialPreview", new Func<PlasticPartialBranchSwitchPreview, bool>(value => { dialogs++; return false; }));
                 Field<Button>(form, "switchBranch").PerformClick(); Application.DoEvents();
                 Require(Field<bool>(form, "busy") && dialogs == 0, "Awaiting preview holds busy state without opening stale dialog");
-                foreach (string name in new[] { "switchBranch", "close", "cancel", "refresh" }) Require(!Field<Button>(form, name).Enabled, "Pending preview disables " + name);
-                form.Close(); Require(!form.IsDisposed, "Close is guarded during asynchronous preview preparation");
+                foreach (string name in new[] { "switchBranch", "refresh" }) Require(!Field<Button>(form, name).Enabled, "Pending preview disables " + name);
+                Require(Field<Button>(form, "cancel").Enabled && Field<Button>(form, "close").Enabled, "Readonly preview can be cancelled through footer or close");
                 Field<IList<PlasticBranch>>(form, "entries")[1].Name = "/main/mutated";
                 pending.SetResult(Preview(false)); PumpUntil(() => !Field<bool>(form, "busy"));
                 Require(dialogs == 1, "Async preview retains original selected target");
+            }
+        }
+
+        private static void TestCancel(PlasticClient client, string root, string artifacts, bool initialLookup, bool closeWindow)
+        {
+            using (var form = Open(client, root, true)) {
+                var pendingPreview = new TaskCompletionSource<PlasticPartialBranchSwitchPreview>();
+                var pendingWorkspace = new TaskCompletionSource<PlasticWorkspace>();
+                var workspace = client.DiscoverWorkspace(root); workspace.IsPartial = true;
+                var originalLoader = Field<Func<string, CancellationToken, Task<PlasticWorkspace>>>(form, "getWorkspace");
+                CancellationToken capturedToken = CancellationToken.None;
+                int dialogs = 0, writes = 0, previews = 0;
+                if (initialLookup) Set(form, "getWorkspace", new Func<string, CancellationToken, Task<PlasticWorkspace>>((path, token) => {
+                    capturedToken = token; return pendingWorkspace.Task;
+                }));
+                Set(form, "previewPartialSwitch", new Func<string, string, CancellationToken, Task<PlasticPartialBranchSwitchPreview>>((path, branch, token) => {
+                    previews++; capturedToken = token; return pendingPreview.Task;
+                }));
+                Set(form, "showPartialPreview", new Func<PlasticPartialBranchSwitchPreview, bool>(value => { dialogs++; return true; }));
+                Set(form, "performPartialSwitch", new Func<string, PlasticPartialBranchSwitchPreview, CancellationToken, Task<PlasticCommandResult>>((path, value, token) => {
+                    writes++; Require(!token.CanBeCanceled, "Retry write remains uncancellable"); return Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                }));
+                Field<Button>(form, "switchBranch").PerformClick(); Application.DoEvents();
+                Require(capturedToken.CanBeCanceled && !capturedToken.IsCancellationRequested, "Readonly lookup / preview receives live cancellable token");
+                Require(Field<bool>(form, "preparingSwitch") && !Field<bool>(form, "writing"), "Readonly phase is separate from write protection");
+                Require(Field<Button>(form, "cancel").Text == "取消预览" && Field<Button>(form, "cancel").Enabled, "Preview exposes explicit cancel action");
+                if (!initialLookup && !closeWindow) {
+                    Save(form, Path.Combine(artifacts, "partial-switch-preview-pending.png"));
+                    form.Size = form.MinimumSize; Application.DoEvents();
+                    foreach (string name in new[] { "cancel", "close", "status", "switchBranch" }) {
+                        var control = Field<Control>(form, name);
+                        Require(form.RectangleToScreen(form.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Minimum pending layout fits " + name);
+                    }
+                    Save(form, Path.Combine(artifacts, "partial-switch-preview-pending-minimum.png"));
+                }
+                if (closeWindow) form.Close(); else Field<Button>(form, "cancel").PerformClick();
+                Application.DoEvents();
+                Require(capturedToken.IsCancellationRequested, "Cancel / Close signals provider cancellation");
+                Require(form.Visible && !form.IsDisposed && Field<bool>(form, "busy"), "Ignored cancellation leaves window alive and locked until provider completion");
+                Require(!Field<Button>(form, "cancel").Enabled && !Field<Button>(form, "switchBranch").Enabled, "Cancellation in progress cannot be retried or switched");
+                Require(Field<Label>(form, "status").Text.Contains("正在取消"), "Pending cancellation is visible");
+                form.Close(); Require(form.Visible && !form.IsDisposed, "Repeated close remains guarded while provider completes");
+                Set(form, "getWorkspace", originalLoader);
+                if (initialLookup) pendingWorkspace.SetResult(workspace); else pendingPreview.SetResult(Preview(false));
+                PumpUntil(() => !Field<bool>(form, "busy"));
+                Require(dialogs == 0 && writes == 0 && previews == (initialLookup ? 0 : 1), "Late successful readonly response cannot open review or mutate");
+                Require(Field<Label>(form, "status").Text.Contains("已取消切换预览"), "Completed cancellation explains retry");
+                Require(Field<Button>(form, "switchBranch").Enabled && Field<Button>(form, "close").Enabled && Field<Button>(form, "cancel").Text == "取消加载", "Cancel completion restores actions");
+                Set(form, "previewPartialSwitch", new Func<string, string, CancellationToken, Task<PlasticPartialBranchSwitchPreview>>((path, branch, token) => {
+                    Require(token.CanBeCanceled && !token.IsCancellationRequested, "Retry receives fresh token"); return Task.FromResult(Preview(false));
+                }));
+                Field<Button>(form, "switchBranch").PerformClick(); Application.DoEvents();
+                Require(dialogs == 1 && writes == 1 && !Field<bool>(form, "busy"), "Explicit retry can review and switch once");
+                form.Close(); Require(form.IsDisposed, "Close works normally after completion");
+            }
+        }
+
+        private static void TestCooperativeCancel(PlasticClient client, string root)
+        {
+            using (var form = Open(client, root, true)) {
+                var pending = new TaskCompletionSource<PlasticPartialBranchSwitchPreview>(); int dialogs = 0, writes = 0;
+                CancellationTokenRegistration registration = default(CancellationTokenRegistration);
+                Set(form, "previewPartialSwitch", new Func<string, string, CancellationToken, Task<PlasticPartialBranchSwitchPreview>>((path, branch, token) => {
+                    registration = token.Register(() => pending.TrySetCanceled()); return pending.Task;
+                }));
+                Set(form, "showPartialPreview", new Func<PlasticPartialBranchSwitchPreview, bool>(value => { dialogs++; return true; }));
+                Set(form, "performPartialSwitch", new Func<string, PlasticPartialBranchSwitchPreview, CancellationToken, Task<PlasticCommandResult>>((path, value, token) => {
+                    writes++; return Task.FromResult(new PlasticCommandResult { ExitCode = 0 });
+                }));
+                Field<Button>(form, "switchBranch").PerformClick(); Field<Button>(form, "cancel").PerformClick();
+                PumpUntil(() => !Field<bool>(form, "busy")); registration.Dispose();
+                Require(dialogs == 0 && writes == 0 && Field<Label>(form, "status").Text.Contains("已取消切换预览"), "Cooperative cancellation releases controls without stale waiting message or write");
+            }
+        }
+
+        private static void TestPendingWrite(PlasticClient client, string root)
+        {
+            using (var form = Open(client, root, true)) {
+                var pending = new TaskCompletionSource<PlasticCommandResult>(); CancellationToken token = CancellationToken.None;
+                Set(form, "showPartialPreview", new Func<PlasticPartialBranchSwitchPreview, bool>(value => true));
+                Set(form, "performPartialSwitch", new Func<string, PlasticPartialBranchSwitchPreview, CancellationToken, Task<PlasticCommandResult>>((path, value, cancellation) => {
+                    token = cancellation; return pending.Task;
+                }));
+                Field<Button>(form, "switchBranch").PerformClick(); Application.DoEvents();
+                Require(Field<bool>(form, "writing") && !Field<bool>(form, "preparingSwitch") && !token.CanBeCanceled, "Accepted preview enters uncancellable write phase");
+                Require(!Field<Button>(form, "cancel").Enabled && !Field<Button>(form, "close").Enabled, "Write disables cancellation and close");
+                form.Close(); Require(form.Visible && !form.IsDisposed, "Close cannot interrupt accepted write");
+                pending.SetResult(new PlasticCommandResult { ExitCode = 0 }); PumpUntil(() => !Field<bool>(form, "busy"));
+                Require(Field<Button>(form, "close").Enabled, "Write completion restores close");
             }
         }
 

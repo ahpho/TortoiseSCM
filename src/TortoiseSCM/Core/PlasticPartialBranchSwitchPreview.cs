@@ -7,6 +7,8 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace TortoiseSCM
 {
@@ -48,10 +50,36 @@ namespace TortoiseSCM
             internal string Path;
             internal long Id;
             internal bool Directory, Supported;
+            internal PartialSwitchItem Parent;
+        }
+        private sealed class PartialSwitchTree
+        {
+            internal readonly List<PartialSwitchItem> Items = new List<PartialSwitchItem>();
+            internal readonly Dictionary<long, PartialSwitchItem> ById = new Dictionary<long, PartialSwitchItem>();
+            internal readonly Dictionary<string, PartialSwitchItem> ByPath = new Dictionary<string, PartialSwitchItem>(StringComparer.OrdinalIgnoreCase);
+            internal readonly Dictionary<string, PartialSwitchItem> ByExactPath = new Dictionary<string, PartialSwitchItem>(StringComparer.Ordinal);
+        }
+        private sealed class PartialSwitchTextReader : TextReader
+        {
+            private readonly TextReader input;
+            private readonly CancellationToken token;
+            internal PartialSwitchTextReader(TextReader input, CancellationToken token) { this.input = input; this.token = token; }
+            public override int Peek() { token.ThrowIfCancellationRequested(); return input.Peek(); }
+            public override int Read() { token.ThrowIfCancellationRequested(); return input.Read(); }
+            public override int Read(char[] buffer, int index, int count)
+            { token.ThrowIfCancellationRequested(); return input.Read(buffer, index, Math.Min(count, 4096)); }
+        }
+        private sealed class PartialSwitchPathComparer : IComparer<string>
+        {
+            private readonly CancellationToken token;
+            internal PartialSwitchPathComparer(CancellationToken token) { this.token = token; }
+            public int Compare(string left, string right)
+            { token.ThrowIfCancellationRequested(); return StringComparer.OrdinalIgnoreCase.Compare(left, right); }
         }
 
         public async Task<PlasticPartialBranchSwitchPreview> PreviewPartialBranchSwitchAsync(string root, string branch, CancellationToken token)
         {
+            token.ThrowIfCancellationRequested();
             ValidateBranchName(branch);
             var command = await BuildReadCommandAsync(root, token).ConfigureAwait(false);
             if (!SamePath(command.Arguments[1], command.WorkingDirectory)) throw new ArgumentException("Partial switch preview requires the explicit workspace root.");
@@ -115,35 +143,76 @@ namespace TortoiseSCM
             string root = workspace.RootPath;
             var localResult = await ExecuteAsync(RevisionCommand(root, new[] { "ls", root, "-R", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
             RequireSuccess(localResult);
-            var loaded = ParsePartialSwitchTree(localResult.Output, workspace, true);
+            var loaded = ParsePartialSwitchTree(localResult.Output, workspace, true, token);
             var remoteResult = await ExecuteAsync(RevisionCommand(root, new[] { "ls", "/", "--tree=cs:" + branch.HeadChangeset.ToString(CultureInfo.InvariantCulture) + "@" + workspace.Repository, "-R", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
             RequireSuccess(remoteResult);
-            var target = ParsePartialSwitchTree(remoteResult.Output, workspace, false);
-            string[] rules = File.ReadAllLines(Path.Combine(root, ".plastic", "plastic.fullycheckeddirectories"));
-            var scopes = new List<string>();
+            var target = ParsePartialSwitchTree(remoteResult.Output, workspace, false, token);
+            var rules = new List<string>();
+            using (var reader = new StreamReader(Path.Combine(root, ".plastic", "plastic.fullycheckeddirectories")))
+            {
+                string rule;
+                while ((rule = reader.ReadLine()) != null) { token.ThrowIfCancellationRequested(); rules.Add(rule); }
+            }
+            token.ThrowIfCancellationRequested();
+            return BuildPartialSwitchPreview(workspace, branch, loaded, target, rules.ToArray(), File.Exists(Path.Combine(root, ".plastic", "plastic.fullupdate")), token);
+        }
+
+        private static PlasticPartialBranchSwitchPreview BuildPartialSwitchPreview(PlasticWorkspace workspace, PlasticBranch branch,
+            PartialSwitchTree loaded, PartialSwitchTree target, string[] rules, bool full, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var scopes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var namespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var ruleIds = new HashSet<long>();
             foreach (string rule in rules)
             {
+                token.ThrowIfCancellationRequested();
                 string[] parts = rule.Split(':'); Guid namespaceId; long id;
                 if (parts.Length != 2 || !Guid.TryParseExact(parts[0], "D", out namespaceId) || namespaceId == Guid.Empty ||
                     !Int64.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out id) || id <= 0 || !ruleIds.Add(id))
                     throw new InvalidDataException("Invalid or duplicated Partial directory loading rule.");
                 namespaces.Add(namespaceId.ToString("D"));
-                var directory = loaded.SingleOrDefault(item => item.Id == id);
-                if (directory == null || !directory.Directory || !directory.Supported)
+                PartialSwitchItem directory;
+                if (!loaded.ById.TryGetValue(id, out directory) || !directory.Directory || !directory.Supported)
                     throw new InvalidDataException("A loading rule cannot be matched to a regular loaded directory in this repository.");
                 scopes.Add(directory.Path);
             }
             if (namespaces.Count > 1) throw new InvalidDataException("Partial loading rules use multiple identity namespaces.");
-            bool full = File.Exists(Path.Combine(root, ".plastic", "plastic.fullupdate"));
             if (full) scopes.Add("/");
-            var result = new PlasticPartialBranchSwitchPreview { Repository = workspace.Repository, Branch = branch.Name, HeadChangeset = branch.HeadChangeset,
-                LoadedDirectoryCount = loaded.Count(item => item.Directory), LoadingRuleCount = rules.Length, IsFullyLoaded = full };
-            foreach (var directory in loaded.Where(item => item.Directory))
+            // Parent links were validated using ordinal paths. Scope membership is
+            // deliberately case-insensitive, while retained ancestor identity is
+            // deliberately case-sensitive (a case-only move still blocks switch).
+            var inScope = new Dictionary<PartialSwitchItem, bool>();
+            var unsafeAncestor = new Dictionary<PartialSwitchItem, string>();
+            var pending = new Stack<PartialSwitchItem>();
+            foreach (var item in target.Items)
             {
-                var incoming = target.SingleOrDefault(item => item.Id == directory.Id);
-                var atPath = target.SingleOrDefault(item => String.Equals(item.Path, directory.Path, StringComparison.OrdinalIgnoreCase));
+                token.ThrowIfCancellationRequested();
+                var current = item;
+                while (current != null && !inScope.ContainsKey(current))
+                { token.ThrowIfCancellationRequested(); pending.Push(current); current = current.Parent; }
+                while (pending.Count != 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    current = pending.Pop();
+                    inScope.Add(current, scopes.Contains(current.Path) || current.Parent != null && inScope[current.Parent]);
+                    PartialSwitchItem original;
+                    bool retained = loaded.ByExactPath.TryGetValue(current.Path, out original) && original.Directory && original.Supported && original.Id == current.Id;
+                    unsafeAncestor.Add(current, !retained ? current.Path : current.Parent == null ? null : unsafeAncestor[current.Parent]);
+                }
+            }
+            var result = new PlasticPartialBranchSwitchPreview { Repository = workspace.Repository, Branch = branch.Name, HeadChangeset = branch.HeadChangeset,
+                LoadingRuleCount = rules.Length, IsFullyLoaded = full };
+            bool supportedLoadedTree = true;
+            foreach (var directory in loaded.Items)
+            {
+                token.ThrowIfCancellationRequested();
+                supportedLoadedTree &= directory.Supported;
+                if (!directory.Directory) continue;
+                result.LoadedDirectoryCount++;
+                PartialSwitchItem incoming, atPath;
+                target.ById.TryGetValue(directory.Id, out incoming);
+                target.ByPath.TryGetValue(directory.Path, out atPath);
                 string change = "Unchanged", reason = "Loaded directory identity and path are retained.";
                 if (!directory.Supported || incoming != null && (!incoming.Supported || !incoming.Directory))
                 { change = "Unsupported"; reason = "The loaded or target item is linked, cross-repository or an unsupported directory type."; }
@@ -156,74 +225,102 @@ namespace TortoiseSCM
                 result.Directories.Add(new PlasticPartialBranchSwitchDirectory { Path = directory.Path, TargetPath = incoming == null ? "" : incoming.Path,
                     ItemId = directory.Id, Change = change, Reason = reason });
             }
-            foreach (var incoming in target.Where(item => item.Directory || !item.Supported))
+            foreach (var incoming in target.Items)
             {
-                if (loaded.Any(item => item.Id == incoming.Id) || !scopes.Any(scope => DirectoryDecisionWithin(incoming.Path, scope))) continue;
+                token.ThrowIfCancellationRequested();
+                if ((!incoming.Directory && incoming.Supported) || loaded.ById.ContainsKey(incoming.Id) || !inScope[incoming]) continue;
                 result.Directories.Add(new PlasticPartialBranchSwitchDirectory { Path = incoming.Path, TargetPath = incoming.Path, ItemId = incoming.Id,
                     Change = incoming.Supported ? "Added" : "Unsupported", Reason = "A new directory or unsupported item enters a fully loaded scope and may change its loading configuration." });
             }
-            foreach (var file in loaded.Where(item => !item.Directory))
+            foreach (var file in loaded.Items)
             {
-                var counterparts = target.Where(item => item.Id == file.Id || String.Equals(item.Path, file.Path, StringComparison.OrdinalIgnoreCase));
-                if (counterparts.Any(item => !item.Supported || item.Directory))
+                token.ThrowIfCancellationRequested();
+                if (file.Directory) continue;
+                PartialSwitchItem incoming, atPath;
+                target.ById.TryGetValue(file.Id, out incoming);
+                target.ByPath.TryGetValue(file.Path, out atPath);
+                if (incoming != null && (!incoming.Supported || incoming.Directory) || atPath != null && (!atPath.Supported || atPath.Directory))
                 {
                     result.Directories.Add(new PlasticPartialBranchSwitchDirectory { Path = file.Path, TargetPath = file.Path, ItemId = file.Id,
                         Change = "Unsupported", Reason = "A loaded file becomes linked or is replaced by a directory at the target revision." });
                     continue;
                 }
-                var incoming = target.SingleOrDefault(item => item.Id == file.Id);
                 if (incoming == null) continue;
                 // Even a single selectively loaded file can cause native switch to
                 // materialize its new parent. Every target ancestor must therefore
                 // already be loaded at the same path with the same directory ID.
-                string parent = incoming.Path;
-                while (parent != "/")
+                string parent = incoming.Parent == null ? null : unsafeAncestor[incoming.Parent];
+                if (parent != null)
                 {
-                    parent = parent.Substring(0, parent.LastIndexOf('/')); if (parent.Length == 0) parent = "/";
-                    var targetParent = target.Single(item => item.Path == parent);
-                    if (loaded.Any(item => item.Path == parent && item.Directory && item.Supported && item.Id == targetParent.Id)) continue;
                     result.Directories.Add(new PlasticPartialBranchSwitchDirectory { Path = file.Path, TargetPath = incoming.Path, ItemId = file.Id,
                         Change = "Unsupported", Reason = "A loaded file would enter a directory that is not loaded at the same path and identity: " + parent });
-                    break;
                 }
             }
-            result.Directories = result.Directories.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase).ToList();
-            result.CanSwitch = result.Directories.All(item => item.Change == "Unchanged") && loaded.All(item => item.Supported);
-            if (loaded.Any(item => !item.Directory && !item.Supported))
-                foreach (var item in loaded.Where(item => !item.Directory && !item.Supported))
+            token.ThrowIfCancellationRequested();
+            try { result.Directories = result.Directories.OrderBy(item => item.Path, new PartialSwitchPathComparer(token)).ToList(); }
+            catch (InvalidOperationException) { token.ThrowIfCancellationRequested(); throw; }
+            result.CanSwitch = supportedLoadedTree;
+            foreach (var row in result.Directories)
+            { token.ThrowIfCancellationRequested(); result.CanSwitch &= row.Change == "Unchanged"; }
+            foreach (var item in loaded.Items)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!item.Directory && !item.Supported)
                     result.Directories.Add(new PlasticPartialBranchSwitchDirectory { Path = item.Path, TargetPath = "", ItemId = item.Id, Change = "Unsupported", Reason = "The loaded tree contains an unsupported or linked item." });
+            }
+            token.ThrowIfCancellationRequested();
             return result;
         }
 
-        private static IList<PartialSwitchItem> ParsePartialSwitchTree(string xml, PlasticWorkspace workspace, bool local)
+        private static PartialSwitchTree ParsePartialSwitchTree(string xml, PlasticWorkspace workspace, bool local, CancellationToken token)
         {
-            var document = SafeXml.Load(xml);
-            if (document.Root == null || document.Root.Name != "LsResults" || document.Root.Elements().Count() != 1 || document.Root.Element("LsItems") == null ||
-                document.Root.Element("LsItems").Elements().Any(item => item.Name != "LsItem")) throw new InvalidDataException("Unexpected Partial directory listing.");
-            var result = new List<PartialSwitchItem>();
-            var ids = new HashSet<long>(); var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var element in document.Root.Element("LsItems").Elements("LsItem"))
+            using (var input = new StringReader(xml)) return ParsePartialSwitchTreeFromReader(input, workspace, local, token);
+        }
+
+        private static PartialSwitchTree ParsePartialSwitchTreeFromReader(TextReader input, PlasticWorkspace workspace, bool local, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            XDocument document;
+            // Keep the shared SafeXml security settings, but bound each text read
+            // so cancellation can interrupt XML construction before item matching.
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+            using (var text = new PartialSwitchTextReader(input, token))
+            using (var reader = XmlReader.Create(text, settings)) document = XDocument.Load(reader);
+            token.ThrowIfCancellationRequested();
+            if (document.Root == null || document.Root.Name != "LsResults" || document.Root.Elements().Take(2).Count() != 1 || document.Root.Element("LsItems") == null)
+                throw new InvalidDataException("Unexpected Partial directory listing.");
+            var result = new PartialSwitchTree();
+            foreach (var element in document.Root.Element("LsItems").Elements())
             {
+                token.ThrowIfCancellationRequested();
+                if (element.Name != "LsItem") throw new InvalidDataException("Unexpected Partial directory listing.");
                 string raw = RepositoryListingField(element, "CurrentPath");
                 if (local && (!Path.IsPathRooted(raw) || Path.GetFullPath(raw).TrimEnd('\\') != raw.TrimEnd('\\')))
                     throw new InvalidDataException("Loaded directory listing has a noncanonical path.");
                 string path = local ? StructureRepositoryPath(workspace.RootPath, raw) : raw;
                 ValidateRepositoryDirectoryPath(path);
                 long id = RepositoryListingNumber(element, "ItemId");
-                if (id <= 0 || !ids.Add(id) || !paths.Add(path)) throw new InvalidDataException("Duplicate or invalid Partial item identity or path.");
+                if (id <= 0 || result.ById.ContainsKey(id) || result.ByPath.ContainsKey(path)) throw new InvalidDataException("Duplicate or invalid Partial item identity or path.");
                 string type = RepositoryListingField(element, "Type"), repository = RepositoryListingField(element, "Repository");
                 bool directory = new[] { "dir", "directory", "目录" }.Contains(type, StringComparer.OrdinalIgnoreCase);
                 bool file = new[] { "txt", "bin", "text", "binary", "file", "Text file", "Binary file", "文本文件", "二进制文件" }.Contains(type, StringComparer.OrdinalIgnoreCase);
                 bool supported = (directory || file) && String.IsNullOrEmpty(RepositoryListingField(element, "SymlinkTarget")) && (repository == "rep:" + workspace.Repository || repository == workspace.Repository);
                 if (local) RejectReparsePath(raw);
-                result.Add(new PartialSwitchItem { Id = id, Path = path, Directory = directory, Supported = supported });
+                var item = new PartialSwitchItem { Id = id, Path = path, Directory = directory, Supported = supported };
+                result.Items.Add(item); result.ById.Add(id, item); result.ByPath.Add(path, item); result.ByExactPath.Add(path, item);
             }
-            if (!result.Any(item => item.Path == "/" && item.Directory && item.Supported)) throw new InvalidDataException("The Partial directory listing has no regular repository root.");
-            foreach (var item in result.Where(item => item.Path != "/"))
+            PartialSwitchItem root;
+            if (!result.ByExactPath.TryGetValue("/", out root) || !root.Directory || !root.Supported) throw new InvalidDataException("The Partial directory listing has no regular repository root.");
+            foreach (var item in result.Items)
             {
+                token.ThrowIfCancellationRequested();
+                if (item.Path == "/") continue;
                 string parent = item.Path.Substring(0, item.Path.LastIndexOf('/')); if (parent.Length == 0) parent = "/";
-                if (!result.Any(candidate => candidate.Path == parent && candidate.Directory)) throw new InvalidDataException("The Partial directory listing has an incomplete hierarchy.");
+                PartialSwitchItem parentItem;
+                if (!result.ByExactPath.TryGetValue(parent, out parentItem) || !parentItem.Directory) throw new InvalidDataException("The Partial directory listing has an incomplete hierarchy.");
+                item.Parent = parentItem;
             }
+            token.ThrowIfCancellationRequested();
             return result;
         }
     }

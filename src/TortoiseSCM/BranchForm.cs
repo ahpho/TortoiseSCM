@@ -42,6 +42,7 @@ namespace TortoiseSCM
         private IList<PlasticBranch> entries = new List<PlasticBranch>();
         private bool busy;
         private bool writing;
+        private bool preparingSwitch;
         private bool partial;
         private readonly Func<string, bool> confirmSwitch;
         private readonly Func<string, string, CancellationToken, Task<PlasticCommandResult>> performSwitch;
@@ -135,7 +136,10 @@ namespace TortoiseSCM
             right.Controls.Add(head); right.Controls.Add(merge); right.Controls.Add(switchBranch); right.Controls.Add(close); footer.Controls.Add(right, 1, 0);
             layout.Controls.Add(footer, 0, 4); Controls.Add(layout);
             refresh.Click += async delegate { await LoadAsync(); };
-            cancel.Click += delegate { if (request != null && !writing) request.Cancel(); };
+            cancel.Click += delegate {
+                if (preparingSwitch) CancelSwitchPreparation();
+                else if (request != null && !writing) request.Cancel();
+            };
             head.Click += async delegate { await ShowHeadAsync(); };
             merge.Click += async delegate { await OpenMergeAsync(); };
             switchBranch.Click += async delegate { await SwitchAsync(); };
@@ -144,6 +148,7 @@ namespace TortoiseSCM
             Shown += async delegate { await LoadAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) {
                 if (writing) { e.Cancel = true; return; }
+                if (preparingSwitch) { e.Cancel = true; CancelSwitchPreparation(); return; }
                 lifetime.Cancel(); if (request != null) request.Cancel();
             };
             UpdateButtons();
@@ -158,7 +163,8 @@ namespace TortoiseSCM
             var selected = SelectedBranch();
             refresh.Enabled = filter.Enabled = branches.Enabled = branchTree.Enabled = viewMode.Enabled = !busy;
             locateCurrent.Enabled = !busy && entries.Any(branch => branch.IsCurrent);
-            cancel.Enabled = busy && !writing; close.Enabled = !writing;
+            cancel.Text = preparingSwitch ? "取消预览" : "取消加载";
+            cancel.Enabled = busy && !writing && (request == null || !request.IsCancellationRequested); close.Enabled = !writing;
             head.Enabled = !busy && selected != null;
             branchHistory.Enabled = createChild.Enabled = !busy && selected != null;
             merge.Enabled = !busy && !partial && selected != null && !selected.IsCurrent;
@@ -385,16 +391,28 @@ namespace TortoiseSCM
             return new BranchCreateForm(client, root, expectedRepository, expectedSelector, selected.Name, changeset);
         }
 
+        private void CancelSwitchPreparation()
+        {
+            if (!preparingSwitch || writing || request == null) return;
+            status.Text = "正在取消切换预览，请等待检查结束；工作区未更改。";
+            request.Cancel();
+            UpdateButtons();
+        }
+
         private async Task SwitchAsync()
         {
-            if (!switchBranch.Enabled) return;
+            if (!switchBranch.Enabled || lifetime.IsCancellationRequested) return;
             string target = SelectedBranch().Name;
             bool attempted = false; string failure = null;
-            busy = writing = true; UpdateButtons();
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+            request = cancellation;
+            busy = preparingSwitch = true; writing = false; UpdateButtons();
+            status.Text = "正在只读检查工作区模式，可取消预览…";
             try {
                 ValidateContext();
                 string selector = client.DiscoverWorkspace(root).Selector;
-                var expected = await getWorkspace(root, CancellationToken.None);
+                var expected = await getWorkspace(root, cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
                 ValidateContext();
                 if (client.DiscoverWorkspace(root).Selector != selector || expected.Selector != selector)
                     throw new InvalidOperationException("工作区分支已改变，请刷新分支列表后重试。");
@@ -402,7 +420,8 @@ namespace TortoiseSCM
                 PlasticPartialBranchSwitchPreview preview = null;
                 if (wasPartial) {
                     status.Text = "正在只读检查 Partial 目录结构，请等待预览…";
-                    preview = await previewPartialSwitch(root, target, CancellationToken.None);
+                    preview = await previewPartialSwitch(root, target, cancellation.Token);
+                    cancellation.Token.ThrowIfCancellationRequested();
                     ValidateContext();
                     if (client.DiscoverWorkspace(root).Selector != selector)
                         throw new InvalidOperationException("工作区分支已改变，请刷新后重新预览。");
@@ -412,6 +431,7 @@ namespace TortoiseSCM
                     bool allowed = preview.CanSwitch && preview.Directories != null &&
                         preview.Directories.All(row => row != null && row.Change == "Unchanged");
                     bool accepted = showPartialPreview(preview);
+                    cancellation.Token.ThrowIfCancellationRequested();
                     if (!allowed || !accepted) {
                         status.Text = allowed ? "已取消切换；工作区未更改。" : "目录结构检查阻止切换；请核对加载配置后刷新预览。";
                         return;
@@ -422,7 +442,10 @@ namespace TortoiseSCM
                 else if (!confirmSwitch("将工作区切换到分支：\r\n" + target + "\r\n\r\n" + root +
                     "\r\n\r\n此操作会更新整个 Standard 工作区。不会自动暂存或撤销更改。" +
                     "\r\n请先处理待定更改、私有/忽略文件及合并会话。\r\n结果不确定时将刷新核对，不会自动反向切换。继续？")) return;
-                if (lifetime.IsCancellationRequested) return;
+                cancellation.Token.ThrowIfCancellationRequested();
+                // From this point onward the confirmed switch and its verification
+                // finish without cancellation; close must not interrupt a write.
+                preparingSwitch = false; writing = true; UpdateButtons();
                 attempted = true;
                 ValidateContext(); var current = client.DiscoverWorkspace(root);
                 if (current.Selector != selector)
@@ -442,8 +465,16 @@ namespace TortoiseSCM
                     throw new InvalidOperationException("工作区模式已改变，请核对刷新后的工作区。");
                 OverlayCacheHost.TrackAndStart(root);
             }
+            catch (OperationCanceledException) {
+                if (preparingSwitch && cancellation.IsCancellationRequested)
+                    status.Text = "已取消切换预览；工作区未更改，可重新预览。";
+                else failure = "切换操作被中断，请核对工作区状态。";
+            }
             catch (Exception ex) { failure = ex.Message; }
-            finally { busy = writing = false; UpdateButtons(); }
+            finally {
+                request = null; cancellation.Dispose();
+                busy = writing = preparingSwitch = false; UpdateButtons();
+            }
             if (attempted || failure != null) {
                 // Even a failed/uncertain write can have changed the selector. Discard
                 // cached targets and reload the actual current branch before retry.
