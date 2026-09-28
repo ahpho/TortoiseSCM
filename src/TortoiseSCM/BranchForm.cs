@@ -31,9 +31,11 @@ namespace TortoiseSCM
         private readonly Button head = DialogStyle.Button("头提交详情");
         private readonly Button merge = DialogStyle.Button("合并到当前…");
         private readonly Button switchBranch = DialogStyle.Button("切换工作区…");
+        private readonly Button rename = DialogStyle.Button("重命名…");
         private readonly Button close = DialogStyle.Button("关闭");
         private readonly ToolStripMenuItem createChild = new ToolStripMenuItem("创建子分支…");
         private readonly ToolStripMenuItem branchHistory = new ToolStripMenuItem("显示本分支历史…");
+        private readonly ToolStripMenuItem renameBranch = new ToolStripMenuItem("重命名分支…");
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private CancellationTokenSource request;
         private IList<PlasticBranch> entries = new List<PlasticBranch>();
@@ -77,9 +79,10 @@ namespace TortoiseSCM
             branches.AccessibleName = "仓库分支列表";
             branches.SelectedIndexChanged += delegate { files.Items.Clear(); description.Clear(); UpdateButtons(); };
             branches.DoubleClick += async delegate { await ShowHeadAsync(); };
-            var menu = new ContextMenuStrip(); menu.Items.Add(branchHistory); menu.Items.Add(createChild);
+            var menu = new ContextMenuStrip(); menu.Items.Add(branchHistory); menu.Items.Add(createChild); menu.Items.Add(renameBranch);
             branchHistory.Click += delegate { OpenBranchHistory(); };
             createChild.Click += async delegate { await OpenCreateAsync(); };
+            renameBranch.Click += async delegate { await OpenRenameAsync(); };
             menu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { UpdateButtons(); e.Cancel = busy || SelectedBranch() == null; };
             branches.ContextMenuStrip = menu;
             branchTree.Dock = DockStyle.Fill; branchTree.HideSelection = false; branchTree.FullRowSelect = true; branchTree.ShowNodeToolTips = true;
@@ -106,7 +109,7 @@ namespace TortoiseSCM
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             var left = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
-            left.Controls.Add(refresh); left.Controls.Add(cancel); footer.Controls.Add(left, 0, 0);
+            left.Controls.Add(refresh); left.Controls.Add(cancel); left.Controls.Add(rename); footer.Controls.Add(left, 0, 0);
             var right = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
             head.Width = 110; merge.Width = switchBranch.Width = 120;
             right.Controls.Add(head); right.Controls.Add(merge); right.Controls.Add(switchBranch); right.Controls.Add(close); footer.Controls.Add(right, 1, 0);
@@ -116,6 +119,7 @@ namespace TortoiseSCM
             head.Click += async delegate { await ShowHeadAsync(); };
             merge.Click += async delegate { await OpenMergeAsync(); };
             switchBranch.Click += async delegate { await SwitchAsync(); };
+            rename.Click += async delegate { await OpenRenameAsync(); };
             close.Click += delegate { Close(); }; CancelButton = close;
             Shown += async delegate { await LoadAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) {
@@ -138,6 +142,10 @@ namespace TortoiseSCM
             head.Enabled = !busy && selected != null;
             branchHistory.Enabled = createChild.Enabled = !busy && selected != null;
             merge.Enabled = switchBranch.Enabled = !busy && !partial && selected != null && !selected.IsCurrent;
+            rename.Enabled = renameBranch.Enabled = !busy && BranchRenameForm.CanRename(selected) &&
+                !entries.Any(branch => String.Equals(branch.Parent, selected.Name, StringComparison.OrdinalIgnoreCase));
+            renameBranch.ToolTipText = rename.Enabled ? "重命名服务器分支，不切换当前工作区。" :
+                "仅支持身份完整、名称位于父分支下的非当前叶分支；根分支、有子分支或特殊名称层级不可重命名。";
         }
 
         private void ValidateContext()
@@ -170,7 +178,7 @@ namespace TortoiseSCM
                 if (result.Any(branch => branch.Repository != repository)) throw new InvalidOperationException("分支仓库不匹配。");
                 partial = workspace.IsPartial; entries = result;
                 loaded = true;
-                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：可浏览及创建分支，不能切换或合并）" : "（Standard）");
+                context.Text = "仓库：" + repository + "\r\n工作区：" + root + (partial ? "（Partial：可浏览、创建及重命名分支，不能切换或合并）" : "（Standard）");
             }, false);
             if (!lifetime.IsCancellationRequested && loaded) RenderBranches();
         }
@@ -367,6 +375,34 @@ namespace TortoiseSCM
                 success = true;
             }, true);
             if (success) { OverlayCacheHost.TrackAndStart(root); await LoadAsync(); }
+        }
+
+        private BranchRenameForm CreateRenameDialog()
+        {
+            ValidateContext(); UpdateButtons();
+            if (!rename.Enabled) throw new InvalidOperationException("请选择身份完整、名称位于父分支下的非当前叶分支。");
+            var workspace = client.DiscoverWorkspace(root);
+            return new BranchRenameForm(client, root, workspace.Selector, SelectedBranch());
+        }
+
+        private async Task OpenRenameAsync()
+        {
+            if (!rename.Enabled) return;
+            bool attempted = false; string renamed = null;
+            try {
+                using (var dialog = CreateRenameDialog()) {
+                    dialog.ShowDialog(this); attempted = dialog.Attempted; renamed = dialog.RenamedBranch;
+                }
+            }
+            catch (Exception ex) {
+                entries = new List<PlasticBranch>(); RenderBranches();
+                status.Text = "无法重命名：" + ex.Message; return;
+            }
+            if (!attempted) return;
+            // All cached action targets are discarded even when the server result is uncertain.
+            filter.Clear(); await LoadAsync();
+            if (renamed != null) SelectBranch(renamed);
+            else status.Text = "重命名结果未确认；已尝试刷新列表，请核对原名称和新名称。不会自动反向重命名。 " + status.Text;
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)

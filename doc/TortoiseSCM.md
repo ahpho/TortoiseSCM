@@ -275,7 +275,11 @@ GUI 从“比较整个仓库”的固定快照差异列表打开新增/删除项
 该层级描述分支的父子组织关系，不表示提交之间的继承或合并边；创建时指定其他历史起点不会改变这一区别。
 选择其他分支后，“合并到当前…”解析其最新变更集并打开现有合并窗口，固定来源版本。打开窗口只读取状态，仍须预检、确认开始合并、解决冲突及单独提交。
 
-“切换工作区…”在确认后切换整个 Standard 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Partial 可浏览分支及历史，本阶段不提供分支切换或跨分支合并，以保留加载规则。提交/合并关系图、删除/重命名分支尚未提供。
+“切换工作区…”在确认后切换整个 Standard 工作区，包括从文件或子目录入口打开分支窗口的情况。要求工作区无待定更改、私有或忽略项，且没有未完成的合并/冲突会话；不会强制丢弃内容。Partial 可浏览分支及历史，本阶段不提供分支切换或跨分支合并，以保留加载规则。分支删除仍待实现。
+
+选择非当前叶子分支后，可使用“重命名…”按钮或右键菜单填写新的短名称，并确认仓库、原/新完整名称、父分支和头提交。Standard/Partial 均支持；不切换、更新或签入工作区，保留本地待定内容。根分支、当前 selector 引用的分支、有子分支、身份缺失和名称与父关系不一致的分支不可重命名。过滤列表不会隐藏子分支保护。重命名会影响其他用户按名称保存的引用。
+
+执行前核对原生分支 ID、GUID、父关系及头提交，执行后验证同一身份出现在新名称且旧名消失。原生命令按名称执行，预检与服务器写入不能组成原子事务；其他客户端并发修改仍可能导致结果不确定。失败或取消后应刷新核对，不自动重试或反向重命名。命令契约见 [Unity branch CLI](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/branch)。
 
 从选中分支的右键菜单创建子分支：默认起点为打开对话框时解析的固定头提交，可指定历史变更集；填写子分支短名称和非空说明后创建。创建只修改服务器分支信息，不签入、不切换工作区、不加载文件，Standard 和 Partial 均可使用。创建成功后可单独执行“切换工作区…”。若网络故障、取消或验证失败，服务器分支可能已经创建，应先刷新列表核对，不自动删除或重试。
 
@@ -288,11 +292,15 @@ $head = & $exe --cli --command branch-head --path 'D:\workspace' --branch '/main
 & $exe --cli --command switch-branch --path 'D:\workspace' --branch '/main/task' --yes --json | ConvertFrom-Json
 # 创建子分支，固定历史起点；不自动切换，说明也可从 --commentsfile 读取
 & $exe --cli --command create-branch --path 'D:\workspace' --branch '/main/new-task' --changeset 123 --comment '新任务' --yes --json | ConvertFrom-Json
+# 先查看并确认分支身份和头提交，再重命名；--new-name 只接受短名称
+$rows = (& $exe --cli --command branches --path 'D:\workspace' --json | ConvertFrom-Json).data.branches
+$branch = $rows | Where-Object name -eq '/main/new-task'
+& $exe --cli --command rename-branch --path 'D:\workspace' --branch $branch.name --branch-id $branch.branchId --branch-guid $branch.guid --changeset $branch.headChangeset --new-name 'renamed-task' --yes --json | ConvertFrom-Json
 # 可与文件/目录 --path 叠加；按 nextBeforeChangeset 继续分页直到 hasMore=false
 & $exe --cli --command history-page --path 'D:\workspace' --branch '/main/new-task' --limit 50 --json | ConvertFrom-Json
 ```
 
-分支列表的 `data.branches` 提供 `name/parent/owner/creationDate/comment/repository/headChangeset/isCurrent`。
+分支列表的 `data.branches` 提供 `name/branchId/guid/parent/owner/creationDate/comment/repository/headChangeset/isCurrent`。旧版输出缺少身份时仍可浏览，但不能重命名。
 `branch-tree` 只读，支持 Standard 和 Partial；`data.nodes` 是父节点在前的扁平序列，在分支字段之外包含 `depth/isMatch/parentMissing/childCount`，`data.filter` 为过滤条件。`childCount` 为未过滤数据中的直接子分支数；保留祖先的 `isMatch=false`，缺失父分支的根节点 `parentMissing=true`。`--filter` 按名称、作者、日期、说明或头提交匹配；不接受写操作确认 `--yes`。
 分支历史沿用有界扫描和游标，每次最多扫描 `--limit` 个仓库提交，再按分支与路径取交集。空页不代表结束：只要 `hasMore=true`，就可使用 `nextBeforeChangeset` 继续读取；`data.branch` 标明当前过滤条件。分支名精确匹配，不解释为查询表达式。
 `--branch` 使用完整分支名，不含 `br:` 前缀或仓库后缀；切换使用 [原生 cm switch](https://docs.unity.com/en-us/unity-version-control/uvcs-cli/switch)，不创建提交。切换失败或超时后应先刷新核对状态，不自动回滚或撤销可能已完成的部分操作。
@@ -547,7 +555,7 @@ GUI 选择下方的普通文件或二进制文件后，点击“比较”、双�
 
 这是可继续演进的开发版本，不是 TortoiseGit 全功能等价移植。
 更完整的逐项差距与推进顺序见 [TortoiseGit 功能对照](TortoiseSCM-parity.md)。
-尚未提供：分支删除/重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建。
+尚未提供：分支删除、当前/根/有子分支的重命名、Partial 分支切换、上述范围之外的 Partial 目录冲突处理、拖放移动、仓库创建。
 
 范围外：签名 MSI、自动更新、语言包、ARM64 与 32 位 Explorer，以及多 DPI、跨重启提交失败草稿恢复；这些不作为完成条件。现有 x64 安装与卸载继续维护。当前拒绝符号链接、junction 和跨嵌套工作区的递归写操作。
 高级操作通过官方客户端完成。

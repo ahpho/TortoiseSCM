@@ -91,6 +91,7 @@ namespace TortoiseSCM
                 BeyondCompareSettingsUiTests.Run(artifacts);
                 HistoricalBeyondCompareUiTests.Run(artifacts);
                 CheckinUiTests.Run(artifacts);
+                BranchRenameUiTests.Run(artifacts);
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);

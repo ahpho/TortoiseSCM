@@ -395,3 +395,12 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 隔离 Plastic 实测 `WorkingBeyondCompareIntegrationTests` 78 项通过（Standard 与 Partial），覆盖修改、添加、二进制添加、受控删除、本地删除、重命名后修改、中文路径、重复历史基线和删除路径重新出现；原 `TestSCM` selector、文件及待定状态保持不变。证据目录：`qa/integration-20260928-160035-89e17358/`，结果为 `bc-working-results.json`。
 - 主窗口路由测试在 Standard 与 Partial 各 80 项通过，使用延迟工具宿主验证忙碌/关闭拦截、临时输入生命周期、空侧只读属性和普通/最小尺寸截图；这是工具宿主测试，不声称真实 Beyond Compare 窗口内保存/放弃验收。产物位于同一隔离目录下的 `ui-producer/` 和 `ui-partial/`。
 - 全量 `build-tortoisescm.ps1 -Test` 通过，包含新增 184 项后端套件和原有 CLI/Core/Shell/WinForms 回归；x64 包构建与安装/卸载检查 45 项通过，包为 `bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-bc-working-20260928-windows-x64.zip`。实际 BC 保存/放弃、已有实例并行行为仍是后续验收项。
+
+# 非当前叶子分支重命名（2026-09-28）
+
+- 新增分支列表/层级树的“重命名…”按钮和右键入口，以及 `rename-branch` CLI。对话框固定分支原生 ID、GUID、父分支和头提交，显示新完整名称并明确确认。CLI 要求提供已审阅的 ID、GUID、头提交与 `--yes`。仅支持名称与父关系一致的非当前叶子分支；根分支、当前 selector/checkout 引用、有子分支、名称冲突和身份不完整时拒绝操作。
+- `BranchRenameTests` 141 项、既有 `BranchTests` 83 项及 `BranchHierarchyTests` 57 项通过。覆盖执行前身份/头提交/selector/工作区变化、调用方修改快照、两类本地操作锁、Partial/本地待定内容、取消和执行后不确定结果；无自动反向重命名或自动重试。
+- `BranchRenameUiTests` 62 项通过，普通/最小尺寸目视检查无控件重叠或裁切，截图为 `qa/branch-rename-ui/branch-rename*.png`。覆盖输入、拒绝确认、写入期间禁止关闭、身份快照、失败后禁止旧窗口重试、过滤后的子分支保护、Partial 列表/层级树入口。
+- 真实服务器 CLI 集成 39 项通过：`qa/integration-20260928-162349-60a9dc2b/branch-rename-results.json`。在隔离分支创建实际提交后分别经 Standard 与 Partial 重命名，同一 ID/GUID、父关系和头提交保持不变；旧名消失。当前/根/带子分支及旧身份等拒绝测试通过，两个工作区已有的私有文件、状态及 selector 未改变，原 TestSCM 文件与 selector 亦保持不变。
+- 原生 `cm branch rename` 的第二参数为短名称；本机探测不支持 `brid:`/`br:brid:` 作为首参数。实现使用仓库限定名称，在执行前后核对身份，但不承诺原子条件写入或更新其他用户保存的名称引用。分支删除、当前/父分支重命名和 Partial 分支切换仍待后续实现。
+- 全量 `build-tortoisescm.ps1 -Test` 通过（`qa/branch-rename-regression.log`），包含 2,187 项 CLI、Core、Shell/现代菜单和完整 WinForms 回归，新增重命名 UI 62 项亦在全量运行中通过。安装/升级回滚/卸载检查 45 项通过（`qa/branch-rename-package-tests.log`），实际 Explorer 注册保持不变。版本包路径：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-branch-rename-20260928-windows-x64.zip`。

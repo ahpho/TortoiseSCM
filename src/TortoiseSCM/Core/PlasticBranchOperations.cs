@@ -13,6 +13,8 @@ namespace TortoiseSCM
 {
     public sealed class PlasticBranch
     {
+        public long BranchId { get; set; }
+        public string Guid { get; set; }
         public string Name { get; set; }
         public string Parent { get; set; }
         public string Owner { get; set; }
@@ -224,6 +226,8 @@ namespace TortoiseSCM
                 throw new InvalidDataException("Unexpected Plastic branch XML.");
             var result = new List<PlasticBranch>();
             var names = new HashSet<string>(StringComparer.Ordinal);
+            var ids = new HashSet<long>();
+            var guids = new HashSet<Guid>();
             foreach (var item in document.Root.Elements("BRANCH"))
             {
                 string name = (string)item.Element("NAME"), parent = (string)item.Element("PARENT") ?? "";
@@ -233,7 +237,15 @@ namespace TortoiseSCM
                 if (!names.Add(name) || !Int64.TryParse((string)item.Element("CHANGESET"), NumberStyles.None, CultureInfo.InvariantCulture, out head) ||
                     (string)item.Element("REPNAME") + "@" + (string)item.Element("REPSERVER") != repository)
                     throw new InvalidDataException("Duplicate branch, invalid head or unexpected repository in branch listing.");
-                result.Add(new PlasticBranch { Name = name, Parent = parent, Owner = (string)item.Element("OWNER") ?? "",
+                // Older fixtures and servers may omit identity. Browsing remains available,
+                // but identity-sensitive mutations require both values.
+                long id = 0; Guid guid;
+                string guidText = (string)item.Element("GUID") ?? "";
+                if (item.Elements("ID").Count() > 1 || item.Elements("GUID").Count() > 1 ||
+                    (item.Element("ID") != null && (!Int64.TryParse((string)item.Element("ID"), NumberStyles.None, CultureInfo.InvariantCulture, out id) || id <= 0 || !ids.Add(id))) ||
+                    (item.Element("GUID") != null && (!System.Guid.TryParse(guidText, out guid) || guid == System.Guid.Empty || !guids.Add(guid))))
+                    throw new InvalidDataException("Invalid or duplicate branch identity returned by the server.");
+                result.Add(new PlasticBranch { BranchId = id, Guid = guidText, Name = name, Parent = parent, Owner = (string)item.Element("OWNER") ?? "",
                     CreationDate = (string)item.Element("DATE") ?? "", Comment = (string)item.Element("COMMENT") ?? "", Repository = repository, HeadChangeset = head });
             }
             return result.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToList();

@@ -61,6 +61,24 @@ internal static class CliTests
             Run(2, "--command", "switch", "--path", temporary, "--changeset", "1");
             Run(2, "--command", "status", "--path", temporary, "--changeset", "1");
             Run(2, "--command", "settings", "--diff-tool", fakeCm);
+            string[] renameArguments = { "--command", "rename-branch", "--path", temporary, "--branch", "/main/topic", "--branch-id", "42",
+                "--branch-guid", "ef695a60-c21f-4b8d-a25e-a3a4e5d02393", "--changeset", "1", "--new-name", "renamed", "--yes" };
+            foreach (string required in new[] { "--branch", "--branch-id", "--branch-guid", "--changeset", "--new-name", "--yes" })
+            {
+                var missing = renameArguments.ToList(); int index = missing.IndexOf(required);
+                missing.RemoveAt(index); if (required != "--yes") missing.RemoveAt(index);
+                Run(2, missing.ToArray());
+            }
+            foreach (string[] invalid in new[] { new[] { "--branch-id", "0" }, new[] { "--branch-id", "-1" }, new[] { "--branch-id", "9223372036854775808" },
+                new[] { "--branch-guid", "bad" }, new[] { "--branch-guid", Guid.Empty.ToString() }, new[] { "--new-name", "" } })
+            {
+                var invalidRename = (string[])renameArguments.Clone(); invalidRename[Array.IndexOf(invalidRename, invalid[0]) + 1] = invalid[1];
+                Run(2, invalidRename);
+                Run(2, "--command", "status", "--path", temporary, invalid[0], invalid[1]);
+            }
+            Run(2, renameArguments.Concat(new[] { "--new-name", "duplicate" }).ToArray());
+            Run(2, renameArguments.Concat(new[] { "--comment", "unsupported" }).ToArray());
+            Run(2, renameArguments.Concat(new[] { "--path", Path.Combine(temporary, "file.txt") }).ToArray());
             Run(2, "--command", "status", "--path", temporary, "--external");
             Run(2, "--command", "diff", "--path", temporary, "--path", Path.Combine(temporary, "file.txt"), "--external");
             Run(2, "--command", "merge", "--yes");
