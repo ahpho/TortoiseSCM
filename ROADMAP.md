@@ -1,6 +1,6 @@
 # TortoiseSCM Roadmap
 
-更新时间：2026-09-28  
+更新时间：2026-09-28
 产品目标：在 Windows Explorer 中提供面向 Plastic SCM / Unity Version Control 的 TortoiseGit/TortoiseSVN 风格工作流。
 
 本文记录当前产品边界和后续开发顺序。它描述的是 `src/TortoiseSCM.sln` 中实际构建的 Plastic 客户端，不代表保留的上游 Git 源码已经移植。
