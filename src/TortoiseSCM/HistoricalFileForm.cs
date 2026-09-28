@@ -18,9 +18,11 @@ namespace TortoiseSCM
         private string expectedRepository;
         private string expectedRoot;
         private bool fixedPair;
+        private PlasticChangesetComparison comparisonSnapshot;
+        private PlasticChangesetFile comparisonFile;
         private bool sourceExists = true;
         private bool targetExists = true;
-        private readonly Button compare = DialogStyle.Button("比较");
+        private readonly Button compare = DialogStyle.Button("Beyond Compare");
         private readonly Button external = DialogStyle.Button("比较工具…");
         private readonly Button export = DialogStyle.Button("导出目标版本…");
         private readonly Button exportSource = DialogStyle.Button("导出起点版本…");
@@ -32,6 +34,8 @@ namespace TortoiseSCM
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private bool busy;
         private bool revisionsEdited;
+        private Func<string, string, string, long, long, CancellationToken, Task<PlasticCommandResult>> openRevisionTool;
+        private Func<string, PlasticChangesetComparison, PlasticChangesetFile, CancellationToken, Task<PlasticCommandResult>> openChangesetTool;
 
         public HistoricalFileForm(PlasticClient client, string workspacePath, string repositoryPath, long changeset)
             : this(client, workspacePath, repositoryPath, changeset, null) { }
@@ -39,6 +43,8 @@ namespace TortoiseSCM
         public HistoricalFileForm(PlasticClient client, string workspacePath, string repositoryPath, long changeset, long? fromChangeset)
         {
             this.client = client; this.workspacePath = workspacePath; this.repositoryPath = repositoryPath;
+            openRevisionTool = client.OpenRevisionDiffToolAsync;
+            openChangesetTool = client.OpenChangesetFileDiffToolAsync;
             this.fromRepositoryPath = repositoryPath;
             var workspace = client.DiscoverWorkspace(workspacePath);
             if (workspace == null) throw new InvalidOperationException("找不到 Plastic 工作区。");
@@ -70,19 +76,22 @@ namespace TortoiseSCM
             preview.Multiline = true; preview.ReadOnly = true; preview.WordWrap = false;
             preview.ScrollBars = ScrollBars.Both; preview.Dock = DockStyle.Fill;
             preview.Font = new Font("Consolas", 10F);
-            preview.Text = "选择两个变更集以比较同一路径的历史内容，并可分别导出起点和目标版本。\r\n跨重命名比较请从历史窗口的“比较整个仓库”列表打开移动项。";
+            preview.Text = "选择两个变更集，使用 Beyond Compare 比较同一路径的历史内容，并可分别导出起点和目标版本。\r\n跨重命名比较请从历史窗口的“比较整个仓库”列表打开移动项。";
             layout.Controls.Add(preview, 0, 2);
-            status.Dock = DockStyle.Fill; status.AutoEllipsis = true;
+            status.Dock = DockStyle.Fill; status.AutoEllipsis = true; status.UseMnemonic = false;
             layout.Controls.Add(status, 0, 3);
             buttons.Dock = DockStyle.Fill; buttons.FlowDirection = FlowDirection.RightToLeft; buttons.WrapContents = false;
             var close = DialogStyle.Button("关闭"); close.Click += delegate { Close(); }; CancelButton = close;
             export.Width = exportSource.Width = 115;
             export.Click += async delegate { await ExportAsync(false); };
             exportSource.Click += async delegate { await ExportAsync(true); };
-            external.Width = 115;
+            external.Width = 115; external.Visible = false;
+            compare.Width = 135;
             external.Click += async delegate { await CompareAsync(true); };
-            compare.Click += async delegate { await CompareAsync(false); };
-            buttons.Controls.Add(close); buttons.Controls.Add(export); buttons.Controls.Add(exportSource); buttons.Controls.Add(external); buttons.Controls.Add(compare);
+            // Product comparison is always Beyond Compare. CompareAsync(false) remains an
+            // internal structured-preview path for regression/diagnostic callers only.
+            compare.Click += async delegate { await CompareAsync(true); };
+            buttons.Controls.Add(close); buttons.Controls.Add(export); buttons.Controls.Add(exportSource); buttons.Controls.Add(compare);
             layout.Controls.Add(buttons, 0, 4); Controls.Add(layout);
             Shown += async delegate { if (!revisionsEdited) await SuggestEarlierRevisionAsync(changeset); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (busy) e.Cancel = true; else lifetime.Cancel(); };
@@ -93,10 +102,14 @@ namespace TortoiseSCM
         {
             fromRepositoryPath = String.IsNullOrEmpty(file.OldPath) ? file.Path : file.OldPath;
             expectedRepository = comparison.Repository; expectedRoot = comparison.RootPath;
+            comparisonSnapshot = new PlasticChangesetComparison { Repository = comparison.Repository, RootPath = comparison.RootPath,
+                FromChangeset = comparison.FromChangeset, ToChangeset = comparison.ToChangeset };
+            comparisonFile = new PlasticChangesetFile { Status = file.Status, Path = file.Path, OldPath = file.OldPath, ItemType = file.ItemType };
             fixedPair = true; sourceExists = file.Status != "A"; targetExists = file.Status != "D";
             preview.Text = sourceExists && targetExists ?
-                "起点：" + fromRepositoryPath + " @ cs:" + comparison.FromChangeset + "\r\n目标：" + repositoryPath + " @ cs:" + comparison.ToChangeset + "\r\n选择比较或分别导出两个版本。" :
-                sourceExists ? "此文件在目标版本中已删除。可导出起点版本的内容。" : "此文件为新增项。可导出目标版本的内容。";
+                "起点：" + fromRepositoryPath + " @ cs:" + comparison.FromChangeset + "\r\n目标：" + repositoryPath + " @ cs:" + comparison.ToChangeset + "\r\n使用 Beyond Compare 比较，或分别导出两个版本。" :
+                sourceExists ? "此文件在目标版本中已删除。Beyond Compare 将显示起点内容与空目标；可导出起点版本。" :
+                "此文件为新增项。Beyond Compare 将显示空起点与目标内容；可导出目标版本。";
             SetBusy(false);
         }
 
@@ -118,15 +131,17 @@ namespace TortoiseSCM
 
         private async Task CompareAsync(bool external)
         {
-            if (busy || !sourceExists || !targetExists) return;
-            SetBusy(true); status.Text = "正在读取历史内容…";
+            if (busy || (!external && (!sourceExists || !targetExists))) return;
+            SetBusy(true); status.Text = external ? "正在读取历史内容并等待 Beyond Compare 窗口关闭…" : "正在读取历史内容…";
             try
             {
                 ValidateContext();
                 if (external)
                 {
-                    var result = await client.OpenRevisionDiffToolAsync(workspacePath, fromRepositoryPath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
-                    status.Text = result.Succeeded ? "差异工具操作完成。" : "比较失败：" + result.Error;
+                    var result = fixedPair ?
+                        await openChangesetTool(workspacePath, comparisonSnapshot, comparisonFile, lifetime.Token) :
+                        await openRevisionTool(workspacePath, fromRepositoryPath, repositoryPath, (long)fromRevision.Value, (long)toRevision.Value, lifetime.Token);
+                    status.Text = result.Succeeded ? "Beyond Compare 操作完成。" : "比较失败：" + result.Error;
                     if (!result.Succeeded) preview.Text = result.Output + "\r\n" + result.Error;
                 }
                 else
@@ -165,7 +180,7 @@ namespace TortoiseSCM
         private void SetBusy(bool value)
         {
             busy = value; buttons.Enabled = !value; fromRevision.Enabled = toRevision.Enabled = !value && !fixedPair;
-            compare.Enabled = external.Enabled = !value && sourceExists && targetExists;
+            compare.Enabled = external.Enabled = !value;
             export.Enabled = !value && targetExists; exportSource.Enabled = !value && sourceExists;
         }
 

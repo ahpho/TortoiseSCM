@@ -32,6 +32,7 @@ namespace TortoiseSCM
         private ToolStripMenuItem applyMenu;
         private ToolStripMenuItem deleteMenu;
         private ToolStripMenuItem compareMenu;
+        private ToolStripMenuItem compareToolMenu;
         private ToolStripMenuItem exportMenu;
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private CancellationTokenSource request;
@@ -41,6 +42,7 @@ namespace TortoiseSCM
         private Func<string, long, CancellationToken, Task<PlasticCommandResult>> applyShelve;
         private Func<string, long, CancellationToken, Task<PlasticCommandResult>> deleteShelve;
         private Func<string, long, CancellationToken, Task<PlasticShelveComparison>> compareShelve;
+        private Func<string, long, string, CancellationToken, Task<PlasticCommandResult>> compareFile;
         private Func<string, long, string, bool, CancellationToken, Task<PlasticCommandResult>> exportShelve;
         private Func<string, string, DialogResult> confirm = delegate(string message, string title) {
             return MessageBox.Show(message, title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
@@ -65,6 +67,8 @@ namespace TortoiseSCM
             applyShelve = (workspaceRoot, id, token) => client.ApplyShelveAsync(workspaceRoot, id, repository, selector, token);
             deleteShelve = (workspaceRoot, id, token) => client.DeleteShelveAsync(workspaceRoot, id, repository, selector, token);
             compareShelve = client.GetShelveComparisonAsync; exportShelve = client.ExportShelveAsync;
+            compareFile = (workspaceRoot, id, pathToCompare, token) =>
+                client.OpenShelveDiffToolAsync(workspaceRoot, id, pathToCompare, repository, selector, token);
             DialogStyle.Apply(this); Text = "暂存集 - TortoiseSCM";
             Size = new Size(1020, 720); MinimumSize = new Size(760, 550);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 6 };
@@ -88,9 +92,10 @@ namespace TortoiseSCM
             var shelfMenu = new ContextMenuStrip();
             applyMenu = new ToolStripMenuItem("应用暂存集", null, async delegate { await ApplyAsync(); });
             deleteMenu = new ToolStripMenuItem("删除暂存集", null, async delegate { await DeleteAsync(); });
-            compareMenu = new ToolStripMenuItem("比较暂存集", null, async delegate { await CompareAsync(); });
+            compareMenu = new ToolStripMenuItem("暂存集摘要", null, async delegate { await CompareAsync(); });
+            compareToolMenu = new ToolStripMenuItem("用 Beyond Compare 比较文件", null, async delegate { await CompareToolAsync(); });
             exportMenu = new ToolStripMenuItem("导出暂存集", null, async delegate { await ExportAsync(); });
-            shelfMenu.Items.AddRange(new ToolStripItem[] { applyMenu, deleteMenu, new ToolStripSeparator(), compareMenu, exportMenu });
+            shelfMenu.Items.AddRange(new ToolStripItem[] { applyMenu, deleteMenu, new ToolStripSeparator(), compareToolMenu, exportMenu });
             shelfMenu.Opening += delegate { UpdateButtons(); };
             shelves.ContextMenuStrip = shelfMenu;
             shelves.MouseUp += delegate(object sender, MouseEventArgs args) {
@@ -105,10 +110,22 @@ namespace TortoiseSCM
             description.Dock = DockStyle.Fill; description.Multiline = true; description.ReadOnly = true; description.ScrollBars = ScrollBars.Vertical;
             description.AccessibleName = "所选暂存集说明"; detail.Controls.Add(description, 0, 0);
             files.Dock = DockStyle.Fill; files.View = View.Details; DialogStyle.ApplyList(files);
+            files.MultiSelect = false;
+            files.SelectedIndexChanged += delegate { UpdateButtons(); };
+            files.DoubleClick += async delegate { await CompareToolAsync(); };
+            var fileMenu = new ContextMenuStrip();
+            var fileCompare = fileMenu.Items.Add("用 Beyond Compare 比较文件", null, async delegate { await CompareToolAsync(); });
+            fileMenu.Opening += delegate { UpdateButtons(); fileCompare.Enabled = compare.Enabled; };
+            files.ContextMenuStrip = fileMenu;
+            files.MouseUp += delegate(object sender, MouseEventArgs args) {
+                if (args.Button != MouseButtons.Right) return;
+                var item = files.GetItemAt(args.X, args.Y);
+                if (item != null) { item.Selected = true; item.Focused = true; }
+            };
             files.Columns.Add("路径", 470); files.Columns.Add("状态", 85); files.Columns.Add("原路径", 350); files.AccessibleName = "暂存集更改文件";
             detail.Controls.Add(files, 0, 1); split.Panel2.Controls.Add(detail); layout.Controls.Add(split, 0, 2);
-            layout.Controls.Add(new Label { Text = "在待定更改窗口勾选文件后，可通过“操作 → 保存勾选项为暂存集”保存。\r\n应用暂存集要求 Standard 工作区干净；应用、删除和导出都会在写入前要求确认。比较会下载暂存内容进行只读预览。", Dock = DockStyle.Fill }, 0, 3);
-            status.Dock = DockStyle.Fill; status.AutoEllipsis = true; status.TextAlign = ContentAlignment.MiddleLeft; layout.Controls.Add(status, 0, 4);
+            layout.Controls.Add(new Label { Text = "选择下方文件后点击比较或双击，用 Beyond Compare 查看父版本与暂存内容。\r\n新增/删除使用明确空侧；应用暂存集要求 Standard 工作区干净，写入操作须确认。", Dock = DockStyle.Fill }, 0, 3);
+            status.Dock = DockStyle.Fill; status.AutoEllipsis = true; status.UseMnemonic = false; status.TextAlign = ContentAlignment.MiddleLeft; layout.Controls.Add(status, 0, 4);
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             var left = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
@@ -116,11 +133,11 @@ namespace TortoiseSCM
             footer.Controls.Add(left, 0, 0); footer.Controls.Add(close, 1, 0); layout.Controls.Add(footer, 0, 5); Controls.Add(layout);
             refresh.Click += async delegate { await LoadAsync(); }; cancel.Click += delegate { if (request != null) request.Cancel(); };
             apply.Click += async delegate { await ApplyAsync(); }; delete.Click += async delegate { await DeleteAsync(); };
-            compare.Click += async delegate { await CompareAsync(); }; export.Click += async delegate { await ExportAsync(); };
+            compare.Click += async delegate { await CompareToolAsync(); }; export.Click += async delegate { await ExportAsync(); };
             close.Click += delegate { Close(); }; CancelButton = close;
             Shown += async delegate { await LoadAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs args) {
-                if (writing) { args.Cancel = true; status.Text = "写入操作正在进行，完成前不能关闭窗口。"; return; }
+                if (writing || toolRunning) { args.Cancel = true; status.Text = toolRunning ? "请先关闭本次 Beyond Compare 窗口。" : "写入操作正在进行，完成前不能关闭窗口。"; return; }
                 lifetime.Cancel(); if (request != null) request.Cancel();
             };
             UpdateButtons();
@@ -129,17 +146,20 @@ namespace TortoiseSCM
         private void UpdateButtons()
         {
             bool selected = !busy && !writing && shelves.SelectedItems.Count == 1 && detailsShelveId.HasValue;
-            refresh.Enabled = filter.Enabled = shelves.Enabled = !busy && !writing;
+            refresh.Enabled = filter.Enabled = shelves.Enabled = files.Enabled = !busy && !writing;
             cancel.Enabled = busy && !writing;
+            cancel.Text = toolRunning ? "取消比较" : "取消加载";
             apply.Enabled = selected && selectedDetails.Count > 0;
             delete.Enabled = selected;
-            compare.Enabled = selected && compareShelve != null;
+            var selectedFile = files.SelectedItems.Count == 1 ? files.SelectedItems[0].Tag as PlasticChangesetFile : null;
+            compare.Enabled = selected && compareFile != null && selectedFile != null && (selectedFile.ItemType == "F" || selectedFile.ItemType == "B");
             export.Enabled = selected && selectedDetails.Count > 0 && exportShelve != null;
             if (applyMenu != null) applyMenu.Enabled = apply.Enabled;
             if (deleteMenu != null) deleteMenu.Enabled = delete.Enabled;
-            if (compareMenu != null) compareMenu.Enabled = compare.Enabled;
+            if (compareMenu != null) compareMenu.Enabled = selected && compareShelve != null;
+            if (compareToolMenu != null) compareToolMenu.Enabled = compare.Enabled;
             if (exportMenu != null) exportMenu.Enabled = export.Enabled;
-            close.Enabled = !writing;
+            close.Enabled = !writing && !toolRunning;
         }
 
         private void ValidateContext()
@@ -162,8 +182,8 @@ namespace TortoiseSCM
             busy = true; UpdateButtons();
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); request = cancellation;
             try { ValidateContext(); await work(cancellation.Token); }
-            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已取消加载。"; }
-            catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = "加载失败：" + ex.Message; }
+            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = toolRunning ? "已取消比较；工具会话已结束。" : "已取消加载。"; }
+            catch (Exception ex) { if (!lifetime.IsCancellationRequested) status.Text = (toolRunning ? "比较失败：" : "加载失败：") + ex.Message; }
             finally { request = null; cancellation.Dispose(); busy = false; if (!lifetime.IsCancellationRequested) UpdateButtons(); }
         }
 
@@ -327,6 +347,25 @@ namespace TortoiseSCM
             });
             if (comparison == null || lifetime.IsCancellationRequested) return;
             showComparison(comparison);
+        }
+
+        private bool toolRunning;
+        private async Task CompareToolAsync()
+        {
+            if (busy || writing || compareFile == null || files.SelectedItems.Count != 1 || !detailsShelveId.HasValue) return;
+            var selected = SelectedShelve();
+            var file = files.SelectedItems[0].Tag as PlasticChangesetFile;
+            if (selected == null || selected.ShelveId != detailsShelveId.Value || file == null ||
+                (file.ItemType != "F" && file.ItemType != "B")) return;
+            toolRunning = true;
+            try { await WorkAsync(async token =>
+            {
+                ValidateApplyContext();
+                status.Text = "Beyond Compare：" + file.Path + "；取消后仍须关闭工具窗口。";
+                var result = await compareFile(root, selected.ShelveId, file.Path, token);
+                status.Text = result.Succeeded ? "Beyond Compare 已关闭；结果仅供比较，暂存集未改变。" : "Beyond Compare 失败：" + result.Error;
+            }); }
+            finally { toolRunning = false; UpdateButtons(); }
         }
 
         private async Task ExportAsync()

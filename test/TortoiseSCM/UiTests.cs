@@ -89,6 +89,7 @@ namespace TortoiseSCM
                 try { LaunchRequest.Parse(new[] { "--pathfile", Path.Combine(artifacts, "foreign.txt") }); throw new Exception("Foreign path file accepted"); }
                 catch (ArgumentException) { }
                 BeyondCompareSettingsUiTests.Run(artifacts);
+                HistoricalBeyondCompareUiTests.Run(artifacts);
                 using (var merge = new ToolLaunchForm(new PlasticClient(PlasticClientConfig.Load())))
                 { Prepare(merge); Save(merge, Path.Combine(artifacts, "merge-tool.png")); merge.Close(); }
                 CheckConflictDialogs(artifacts);
@@ -752,8 +753,8 @@ namespace TortoiseSCM
                     Prepare(historical);
                     Require(!((NumericUpDown)Field(historical, "fromRevision")).Enabled && !((NumericUpDown)Field(historical, "toRevision")).Enabled,
                         "Tree file actions keep their validated comparison endpoints fixed");
-                    Require(((Button)Field(historical, "compare")).Enabled == (index >= 2) && ((Button)Field(historical, "external")).Enabled == (index >= 2),
-                        "Added and deleted items cannot compare a fabricated empty side");
+                    Require(((Button)Field(historical, "compare")).Enabled && !((Button)Field(historical, "external")).Visible,
+                        "File comparison uses one Beyond Compare entry, with native proof required for empty sides");
                     Require(((Button)Field(historical, "exportSource")).Enabled == (index != 0) && ((Button)Field(historical, "export")).Enabled == (index != 1),
                         "History export is enabled only for existing endpoint content");
                     if (index == 2)
@@ -762,7 +763,7 @@ namespace TortoiseSCM
                             "Moved files compare the original and destination paths");
                         Save(historical, Path.Combine(artifacts, "changeset-moved-file.png"));
                         historical.Size = historical.MinimumSize; Application.DoEvents();
-                        foreach (var button in new[] { "compare", "external", "export", "exportSource" })
+                        foreach (var button in new[] { "compare", "export", "exportSource" })
                         {
                             var control = (Button)Field(historical, button);
                             Require(control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)),
@@ -1202,17 +1203,21 @@ namespace TortoiseSCM
                 Func<string, long, CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IList<PlasticChangesetFile>>> details = (path, id, token) => {
                     Require(id == 17, "Shelve details use ShelveId rather than database ObjectId");
                     return System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<PlasticChangesetFile>>(new[] {
-                        new PlasticChangesetFile { Path = "/目录 中文/file & name.txt", Status = "M", OldPath = "/old.txt" }
+                    new PlasticChangesetFile { Path = "/目录 中文/file & name.txt", Status = "M", ItemType = "F", OldPath = "/old.txt" }
                     });
                 };
                 typeof(ShelvesForm).GetField("getShelves", flags).SetValue(form, list); typeof(ShelvesForm).GetField("getChanges", flags).SetValue(form, details);
                 Prepare(form); var shelves = (ListView)Field(form, "shelves"); var files = (ListView)Field(form, "files");
                 Require(shelves.Items.Count == 2 && files.Items.Count == 0, "Shelves list loads independently of workspace pending selection");
-                Require(shelves.ContextMenuStrip != null && shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Count() == 4,
-                    "Shelves list provides explicit apply, delete, compare and export actions in its context menu");
+                Require(shelves.ContextMenuStrip != null && shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Count() == 4 &&
+                    shelves.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Any(item => item.Text.Contains("Beyond Compare")),
+                    "Shelves list provides apply, delete, Beyond Compare and export actions");
                 shelves.Items[0].Selected = true; Application.DoEvents();
                 Require(files.Items.Count == 1 && files.Items[0].SubItems[2].Text == "/old.txt" && ((TextBox)Field(form, "description")).Text.Contains("多行"),
                     "Selecting a shelve loads its full comment and changed path details");
+                Require(!((Button)Field(form, "compare")).Enabled, "Beyond Compare requires a selected file");
+                files.Items[0].Selected = true; Application.DoEvents();
+                Require(((Button)Field(form, "compare")).Enabled, "Selecting a regular file enables Beyond Compare");
                 Save(form, Path.Combine(artifacts, "shelves.png")); form.Size = form.MinimumSize; Application.DoEvents();
                 foreach (string field in new[] { "shelves", "files", "filter", "apply", "delete", "compare", "export", "refresh", "cancel", "close" }) {
                     var control = (Control)Field(form, field);
@@ -1220,6 +1225,27 @@ namespace TortoiseSCM
                         control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)), "Shelves " + field + " visible at minimum size");
                 }
                 Save(form, Path.Combine(artifacts, "shelves-minimum.png"));
+                var toolCompletion = new System.Threading.Tasks.TaskCompletionSource<PlasticCommandResult>();
+                CancellationToken toolToken = CancellationToken.None; int toolCalls = 0;
+                typeof(ShelvesForm).GetField("compareFile", flags).SetValue(form,
+                    new Func<string, long, string, CancellationToken, System.Threading.Tasks.Task<PlasticCommandResult>>((path, id, file, token) => {
+                        Require(path == root && id == 17 && file == "/目录 中文/file & name.txt", "Compare button forwards reviewed shelveset and selected path");
+                        toolCalls++; toolToken = token; return toolCompletion.Task;
+                    }));
+                ((Button)Field(form, "compare")).PerformClick(); Application.DoEvents();
+                Require(toolCalls == 1 && !files.Enabled && !shelves.Enabled && !((Button)Field(form, "close")).Enabled,
+                    "Beyond Compare session locks selection and keeps the owner window alive");
+                ((Button)Field(form, "compare")).PerformClick(); form.Close();
+                Require(toolCalls == 1 && !form.IsDisposed, "Busy comparison cannot be duplicated or abandoned");
+                ((Button)Field(form, "cancel")).PerformClick();
+                Require(toolToken.IsCancellationRequested && !((Button)Field(form, "close")).Enabled,
+                    "Cancel signals Beyond Compare but retains owner until the tool closes");
+                toolCompletion.SetCanceled(); WaitUntil(() => !(bool)Field(form, "toolRunning"), "Tool cancellation waits for completion");
+                Require(files.Enabled && ((Button)Field(form, "close")).Enabled, "Tool completion releases selection and close");
+                File.WriteAllText(selectorFile, selector.Replace("/main", "/changed"));
+                ((Button)Field(form, "compare")).PerformClick(); Application.DoEvents();
+                Require(toolCalls == 1 && ((Label)Field(form, "status")).Text.Contains("分支已改变"), "Changed selector refuses a comparison of stale displayed details");
+                File.WriteAllText(selectorFile, selector);
                 ((TextBox)Field(form, "filter")).Text = "other";
                 Require(shelves.Items.Count == 1 && files.Items.Count == 0 && ((TextBox)Field(form, "description")).Text == "", "Shelve filter clears stale selection details");
                 var completion = new System.Threading.Tasks.TaskCompletionSource<System.Collections.Generic.IList<PlasticChangesetFile>>();

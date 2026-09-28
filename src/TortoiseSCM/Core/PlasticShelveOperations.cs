@@ -130,6 +130,98 @@ namespace TortoiseSCM
                 ShelveId = shelveId, ParentChangeset = shelve.ParentChangeset, Files = result };
         }
 
+        /// <summary>Open one shelveset file in the configured Beyond Compare profile.</summary>
+        public Task<PlasticCommandResult> OpenShelveDiffToolAsync(string root, long shelveId,
+            string repositoryPath, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var workspace = DiscoverWorkspace(root);
+            if (workspace == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
+            return OpenShelveDiffToolAsync(root, shelveId, repositoryPath, workspace.Repository, workspace.Selector, cancellationToken);
+        }
+
+        public async Task<PlasticCommandResult> OpenShelveDiffToolAsync(string root, long shelveId,
+            string repositoryPath, string expectedRepository, string expectedSelector, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidateShelveId(shelveId); ValidateRepositoryFilePath(repositoryPath);
+            ValidateBranchRepository(expectedRepository);
+            if (expectedSelector == null) throw new ArgumentNullException("expectedSelector");
+            var expected = new PlasticWorkspace { RootPath = Path.GetFullPath(root), Repository = expectedRepository, Selector = expectedSelector };
+            ValidateShelveContext(expected);
+            string beyondCompare = config.UseBeyondCompare ? BeyondCompareTool.ResolveExecutable(config.BeyondComparePath) : null;
+            if (String.IsNullOrEmpty(beyondCompare))
+                throw new InvalidOperationException("暂存集文件比较统一使用 Beyond Compare，请先安装并配置 BComp.exe。");
+            var context = await ValidateShelveRootAsync(root, cancellationToken).ConfigureAwait(false);
+            ValidateShelveContext(expected);
+            var shelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+            var shelve = shelves.SingleOrDefault(item => item.ShelveId == shelveId);
+            if (shelve == null) throw new ArgumentException("所选暂存集已不存在，请刷新列表。");
+            var changes = await GetShelveChangesAsync(context.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
+            var change = ShelveDiffSelection(changes, repositoryPath);
+            string signature = ShelveDiffSignature(changes);
+            string sourcePath = String.IsNullOrEmpty(change.OldPath) ? change.Path : change.OldPath;
+            string temporary = NewHistoricalTemporaryDirectory();
+            string before = Path.Combine(temporary, "parent" + Path.GetExtension(sourcePath));
+            string after = Path.Combine(temporary, "shelve" + Path.GetExtension(change.Path));
+            bool preserve = false;
+            try
+            {
+                // Empty sides are intentional only after the native status proves add/delete.
+                if (change.Status == "A") File.WriteAllBytes(before, new byte[0]);
+                else
+                {
+                    if (shelve.ParentChangeset <= 0) throw new InvalidDataException("暂存集没有可用于比较的父变更集。");
+                    await DownloadHistoricalFileAsync(context, sourcePath, shelve.ParentChangeset, before, cancellationToken).ConfigureAwait(false);
+                }
+                if (change.Status == "D") File.WriteAllBytes(after, new byte[0]);
+                else await DownloadShelveFileAsync(context, change.Path, shelveId, after, cancellationToken).ConfigureAwait(false);
+                ValidateHistoricalContext(context);
+                var currentChanges = await GetShelveChangesAsync(context.RootPath, shelveId, cancellationToken).ConfigureAwait(false);
+                var currentShelves = await GetShelvesAsync(context.RootPath, cancellationToken).ConfigureAwait(false);
+                var currentShelve = currentShelves.SingleOrDefault(item => item.ShelveId == shelveId);
+                if (currentShelve == null || currentShelve.ObjectId != shelve.ObjectId || currentShelve.ParentChangeset != shelve.ParentChangeset ||
+                    ShelveDiffSignature(currentChanges) != signature)
+                    throw new InvalidOperationException("暂存集或文件明细在比较准备期间已改变，请刷新后重试。");
+                ValidateHistoricalContext(context); ValidateShelveContext(expected); cancellationToken.ThrowIfCancellationRequested();
+                File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
+                File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
+                var args = PlasticToolArguments.Expand(BeyondCompareTool.DiffArguments,
+                    new Dictionary<string, string> { { "base", before }, { "local", after } }, false);
+                for (int i = 0; i < args.Count; i++)
+                {
+                    if (args[i].StartsWith("/lefttitle=", StringComparison.Ordinal))
+                        args[i] = "/lefttitle=Parent cs:" + shelve.ParentChangeset.ToString(CultureInfo.InvariantCulture) + " " + sourcePath + (change.Status == "A" ? " (empty: added)" : "");
+                    if (args[i].StartsWith("/righttitle=", StringComparison.Ordinal))
+                        args[i] = "/righttitle=Shelve sh:" + shelveId.ToString(CultureInfo.InvariantCulture) + " " + change.Path + (change.Status == "D" ? " (empty: deleted)" : "");
+                }
+                return await BeyondCompareProcess.RunAsync(beyondCompare, args, temporary, cancellationToken).ConfigureAwait(false);
+            }
+            catch (BeyondCompareWaitException) { preserve = true; throw; }
+            finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }
+        }
+
+        private static PlasticChangesetFile ShelveDiffSelection(IList<PlasticChangesetFile> changes, string path)
+        {
+            var matches = changes.Where(item => String.Equals(item.Path, path, StringComparison.Ordinal)).ToList();
+            if (matches.Count == 0) throw new ArgumentException("所选文件不在该暂存集中，请刷新文件明细。");
+            if (matches.Any(item => item.ItemType != "F" && item.ItemType != "B"))
+                throw new ArgumentException("Beyond Compare 暂存集比较只支持普通文件；目录和链接请使用 Plastic 客户端。");
+            // Native diff can emit both M and C for one renamed, edited file.
+            // Both rows must agree on the exact original path and file type.
+            if (matches.Count != 1 && !(matches.Count == 2 && matches.Count(item => item.Status == "M") == 1 &&
+                matches.Count(item => item.Status == "C") == 1 && matches[0].OldPath == matches[1].OldPath &&
+                matches[0].ItemType == matches[1].ItemType))
+                throw new InvalidDataException("暂存集文件存在不明确的重复记录，请刷新后重试。");
+            return matches[0];
+        }
+
+        private static string ShelveDiffSignature(IList<PlasticChangesetFile> changes)
+        {
+            return String.Join("\n", changes.Select(item => String.Join("|", new[] { item.Status, item.Path, item.OldPath, item.ItemType }))
+                .OrderBy(item => item, StringComparer.Ordinal));
+        }
+
         public async Task<PlasticCommandResult> ExportShelveAsync(string root, long shelveId, string outputDirectory,
             bool overwrite, CancellationToken cancellationToken)
         {

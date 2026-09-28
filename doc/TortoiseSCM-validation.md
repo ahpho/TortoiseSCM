@@ -367,3 +367,13 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 实际已安装 BC 4 经发布 EXE 启动三方窗口，命令行角色和独立实例参数正确；配置 SCM 超时 1 秒，进程仍等待 72 秒且未自动生成结果。证据 `qa/bc-desktop-20260928-124541/launch-evidence.json`。Computer Use 原生管道缺失，按重试/重置流程仍不可用，故未确认窗口内只读表现、保存/放弃、已有实例并行或 DPI；验证后只终止了命令行确认为本次隔离 fixture 的测试进程，不计为正常关闭验收。
 - 安装包/隔离安装/卸载 44 项通过（`qa/beyond-compare-package.log`）。源码提交、最终 EXE 和 ZIP 哈希记录于 `qa/beyond-compare-release-record.json`；发布包 `packages/TortoiseSCM-0.1.0-dev-beyond-compare-20260928-windows-x64.zip`。原 TestSCM 保持干净及 `/main`，服务器写入均位于隔离测试分支。
 - 后续边界：历史主“比较”及暂存集文本预览尚待改为 BC 入口，新增/删除空侧比较尚未实现；BC 5、BC 4 保存/放弃与多 DPI 仍需实机验收。等待异常 102 时不能推断子窗口状态，贡献文件保留并要求用户先关闭对应窗口；不根据工具退出码认定 Plastic 已解决。
+
+# Beyond Compare 历史与暂存集逐文件比较（2026-09-28）
+
+- 历史主按钮与暂存集文件按钮、双击、右键统一使用 BC；旧统一文本预览仍供 CLI 和内部回归使用。固定快照与暂存集新增/删除项在重新读取原生状态后建立空侧；下载错误不作为不存在。移动兼修改使用原生旧路径，标题显示实际 cs/sh 与路径。
+- 新历史后端 79 项、暂存集后端 65 项进程契约检查通过：精确文本/二进制字节、中文/空格/符号路径、只读属性、移动与修改双记录、伪造/重复记录、工作区或暂存集身份变化、下载失败、异常退出，以及当前会话目录的清理/保留。历史取消检查确认 BC 未结束前保留输入；退出 102 不推断子窗口已经关闭。
+- 真实 Plastic 集成 84 项通过，fixture 为 `qa/integration-20260928-145001-83636750/manifest.json`，证据为相邻 `bc-browsing-results.json`。Standard/Partial 均覆盖暂存集与历史 A/C/D/M+C、重命名前后端点、精确贡献字节、只读参数、标题和等待后清理。所有浏览前后工作文件、待定状态、selector 不变，原 TestSCM 内容哈希/selector/状态也保持不变。结构暂存集由原生命令创建，产品“保存暂存集”仍仅支持已明确支持的内容更改。
+- 首轮集成 fixture 的原生 checkin 未指定 `--all`，导致测试准备只提交移动、未提交内容；已修正 fixture 并在新的隔离分支完整通过。早期失败证据保留，不计入通过。BC 使用独立辅助进程验证实际接收的参数和字节，本轮不声称验收 BC 桌面保存/放弃或多 DPI。
+- 新历史 GUI 49 项通过，实际点击按钮验证普通/固定比较路由、增删空侧说明、导出范围、参数快照、异步锁定、失败恢复与关闭保护。暂存集 GUI 另覆盖文件选择、真实按钮路由、取消后等待、重复启动/关闭拦截和 selector 变化拒绝。
+- 最终完整 `build-tortoisescm.ps1 -Test -Workspace` 通过（`qa/bc-browsing-regression.log`），包括新增后端/GUI、2,082 项 CLI、原有后端、Shell/现代菜单和全部窗口回归。已目视检查 `qa/Release/shelves.png`、`shelves-minimum.png`、`history-beyond-compare.png` 与新增项最小窗口截图；控件均可见，无重叠。这些是进程内 WinForms 渲染，未声称真实 Explorer 或多 DPI 验收。
+- 安装/升级回滚/卸载检查 44 项通过（`qa/bc-browsing-package.log`），未改变真实 Explorer 注册。下一阶段继续提交窗口的失败保留与重试预检；工作文件增删空侧、工具并行会话、BC 实际保存/放弃及多 DPI 仍列为未完成。

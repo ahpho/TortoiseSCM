@@ -157,14 +157,70 @@ namespace TortoiseSCM
                 if (host != null) return await host.ShowDiffAsync(before, after, cancellationToken).ConfigureAwait(false);
                 if (beyondCompare != null)
                     return await BeyondCompareProcess.RunAsync(beyondCompare,
-                        PlasticToolArguments.Expand(BeyondCompareTool.DiffArguments,
-                            new Dictionary<string, string> { { "base", before }, { "local", after } }, false), temporary, cancellationToken).ConfigureAwait(false);
+                        HistoricalBeyondCompareArguments(before, after,
+                            HistoricalSpec(context.Repository, fromRepositoryPath, fromChangeset),
+                            HistoricalSpec(context.Repository, toRepositoryPath, toChangeset)), temporary, cancellationToken).ConfigureAwait(false);
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.DiffToolPath, WorkingDirectory = temporary,
                     Arguments = PlasticToolArguments.Expand(config.DiffToolArguments,
                         new Dictionary<string, string> { { "base", before }, { "local", after } }, false) }, cancellationToken).ConfigureAwait(false);
             }
             catch (BeyondCompareWaitException) { preserve = true; throw; }
             finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }
+        }
+
+        // A missing endpoint is only represented by empty bytes after the server has
+        // re-proved the selected added/deleted row in this exact pair of complete trees.
+        // Ordinary historical comparisons continue to reject missing paths.
+        public async Task<PlasticCommandResult> OpenChangesetFileDiffToolAsync(string workspacePath,
+            PlasticChangesetComparison comparison, PlasticChangesetFile file, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (comparison == null || file == null) throw new ArgumentNullException(comparison == null ? "comparison" : "file");
+            string repository = comparison.Repository, root = comparison.RootPath;
+            long fromChangeset = comparison.FromChangeset, toChangeset = comparison.ToChangeset;
+            string path = file.Path, oldPath = file.OldPath ?? "", status = file.Status, itemType = file.ItemType;
+            if (!new[] { "A", "C", "D", "M" }.Contains(status) || !new[] { "F", "B" }.Contains(itemType))
+                throw new ArgumentException("请选择普通文件或二进制文件的变更；目录、符号链接和跨仓库链接不能作为文件比较。");
+            string sourcePath = String.IsNullOrEmpty(oldPath) ? path : oldPath;
+            ValidateRepositoryFilePath(sourcePath); ValidateRepositoryFilePath(path);
+            ValidateChangeset(fromChangeset); ValidateChangeset(toChangeset);
+            string executable = BeyondCompareTool.ResolveExecutable(config.BeyondComparePath);
+            var context = await HistoricalContextAsync(workspacePath, sourcePath, fromChangeset, cancellationToken).ConfigureAwait(false);
+            if (context.Repository != repository || String.IsNullOrWhiteSpace(root) || !SamePath(context.RootPath, root))
+                throw new InvalidOperationException("工作区或仓库与已查看的变更集比较不一致，请刷新后重试。");
+            var current = await GetChangesetComparisonAsync(context.RootPath, fromChangeset, toChangeset, cancellationToken).ConfigureAwait(false);
+            ValidateHistoricalContext(context);
+            if (current.Repository != repository || !SamePath(current.RootPath, root) || current.Files.Count(item =>
+                item.Status == status && item.Path == path && (item.OldPath ?? "") == oldPath && item.ItemType == itemType) != 1)
+                throw new InvalidOperationException("所选文件与服务器的变更集比较不一致，请刷新后重试。");
+
+            string temporary = NewHistoricalTemporaryDirectory();
+            string before = Path.Combine(temporary, "from-" + fromChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(sourcePath));
+            string after = Path.Combine(temporary, "to-" + toChangeset.ToString(CultureInfo.InvariantCulture) + Path.GetExtension(path));
+            bool preserve = false;
+            try
+            {
+                if (status == "A") File.WriteAllBytes(before, new byte[0]);
+                else await DownloadHistoricalFileAsync(context, sourcePath, fromChangeset, before, cancellationToken).ConfigureAwait(false);
+                if (status == "D") File.WriteAllBytes(after, new byte[0]);
+                else await DownloadHistoricalFileAsync(context, path, toChangeset, after, cancellationToken).ConfigureAwait(false);
+                ValidateHistoricalContext(context);
+                File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
+                File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
+                string beforeTitle = HistoricalSpec(repository, sourcePath, fromChangeset) + (status == "A" ? " (不存在 / empty)" : "");
+                string afterTitle = HistoricalSpec(repository, path, toChangeset) + (status == "D" ? " (不存在 / empty)" : "");
+                cancellationToken.ThrowIfCancellationRequested();
+                return await BeyondCompareProcess.RunAsync(executable, HistoricalBeyondCompareArguments(before, after, beforeTitle, afterTitle),
+                    temporary, cancellationToken).ConfigureAwait(false);
+            }
+            catch (BeyondCompareWaitException) { preserve = true; throw; }
+            finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }
+        }
+
+        private static IList<string> HistoricalBeyondCompareArguments(string before, string after, string beforeTitle, string afterTitle)
+        {
+            // Titles are arguments, never text interpolated into the command template.
+            return new List<string> { "/solo", "/readonly", before, after, "/lefttitle=" + beforeTitle, "/righttitle=" + afterTitle };
         }
 
         private async Task<PlasticWorkspace> HistoricalContextAsync(string workspacePath, string repositoryPath, long changeset, CancellationToken cancellationToken)
