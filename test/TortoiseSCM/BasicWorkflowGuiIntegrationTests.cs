@@ -27,7 +27,8 @@ namespace TortoiseSCM
         {
             try
             {
-                if (args.Length != 2 && args.Length != 3) throw new ArgumentException("Usage: BasicWorkflowGuiIntegrationTests <manifest.json> <artifacts> [expected-cm.exe]");
+                if (args.Length < 2 || args.Length > 4 || (args.Length == 4 && args[3] != "--file-actions"))
+                    throw new ArgumentException("Usage: BasicWorkflowGuiIntegrationTests <manifest.json> <artifacts> [expected-cm.exe] [--file-actions]");
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
                 WindowsFormsSynchronizationContext.AutoInstall = false;
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
@@ -36,7 +37,7 @@ namespace TortoiseSCM
                 var manifest = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(args[0]));
                 Require((bool)manifest["complete"], "Fixture setup completed");
                 var config = PlasticClientConfig.Load();
-                if (args.Length == 3 && !Path.GetFullPath(config.CmPath).Equals(Path.GetFullPath(args[2]), StringComparison.OrdinalIgnoreCase))
+                if (args.Length >= 3 && !Path.GetFullPath(config.CmPath).Equals(Path.GetFullPath(args[2]), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("The GUI's configured cm.exe differs from the fixture client. Set the same path before running this acceptance test.");
                 client = new PlasticClient(config);
                 string producer = (string)manifest["producer"], consumer = (string)manifest["consumer"], partial = (string)manifest["partial"];
@@ -47,6 +48,14 @@ namespace TortoiseSCM
                         && ((string)manifest["branch"]).StartsWith("/main/tortoisescm-autotest-", StringComparison.Ordinal)
                         && Path.GetFullPath(root).StartsWith(Path.GetFullPath((string)manifest["runDirectory"]) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
                         "Write target is isolated autotest workspace: " + root);
+                }
+                if (args.Length == 4)
+                {
+                    RunFileActions(producer, "standard");
+                    Update(partial);
+                    RunFileActions(partial, "partial");
+                    Console.WriteLine("PASS: file actions GUI integration (" + assertions + " assertions; in-process dialogs, not Explorer clicks)");
+                    return 0;
                 }
                 RunMode(producer, consumer, false);
                 Update(partial);
@@ -135,6 +144,84 @@ namespace TortoiseSCM
             Console.WriteLine("Completed " + prefix);
         }
 
+        private static void RunFileActions(string root, string mode)
+        {
+            string path = Path.Combine(root, mode + " action 中文.txt"), sibling = Path.Combine(root, mode + " private.txt");
+            const string baseline = "file action baseline 中文\r\n";
+            File.WriteAllText(path, baseline, new UTF8Encoding(false));
+            File.WriteAllText(sibling, "preserve private sibling", new UTF8Encoding(false));
+            foreach (var command in new[] { PlasticCommand.Add, PlasticCommand.Checkin })
+                Require(Wait(client.RunAsync(new PlasticCommandRequest { Command = command, WorkingDirectory = root,
+                    Paths = new[] { path }, Comment = "GUI audit file action fixture" }, CancellationToken.None)).Succeeded, "Seed isolated " + mode + " file");
+            string clean = Status(root);
+            using (var form = Launch("checkout", path, false, null, null))
+            {
+                Require(Status(root) == clean && Field<Label>(form, "status").Text.Contains("签出"), "Shell checkout opens pending window without checking out automatically");
+                using (var guard = new DialogGuard(form, true, "继续签出", path))
+                {
+                    var task = (Task)typeof(MainForm).GetMethod("ExecuteAsync", Flags, null,
+                        new[] { typeof(PlasticCommand), typeof(List<string>) }, null).Invoke(form, new object[] { PlasticCommand.Checkout, new List<string> { path } });
+                    Pump(() => task.IsCompleted, "Checkout GUI handler completes"); task.GetAwaiter().GetResult();
+                    Require(guard.Count == 1 && guard.Error == "", "Checkout requires exact-path confirmation");
+                }
+                Require(Pending(root, path, "CO"), "Confirmed checkout creates native checkout state");
+            }
+            File.WriteAllText(path, baseline + "local edit to discard\r\n", new UTF8Encoding(false));
+            string edited = File.ReadAllText(path), dirty = Status(root);
+            using (var form = Launch("status", root, false, null, null))
+            {
+                foreach (bool accept in new[] { false, true })
+                {
+                    var rows = Field<ListView>(form, "files");
+                    foreach (ListViewItem row in rows.Items) { row.Selected = false; row.Checked = Same(((PlasticStatusItem)row.Tag).Path, sibling); }
+                    rows.Items.Cast<ListViewItem>().Single(row => Same(((PlasticStatusItem)row.Tag).Path, path)).Selected = true;
+                    using (var guard = new DialogGuard(form, accept, "所选项的本地更改将丢失", path))
+                    {
+                        rows.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "丢弃所选行的修改…").PerformClick();
+                        Pump(() => !Field<bool>(form, "busy") && guard.Count == 1, "Row context undo finishes");
+                        Require(guard.Error == "", "Undo confirmation identifies highlighted path");
+                    }
+                    Require(File.ReadAllText(sibling) == "preserve private sibling" && Pending(root, sibling, "PR"), "Undo highlighted row preserves separately checked private sibling");
+                    Require(accept ? File.ReadAllText(path) == baseline && !Wait(client.GetStatusAsync(root, CancellationToken.None)).Any(item => Same(item.Path, path)) :
+                        File.ReadAllText(path) == edited && Status(root) == dirty, accept ? "Confirmed row undo restores baseline and clears checkout" : "Cancelled row undo preserves bytes and native state");
+                }
+            }
+            string destination = Path.Combine(root, mode + " renamed 中文.txt");
+            MoveFromShell(path, destination, false, mode + "-move-cancel");
+            Require(File.Exists(path) && !File.Exists(destination) && File.ReadAllText(path) == baseline, "Cancelled rename preserves source");
+            MoveFromShell(path, destination, true, mode + "-move");
+            Require(!File.Exists(path) && File.ReadAllText(destination) == baseline && Pending(root, destination, "MV"), "Confirmed rename preserves content and creates native move");
+            string ignore = Path.Combine(root, "ignore.conf");
+            string rulesBefore = File.Exists(ignore) ? File.ReadAllText(ignore) : null;
+            using (var form = Launch("ignore", sibling, false, "精确路径写入", sibling))
+                Require((File.Exists(ignore) ? File.ReadAllText(ignore) : null) == rulesBefore && Pending(root, sibling, "PR"), "Cancelled ignore preserves rules and private state");
+            using (var form = Launch("ignore", sibling, true, "精确路径写入", sibling))
+                Require(File.ReadAllText(sibling) == "preserve private sibling" && File.ReadAllText(ignore).Contains(Path.GetFileName(sibling)), "Confirmed ignore writes exact rule and preserves file bytes");
+            Require(File.ReadAllText(destination) == baseline && Pending(root, destination, "MV"), "Ignore does not untrack controlled renamed file");
+        }
+
+        private static void MoveFromShell(string source, string destination, bool accept, string capture)
+        {
+            using (var form = (MainForm)Program.CreateLaunchForm(LaunchRequest.Parse(new[] { "--command", "move", "--path", source })))
+            using (var timer = new System.Windows.Forms.Timer { Interval = 40 })
+            using (var guard = new DialogGuard(form, false, null, null))
+            {
+                bool handled = false;
+                timer.Tick += delegate {
+                    var dialog = Application.OpenForms.OfType<PathInputForm>().SingleOrDefault();
+                    if (dialog == null || handled) return;
+                    handled = true; Field<TextBox>(dialog, "destination").Text = destination;
+                    Save(dialog, Path.Combine(artifacts, capture + ".png"));
+                    dialog.Size = dialog.MinimumSize; Application.DoEvents(); Save(dialog, Path.Combine(artifacts, capture + "-minimum.png"));
+                    (accept ? dialog.AcceptButton : dialog.CancelButton).PerformClick();
+                };
+                form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-25000, -25000);
+                timer.Start(); form.Show();
+                Pump(() => handled && Field<bool>(form, "loaded") && !Field<bool>(form, "busy") && !Application.OpenForms.OfType<PathInputForm>().Any(), "Shell rename dialog finishes");
+                Require(guard.Error == "", "Rename has no unexpected error dialog");
+            }
+        }
+
         private static MainForm Launch(string command, string path, bool accept, string expectedNote, string expectedPath)
         {
             var form = Program.CreateLaunchForm(LaunchRequest.Parse(new[] { "--command", command, "--path", path })) as MainForm;
@@ -196,7 +283,8 @@ namespace TortoiseSCM
                     if (pid != System.Diagnostics.Process.GetCurrentProcess().Id) return;
                     Count++; var text = new StringBuilder();
                     EnumChildWindows(popup, delegate(IntPtr child, IntPtr unused) { var value = new StringBuilder(8192); GetWindowText(child, value, value.Capacity); text.AppendLine(value.ToString()); return true; }, IntPtr.Zero);
-                    bool expected = expectedNote != null && text.ToString().Contains(expectedNote) && text.ToString().Contains(expectedPath);
+                    bool expected = expectedNote != null && text.ToString().Contains(expectedNote) &&
+                        text.ToString().IndexOf(expectedPath, StringComparison.OrdinalIgnoreCase) >= 0;
                     File.AppendAllText(Path.Combine(artifacts, "native-confirmations.txt"), text + "\r\n", Encoding.UTF8);
                     if (!expected) Error += text;
                     PostMessage(popup, 0x111, new IntPtr(expected && accept ? 1 : 2), IntPtr.Zero);

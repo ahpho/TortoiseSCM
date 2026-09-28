@@ -30,6 +30,10 @@ namespace TortoiseSCM
                 uiContext = new WindowsFormsSynchronizationContext();
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Control.CheckForIllegalCrossThreadCalls = true;
+                if (args.Length == 4 && args[0] == "--blame-live")
+                {
+                    Directory.CreateDirectory(args[1]); CheckLiveBlame(args[1], args[2], args[3]); return 0;
+                }
                 if (args.Length == 2 && args[0] == "--bc-settings-ui")
                 {
                     BeyondCompareSettingsUiTests.Run(args[1]); return 0;
@@ -1462,9 +1466,44 @@ namespace TortoiseSCM
                     "Blame dialog uses Tortoise-style line metadata columns");
                 Require(((Button)Field(form, "refresh")).Enabled && !((Button)Field(form, "cancel")).Enabled,
                     "Blame dialog starts idle with refresh enabled");
-                form.Size = form.MinimumSize; form.CreateControl(); Application.DoEvents();
-                Save(form, Path.Combine(artifacts, "blame-minimum.png"));
+                // Constructor checks cannot prove rendering: an unshown form produced
+                // a blank DrawToBitmap image. Use --blame-live for real layout evidence.
             }
+        }
+
+        private static void CheckLiveBlame(string artifacts, string path, string workspace)
+        {
+            var client = new PlasticClient(PlasticClientConfig.Load());
+            string selector = File.ReadAllText(Path.Combine(workspace, ".plastic", "plastic.selector"));
+            byte[] before = File.ReadAllBytes(path);
+            using (var form = new BlameForm(client, path, workspace))
+            {
+                Prepare(form);
+                var lines = (ListView)Field(form, "lines");
+                WaitUntil(() => !(bool)Field(form, "busy") && lines.Items.Count > 0, "Live annotate loads native line history");
+                Require(((Label)Field(form, "status")).Text == "Annotate loaded." && lines.Items.Count == File.ReadAllLines(path).Length,
+                    "Live annotate has one row for each source line");
+                Require(lines.Items.Cast<ListViewItem>().All(row => row.SubItems.Count == 6 && row.SubItems[1].Text.Length > 0 && row.SubItems[2].Text.Length > 0),
+                    "Live annotate renders native author and changeset columns");
+                Require(lines.Items.Cast<ListViewItem>().Select(row => row.SubItems[5].Text).SequenceEqual(File.ReadAllLines(path)),
+                    "Live annotate preserves source text");
+                lines.Items[0].Selected = true;
+                Require(lines.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "Show history") &&
+                    lines.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "Copy line"), "Annotate row exposes history and copy actions");
+                Save(form, Path.Combine(artifacts, "blame-live.png"));
+                form.Size = form.MinimumSize; Application.DoEvents();
+                foreach (string name in new[] { "lines", "cancel", "history", "close" })
+                {
+                    var control = (Control)Field(form, name);
+                    Require(control.Visible && control.Parent.RectangleToScreen(control.Parent.ClientRectangle).Contains(control.RectangleToScreen(control.ClientRectangle)),
+                        "Live annotate " + name + " fits at minimum size");
+                }
+                Save(form, Path.Combine(artifacts, "blame-live-minimum.png"));
+                ((Button)Field(form, "refresh")).PerformClick();
+                WaitUntil(() => !(bool)Field(form, "busy") && lines.Items.Count > 0, "Live annotate refresh completes");
+            }
+            Require(File.ReadAllBytes(path).SequenceEqual(before) && File.ReadAllText(Path.Combine(workspace, ".plastic", "plastic.selector")) == selector,
+                "Annotate and refresh preserve working bytes and selector");
         }
 
         private static void CheckLabelsDialogs(string artifacts)

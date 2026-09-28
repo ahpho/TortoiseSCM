@@ -3,7 +3,9 @@
 param(
     [string]$CmPath = 'D:\Program Files\PlasticSCM5\client\cm.exe',
     [string]$ReferenceWorkspace,
-    [string]$BeyondComparePath
+    [string]$BeyondComparePath,
+    # Supplementary checkout/row-undo/rename/ignore scenarios, each on a fresh fixture.
+    [switch]$FileActionsOnly
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
@@ -15,7 +17,10 @@ $sources += @(Get-ChildItem -LiteralPath (Join-Path $repo 'src\TortoiseSCM\Core'
 $setup = @{ CmPath = $CmPath }
 if ($ReferenceWorkspace) { $setup.ReferenceWorkspace = $ReferenceWorkspace }
 $results = @()
-foreach ($suite in @('BasicWorkflowGuiIntegrationTests', 'HistoryWorkflowGuiIntegrationTests', 'UpdateWorkflowGuiIntegrationTests')) {
+$suites = if ($FileActionsOnly) { @('BasicWorkflowGuiIntegrationTests') } else {
+    @('BasicWorkflowGuiIntegrationTests', 'HistoryWorkflowGuiIntegrationTests', 'UpdateWorkflowGuiIntegrationTests')
+}
+foreach ($suite in $suites) {
     $main = if ($suite -eq 'BasicWorkflowGuiIntegrationTests') { 'TortoiseSCM.' + $suite } else { $suite }
     $output = Join-Path $artifacts ($suite + '.exe')
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 "/main:$main" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$output" ($sources + (Join-Path $PSScriptRoot ($suite + '.cs')))
@@ -26,9 +31,10 @@ foreach ($suite in @('BasicWorkflowGuiIntegrationTests', 'HistoryWorkflowGuiInte
     # Explicit argv quoting. Neither path can contain a literal quote on Windows.
     $arguments = '"' + $manifest + '" "' + $second + '"'
     if ($suite -eq 'BasicWorkflowGuiIntegrationTests') { $arguments += ' "' + $CmPath + '"' }
+    if ($FileActionsOnly) { $arguments += ' --file-actions' }
     $process = Start-Process -FilePath $output -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait `
         -RedirectStandardOutput (Join-Path $artifacts ($suite + '.log')) -RedirectStandardError (Join-Path $artifacts ($suite + '-error.log'))
-    $results += [pscustomobject]@{ suite = $suite; manifest = $manifest; exitCode = $process.ExitCode }
+    $results += [pscustomobject]@{ suite = $suite; fileActionsOnly = [bool]$FileActionsOnly; manifest = $manifest; exitCode = $process.ExitCode }
     [IO.File]::WriteAllText((Join-Path $artifacts 'results.json'), ($results | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
     if ($process.ExitCode -ne 0) { throw "$suite failed. Inspect $artifacts and $manifest." }
     Get-Content -LiteralPath (Join-Path $artifacts ($suite + '.log')) -Tail 1
