@@ -106,7 +106,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialBranchSwitchUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialBranchSwitchPreviewUiTests.cs'
     $uiOutput = Join-Path $out 'UiTests.exe'
-    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.UiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$uiOutput" $uiSources
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.UiTests "/win32icon:$(Join-Path $PSScriptRoot 'src\Resources\gluon.ico')" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$uiOutput" $uiSources
     if ($LASTEXITCODE -ne 0) { throw 'UI test compilation failed.' }
     $artifacts = Join-Path $PSScriptRoot "bin\TortoiseSCM\qa\$Configuration"
     if ($Workspace) { & $uiOutput $artifacts $Workspace } else { & $uiOutput $artifacts }
@@ -162,7 +162,7 @@ if ($Test -or $Integration) {
         $bcWorkingUiSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
         $bcWorkingUiSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $bcWorkingUiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\WorkingBeyondCompareUiTests.cs'
-        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.WorkingBeyondCompareUiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$bcWorkingUiOutput" $bcWorkingUiSources
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.WorkingBeyondCompareUiTests "/win32icon:$(Join-Path $PSScriptRoot 'src\Resources\gluon.ico')" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$bcWorkingUiOutput" $bcWorkingUiSources
         if ($LASTEXITCODE -ne 0) { throw 'Working-file Beyond Compare UI compilation failed.' }
         $bcWorkingFixture = Get-Content -LiteralPath $bcWorkingManifest -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($role in @('producer', 'partial')) {

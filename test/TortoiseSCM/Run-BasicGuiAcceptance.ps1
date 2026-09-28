@@ -23,7 +23,7 @@ $suites = if ($FileActionsOnly) { @('BasicWorkflowGuiIntegrationTests') } else {
 foreach ($suite in $suites) {
     $main = if ($suite -eq 'BasicWorkflowGuiIntegrationTests') { 'TortoiseSCM.' + $suite } else { $suite }
     $output = Join-Path $artifacts ($suite + '.exe')
-    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 "/main:$main" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$output" ($sources + (Join-Path $PSScriptRoot ($suite + '.cs')))
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 "/main:$main" "/win32icon:$(Join-Path $repo 'src\Resources\gluon.ico')" /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$output" ($sources + (Join-Path $PSScriptRoot ($suite + '.cs')))
     if ($LASTEXITCODE -ne 0) { throw "$suite compilation failed." }
     $manifest = & (Join-Path $PSScriptRoot 'New-TestWorkspace.ps1') @setup
     if (-not $manifest -or -not (Test-Path -LiteralPath $manifest)) { throw 'Fixture creation failed.' }

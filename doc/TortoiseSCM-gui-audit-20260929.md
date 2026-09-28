@@ -126,3 +126,9 @@ TestSCM/TestSCM2 的 **4,009 个文件**（含元数据）路径、长度、修�
 ```
 
 本轮中间失败保留：文件确认测试最初将 `D:`/`d:` 按大小写匹配，修正为 Windows 路径不区分大小写后用新 fixture 通过；一次人工调用遗漏 UTF-8 解码，另一次 Shell 调用传相对目录，均修正调用后通过。它们属于测试/调用问题，不计为产品缺陷，也不掩盖旧安装版的真实菜单差异。Blame 专项在完整回归之后新增并独立编译、执行通过，没有声称新增测试后再次重跑整套后端。
+
+### 2026-09-29 补充：截图标题栏图标
+
+旧截图由未嵌入图标的测试 EXE 生成，`DialogStyle` 从启动程序读取图标，因此显示通用窗口图标。现已给主 UI、工作文件比较 UI 和基础 GUI 验收程序的编译入口添加同一个 `src/Resources/gluon.ico`。重新编译 UiTests，设置 UI 53 项断言通过；[新截图](images/gui-audit-20260929/settings-gluon-icon.png) 已目视确认橘黄色 Gluon 标题栏图标。
+
+提取最新 Release 主程序与 UiTests 的图标后，两者 PNG SHA-256 一致（`39DB9EE700B5DF500C07CE0E0B879EB34172554452469BC6D05E3102606A846F`）。当前安装的 `0.1.0-dev-shell-dispatch-fix-20260928` 主程序提取图标仍为 TortoiseGit；本轮未安装新包或重启 Explorer。原始截图作为当时证据保留。提取图标和检查日志位于 `bin/TortoiseSCM/qa/icon-check-20260929/`。
