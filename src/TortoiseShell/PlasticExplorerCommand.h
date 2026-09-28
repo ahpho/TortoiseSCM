@@ -225,7 +225,7 @@ public:
         {
             output[copied] = nullptr;
             if (position == ARRAYSIZE(commands)) break;
-            auto command = new (std::nothrow) PlasticExplorerCommand(position, site.Get());
+            auto command = new (std::nothrow) PlasticExplorerCommand(menuOrder[position], site.Get());
             if (!command)
             {
                 // Failure is transactional: no leaked or partially consumed entries.

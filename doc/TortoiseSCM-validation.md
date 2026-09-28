@@ -575,3 +575,13 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 边界：仍需传输并保存目标完整树及 XML，尚未验证真实十万项服务器端到端性能与超大预览列表呈现；工作区元数据哈希等既有同步操作不承诺立即中断。结构处理/恢复向导、Partial 跨分支合并继续列为未完成。
 - 最终构建真实 Plastic 结构预览/切换集成 66 项通过（`qa/partial-switch-scale-integration.log`，fixture `qa/integration-20260928-182548-a20ddf1d/`，相邻 `partial-switch-preview-results.json`）。目录移动/删除/替换/新增及稀疏文件新父目录仍在写前拒绝，允许的内容更新与稀疏切换保持原行为；原 TestSCM、producer、selector 与加载配置检查通过。
 - 最终全量 `build-tortoisescm.ps1 -Test` 通过（`qa/partial-switch-scale-regression.log`）：210 项预览核心、22 项规模/取消、2,297 项主 CLI、既有 Core/CLI、Shell/现代菜单和完整 WinForms 检查；预览 GUI 130 项与既有切换 UI 63 项在全量中通过。该次规模测量为 94 / 855 ms，新增目录匹配 2 / 47 ms。版本包：`bin/TortoiseSCM/packages/TortoiseSCM-0.1.0-dev-partial-switch-scale-20260928-windows-x64.zip`。
+
+## 2026-09-29：右键菜单常用操作优先
+
+经典 IContextMenu 和现代 IExplorerCommand 共用显示顺序：更新、签入、待处理更改、比较差异、历史记录置顶，随后为文件操作、分支与合并等仓库操作，设置和版本信息置底。显示位置与稳定命令标识分离，保留 canonical verb、现代菜单 GUID 和选择范围规则；编译期检查保证每项恰好出现一次。
+
+- `build-tortoisescm.ps1` 和 Release x64 ShellTests 构建通过。
+- ShellTests 498 项断言通过；使用实际构建 DLL 的 `--modern-dll` 测试 707 项断言通过，包含经典及现代命令派发。
+- 覆盖文件、目录、目录背景、多选和工作区外的菜单排序/过滤，核对显示文字、canonical verb、稳定 GUID，以及真实进程启动器收到的命令和路径。
+- 日志：`bin/TortoiseSCM/qa/menu-order-20260929/` 下的 `build.log`、`test-build.log`、`shell.log`、`production-dll.log`。
+- 本轮未更新已安装的 Explorer 扩展，也未完成桌面右键点击验收；需安装更新版本并让 Explorer 重新加载扩展后，实际菜单才会采用新顺序。

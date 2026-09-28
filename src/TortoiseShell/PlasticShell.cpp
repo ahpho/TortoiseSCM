@@ -38,8 +38,8 @@ constexpr Command commands[] = {
     {L"checkout", L"Check out...", L"签出..."}, {L"undo", L"Undo changes...", L"撤销更改..."},
     {L"diff", L"Diff...", L"比较差异..."}, {L"history", L"History...", L"历史记录..."},
     {L"gluon", L"Open Gluon", L"打开 Gluon"}, {L"settings", L"Settings...", L"设置..."},
-    // Keep the original ten ordinals stable; append new verbs for existing
-    // GUI capabilities so old Explorer registrations and scripts remain valid.
+    // Keep command identities stable (including modern canonical GUIDs).
+    // Display order is defined separately below.
     {L"move", L"Move / rename...", L"\u79fb\u52a8 / \u91cd\u547d\u540d..."},
     {L"remove", L"Remove controlled item...", L"\u5220\u9664\u53d7\u63a7\u9879..."},
     {L"ignore", L"Add to ignore list", L"\u52a0\u5165\u5ffd\u7565\u5217\u8868"},
@@ -58,6 +58,29 @@ constexpr Command commands[] = {
     {L"version", L"Version information...", L"版本信息..."},
     {L"create-workspace", L"Check out repository...", L"\u62c9\u53d6\u4ed3\u5e93..."}
 };
+
+// Shared presentation order for classic and modern Explorer menus. The values
+// refer to stable command identities above, not visible menu offsets.
+constexpr size_t menuOrder[] = {
+    2, 1, 0, 6, 7,          // Update, check in, pending changes, diff, history.
+    3, 4, 5, 10, 11, 12,    // Add, checkout, undo, move, remove, ignore.
+    19, 15, 20, 23,         // Branches, merge, shelvesets, labels.
+    22, 24, 21, 16, 18, 17, // Repository, graph, blame, export, recover, rollback.
+    13, 14, 8, 9, 25,       // Locks, unlock, Gluon, settings, version.
+    26                      // Checkout outside an existing workspace.
+};
+constexpr bool ValidMenuOrder()
+{
+    if constexpr (ARRAYSIZE(menuOrder) != ARRAYSIZE(commands)) return false;
+    bool seen[ARRAYSIZE(commands)]{};
+    for (const size_t index : menuOrder)
+    {
+        if (index >= ARRAYSIZE(commands) || seen[index]) return false;
+        seen[index] = true;
+    }
+    return true;
+}
+static_assert(ValidMenuOrder(), "Menu order must contain each command exactly once");
 
 const wchar_t* Label(const Command& command)
 {
@@ -297,7 +320,7 @@ public:
             if (paths.empty() || (flags & CMF_DEFAULTONLY) || last < first) return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
             HMENU submenu = CreatePopupMenu();
             if (!submenu) return E_OUTOFMEMORY;
-            for (size_t index = 0; index < ARRAYSIZE(commands); ++index)
+            for (const size_t index : menuOrder)
             {
                 // Path-specific dialogs are intentionally limited to one item.
                 // This keeps move/remove/ignore and history actions safe for

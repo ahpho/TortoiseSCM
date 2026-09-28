@@ -131,15 +131,16 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
         require(enumerator->Next(1, &child, &fetched) == S_OK && fetched == 1, "modern next command");
         child->GetCanonicalName(&identity);
         require(identity != ExplorerCommandClsid && std::find(names.begin(), names.end(), identity) == names.end(), "modern unique canonical command GUID");
+        require(identity.Data1 == 0xb1da4600 + expectedMenuIdentities[index], "modern reordered command preserves stable canonical GUID");
         names.push_back(identity);
-        require(SUCCEEDED(child->GetTitle(nullptr, &title)) && wcscmp(title, Label(commands[index])) == 0, "modern shares classic command labels"); CoTaskMemFree(title);
+        require(SUCCEEDED(child->GetTitle(nullptr, &title)) && wcscmp(title, Label(commands[expectedMenuIdentities[index]])) == 0, "modern frequent-first command labels"); CoTaskMemFree(title);
         require(SUCCEEDED(child->GetFlags(&flags)) && flags == ECF_DEFAULT, "modern child flags");
         child->GetState(file.Get(), TRUE, &state); fileCount += state == ECS_ENABLED;
         child->GetState(directory.Get(), TRUE, &state); directoryCount += state == ECS_ENABLED;
         child->GetState(multiple.Get(), TRUE, &state); multiCount += state == ECS_ENABLED;
         require(SUCCEEDED(child->GetState(outside.Get(), TRUE, &state)) && state == (index == 26 ? ECS_ENABLED : ECS_HIDDEN), "modern only checkout enabled outside workspace");
         require(FAILED(child->Invoke(cross.Get(), nullptr)), "modern cross-workspace invocation rejected");
-        if (index == 6) diff = child;
+        if (wcscmp(expectedMenuVerbs[index], L"diff") == 0) diff = child;
     }
     require(fileCount == 26 && directoryCount == 24 && multiCount == 8, "modern selection counts match classic filtering");
     require(FAILED(diff->Invoke(directory.Get(), nullptr)) && FAILED(diff->Invoke(nullptr, nullptr)), "modern invoke validates fresh selection");
@@ -246,7 +247,8 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
         require(SUCCEEDED(factory->CreateInstance(nullptr, IID_PPV_ARGS(&root))), "modern handoff production root");
         ComPtr<IEnumExplorerCommand> enumerator; root->EnumSubCommands(&enumerator);
         ComPtr<IExplorerCommand> status;
-        ULONG fetched = 0; require(enumerator->Next(1, &status, &fetched) == S_OK, "modern handoff status command");
+        ULONG fetched = 0;
+        require(enumerator->Skip(2) == S_OK && enumerator->Next(1, &status, &fetched) == S_OK, "modern handoff status command follows update and checkin");
         const auto selectedPath = (first / L"child/selected 中文 & item.txt").make_preferred();
         std::ofstream(selectedPath) << "fixture";
         auto previous = ModernSelection({(first / L"child/file.txt").native()});
@@ -278,7 +280,7 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
         for (const wchar_t* command : {L"add", L"remove"})
         {
             ULONG index = 0;
-            while (index < ARRAYSIZE(commands) && wcscmp(commands[index].name, command) != 0) ++index;
+            while (index < ARRAYSIZE(expectedMenuVerbs) && wcscmp(expectedMenuVerbs[index], command) != 0) ++index;
             require(index < ARRAYSIZE(commands), "modern basic operation command exists");
             enumerator->Reset(); enumerator->Skip(index);
             ComPtr<IExplorerCommand> operation;
