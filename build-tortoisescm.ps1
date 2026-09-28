@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('TextComparisonTests', 'BuiltInToolTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -89,6 +89,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\UiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\RevisionGraphUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\TextEditorUiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\TextMergePlanUiTests.cs'
     $uiOutput = Join-Path $out 'UiTests.exe'
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:TortoiseSCM.UiTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$uiOutput" $uiSources
     if ($LASTEXITCODE -ne 0) { throw 'UI test compilation failed.' }

@@ -345,3 +345,14 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 安装包回归 44 项通过，日志 `qa/builtin-package-validation.log`；原 TestSCM 保持无待定更改和 `/main` selector。所有服务器写入位于独立 `tortoisescm-autotest-*` 分支。
 - 旧 Partial 内容冲突的真实回归 35 项通过，日志 `qa/builtin-partial-regression.log`，fixture 由 `qa/latest-builtin-partial-regression.txt` 指向；包括传入推进后重新准备、继续编辑、原生父修订、undo 后 update 故障恢复、未选中文件保护和同名添加拒绝。程序哈希与构建时间记录于 `qa/builtin-release-record.json`，发布包为 `packages/TortoiseSCM-0.1.0-dev-builtin-editor-20260928-final-windows-x64.zip`。
 - 当前边界：内置工具只处理支持的 Unicode 文本，最多 2 MiB / 20,000 行；尚无自动三方合并、按块采用或统一冲突列表编辑窗格。复杂行差异明确提示粗略对齐，新增/删除工作文件比较及更多编码仍在路线图中。
+
+# 三方自动合并草稿与逐块核查（2026-09-28）
+
+- 新增显式自动合并草稿、合并块列表、基线/本地/远程逐块采用、手工标记核查和源/结果定位。非重叠修改自动组合；相同修改保留一份；冲突块默认保留本地候选并保持待处理。相邻替换可独立合并，插入触及替换边界时保守地合为一个待审核范围。近似行对齐或仅格式变化使用整文件核查回退，不假定可自动消除冲突。
+- 算法套件 6,542 项通过，包括 250 组随机重复行/空行输入、选择全部基线/本地/远程时完整重建原文、源坐标与结果范围、长度变化、空文件、末尾换行、删除/修改、相同与不同插入、相邻变化、编码/BOM/行尾差异、大范围近似回退和取消。
+- 新增逐块 GUI 套件 56 项及原有编辑器检查通过，日志 `qa/block-merge-ui.log`。操作真实 WinForms 按钮验证自动组合、冲突/自动/已核查状态、待审核草稿保存、逐块采用、手工编辑失效、重新生成保护、重启结果恢复、长度变化后的选区、格式专用回退和未保存提示。已目视检查 `qa/block-merge-ui/text-merge-plan.png`、`text-merge-plan-minimum.png`、`text-merge-plan-manual.png`，普通/最小窗口均无按钮遮挡；这些为进程内渲染，未声称实际 Explorer 或多 DPI 验收。
+- 当前核查状态仅在编辑窗口存活期间有效；自由编辑全文或替换整份贡献内容会立即停用旧块映射，重新生成须明确确认。重新打开已有结果保留字节，但不推断之前的核查状态。保存待处理冲突时明确标为草稿；自动采用、已核查以及 Plastic 原生解决状态分别显示。任何编辑器动作都不会自动应用或签入。
+- 最终 Core 的真实服务器集成 45 项通过，日志 `qa/block-merge-live.log`，fixture 由 `qa/latest-block-merge.txt` 指向。Standard 和 Partial 分别包含双方独立修改及同一范围冲突：验证自动组合、显式采用远程冲突块、保存仍未解决、确认应用、提交与独立消费者精确字节，并保留工作区 selector/加载规则。
+- 完整 `build-tortoisescm.ps1 -Test -Workspace` 回归通过（`qa/block-merge-release.log`），包括 2,076 项 CLI、后端、Shell/现代菜单及整套 GUI 检查。该轮主 EXE 构建后补充了界面提示及格式专用块导航修正；最终 GUI 源码已由逐块套件及完整 UI 编译检查覆盖，并重新构建发布程序（`qa/block-merge-final-build.log`）。安装包、隔离安装及卸载 44 项检查通过（`qa/block-merge-package.log`）。
+- 最终程序 SHA-256、构建时间与源码提交记录于 `qa/block-merge-release-record.json`；发布包为 `packages/TortoiseSCM-0.1.0-dev-block-merge-20260928-windows-x64.zip`。原 TestSCM 仍无待定更改且保持 `/main`，服务器写入均位于独立测试分支。
+- 该阶段仍不持久化跨会话核查状态，不支持自由编辑后自动重建安全块映射，也未完成实际 Explorer 点击、多 DPI 或整套上游 TortoiseMerge 功能对齐。

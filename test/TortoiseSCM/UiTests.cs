@@ -74,6 +74,7 @@ namespace TortoiseSCM
                 string artifacts = args[0];
                 Directory.CreateDirectory(artifacts);
                 TextEditorUiTests.Run(artifacts);
+                TextMergePlanUiTests.Run(artifacts);
                 string pathfile = Path.Combine(Path.GetTempPath(), "tscm-ui-" + Guid.NewGuid() + ".paths");
                 File.WriteAllLines(pathfile, new[] { @"D:\中文 空格\file & name.txt", @"D:\中文 空格\two.txt" }, new System.Text.UTF8Encoding(false));
                 var request = LaunchRequest.Parse(new[] { "--command", "checkin", "--pathfile", pathfile });

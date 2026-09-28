@@ -42,8 +42,11 @@ internal static class BuiltInToolsIntegrationTests
         }
         var config = new PlasticClientConfig { CmPath = cm, SettingsPath = Path.Combine(run, "builtin-settings.xml"), UseBuiltInDiff = true, UseBuiltInMerge = true };
         var host = new RecordingHost(); var client = new PlasticClient(config) { ToolHost = host };
-        const string name = "内置 compare.txt", baseText = "header\r\nbase 中文\r\nfooter\r\n", localText = "header\r\nlocal 中文\r\nfooter\r\n",
-            remoteText = "header\r\nremote 中文\r\nfooter\r\n", mergedText = "header\r\nreviewed 双方\r\nfooter\r\n";
+        const string name = "内置 compare.txt",
+            baseText = "header\r\nleft base\r\nanchor one\r\nbase 中文\r\nanchor two\r\nright base\r\nfooter\r\n",
+            localText = "header\r\nlocal only\r\nanchor one\r\nlocal 中文\r\nanchor two\r\nright base\r\nfooter\r\n",
+            remoteText = "header\r\nleft base\r\nanchor one\r\nremote 中文\r\nanchor two\r\nremote only\r\nfooter\r\n",
+            mergedText = "header\r\nlocal only\r\nanchor one\r\nremote 中文\r\nanchor two\r\nremote only\r\nfooter\r\n";
         string file = Path.Combine(producer, name), renamed = Path.Combine(producer, "重命名 compare.txt"), other = Path.Combine(consumer, name);
         File.WriteAllText(file, baseText, Utf8); Native(producer, "add", file); Native(producer, "checkin", producer, "-c=Built-in tools common base");
         long baseCs = Revision(file);
@@ -81,7 +84,9 @@ internal static class BuiltInToolsIntegrationTests
         Check(File.ReadAllText(other, Utf8) == mergedText, "Independent Standard consumer receives exact bytes");
 
         Native(partial, "partial", "update", partial, "--dontmerge", "--report");
-        string partialFile = Path.Combine(partial, name), partialLocal = "header\r\npartial local\r\nfooter\r\n", incoming = "header\r\npartial incoming\r\nfooter\r\n";
+        string partialFile = Path.Combine(partial, name),
+            partialLocal = mergedText.Replace("local only", "partial local only").Replace("remote 中文", "partial local 中文"),
+            incoming = mergedText.Replace("remote only", "partial incoming only").Replace("remote 中文", "partial incoming 中文");
         File.WriteAllText(partialFile, partialLocal, Utf8); File.WriteAllText(file, incoming, Utf8);
         Native(producer, "checkin", file, "-c=Built-in Partial incoming");
         selector = File.ReadAllText(Path.Combine(partial, ".plastic", "plastic.selector"));
@@ -89,7 +94,7 @@ internal static class BuiltInToolsIntegrationTests
         host.Before = mergedText; host.After = partialLocal;
         Check((await client.OpenDiffToolAsync(partialFile, Token)).Succeeded, "Partial diff uses loaded base rather than incoming HEAD");
         files = await client.PreparePartialConflictAsync(partial, "/" + name, Token);
-        host.Remote = incoming; host.Merged = "header\r\npartial reviewed 中文\r\nfooter\r\n";
+        host.Remote = incoming; host.Merged = incoming.Replace("local only", "partial local only");
         await client.RunMergeToolAsync(files.BasePath, files.LocalPath, files.RemotePath, files.ResultPath, Token);
         Check(!(await client.GetPartialConflictSessionAsync(partial, Token)).Conflicts[0].Resolved && File.ReadAllText(partialFile, Utf8) == partialLocal, "Saving Partial result preserves unresolved state and local bytes");
         Check((await client.ResolvePartialConflictAsync(partial, "/" + name, files.ResultPath, Token)).Succeeded, "Partial explicit apply accepts editor output");
@@ -114,8 +119,16 @@ internal static class BuiltInToolsIntegrationTests
         {
             token.ThrowIfCancellationRequested();
             Check(File.ReadAllText(before, Utf8) == Before && File.ReadAllText(local, Utf8) == After && File.ReadAllText(remote, Utf8) == Remote, "Built-in host receives exact three-way contributors");
+            var plan = TextMergePlan.Create(TextDocument.Load(before), TextDocument.Load(local), TextDocument.Load(remote), token);
+            Check(plan.SupportsAutomatic && plan.UnresolvedCount == 1 && plan.Blocks.Count == 3, "Real contributors produce two independent edits and one pending conflict");
+            Check(plan.ResultText.Contains("local only") && plan.ResultText.Contains("remote only") ||
+                plan.ResultText.Contains("partial local only") && plan.ResultText.Contains("partial incoming only"), "Automatic draft includes both nonconflicting sides");
+            int conflict = plan.Blocks.Select((block, index) => new { block, index }).Single(item => item.block.Kind == TextMergeKind.Conflict).index;
+            Check(plan.Blocks[conflict].Status == TextMergeStatus.Unresolved, "Automatic merge never silently reviews an overlapping edit");
+            plan.Choose(conflict, TextMergeChoice.Remote);
+            Check(plan.UnresolvedCount == 0 && plan.Blocks[conflict].Status == TextMergeStatus.Reviewed && plan.ResultText == Merged, "Explicit block choice combines exact reviewed content");
             var document = File.Exists(result) ? TextDocument.Load(result) : TextDocument.CreateResult(result, TextDocument.Load(local));
-            document.Save(Merged, TextLineEnding.Preserve, new[] { before, local, remote });
+            document.Save(plan.ResultText, TextLineEnding.Preserve, new[] { before, local, remote });
             return Task.FromResult(new PlasticCommandResult());
         }
     }
