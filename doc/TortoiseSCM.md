@@ -47,6 +47,22 @@ Explorer 单选文件、目录或工作区背景右键的“仓库浏览器”�
 卸载仅清理属于该包且哈希未变化的文件，保留设置、工作区和用户新增/修改的文件。被锁定的文件会保留，注销后可重试。
 包当前未数字签名，也不提供自动更新。
 
+### Windows 11 现代右键菜单（预览）
+
+新增 `IExplorerCommand` 菜单实现，与经典菜单共享命令及选择范围规则：文件单选、目录/背景和同工作区多选；工作区外、`.plastic` 元数据和跨工作区混选不提供操作。打开菜单时不启动 `cm.exe`，点击命令后仍由独立主程序执行。
+
+安装包包含可选的应用身份稀疏包，默认安装仍使用经典菜单。当前提供的是未签名测试包；本机实测普通权限注册被 Windows 拒绝，因此预览安装需要管理员 Windows PowerShell：
+
+```powershell
+.\Install.ps1 -EnableModernMenu
+```
+
+该选项要求 Windows 11 x64。已经启用现代菜单的安装在升级时保留该选项；安装失败会尝试恢复先前注册，旧版本目录保留以便恢复。卸载核对 Windows 实际记录的外部程序目录，避免移除属于新版本的菜单。脚本不安装信任证书、不启用开发者模式；组织策略仍可能拒绝未签名包。正式分发还需要受信任签名包。
+
+注册后的 Explorer 可能需要注销再登录以加载新扩展。当前已验证原生接口及命令传递；本机未签名部署被策略/权限阻止，尚未完成真实现代菜单显示验收。经典菜单仍可通过“显示更多选项”使用。
+
+实现依据：[Microsoft 的 Explorer 菜单扩展文档](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/integrate-packaged-app-with-file-explorer)；未签名包仅用于开发测试，参见[未签名 MSIX 要求](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package)。
+
 GitHub Actions 的 Windows 2022 工作流执行无服务器构建/测试、隔离安装测试并上传 ZIP 工件；真实 Plastic 服务器集成测试仍需本地授权的测试仓库。
 
 ## Explorer 集成

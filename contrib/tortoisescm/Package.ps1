@@ -20,7 +20,9 @@ try {
     # Explicit allowlist: test executables, symbols, workspace metadata and cm.exe are never shipped.
     foreach ($file in @('TortoiseSCM.exe', 'TortoiseSCMShell.dll')) { Copy-Item -LiteralPath (Join-Path $binaries $file) -Destination (Join-Path $stage $file) }
     if (Test-Path -LiteralPath (Join-Path $binaries 'TortoiseSCM.exe.config')) { Copy-Item -LiteralPath (Join-Path $binaries 'TortoiseSCM.exe.config') -Destination $stage }
-    foreach ($file in @('Install.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Register-Shell.ps1', 'Unregister-Shell.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $stage }
+    foreach ($file in @('Install.ps1', 'Uninstall.ps1', 'Package.Common.ps1', 'Register-Shell.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Register-ModernShell.ps1', 'Unregister-ModernShell.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $stage }
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ModernMenu') -Destination (Join-Path $stage 'ModernMenu') -Recurse
+    & (Join-Path $PSScriptRoot 'Build-ModernMenu.ps1') -OutputDirectory (Join-Path $stage 'ModernMenu') | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $stage
     [IO.Directory]::CreateDirectory((Join-Path $stage 'doc')) | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'doc\TortoiseSCM.md') -Destination (Join-Path $stage 'doc\TortoiseSCM.md')
@@ -33,6 +35,10 @@ Install for this user from 64-bit PowerShell:
   .\Install.ps1
 Optional Explorer status overlays require elevated PowerShell:
   .\Install.ps1 -EnableMachineOverlays
+Optional Windows 11 modern menu (unsigned local-test preview) requires elevated Windows PowerShell:
+  .\Install.ps1 -EnableModernMenu
+Modern menu stays enabled when upgrading an installation that already enabled it.
+The preview changes no certificate trust or Developer Mode settings; production distribution needs a signed package.
 Preview installation without changing files or registry:
   .\Install.ps1 -WhatIf
 Portable use without shell registration:

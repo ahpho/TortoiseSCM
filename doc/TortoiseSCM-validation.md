@@ -1,5 +1,16 @@
 # TortoiseSCM 验证记录
 
+## Windows 11 现代菜单接口与预览包（2026-09-28）
+
+- 新增独立 CLSID 的 `IExplorerCommand`、`IObjectWithSite` 和子命令枚举器，复用经典菜单的命令表、范围规则和启动器。快速菜单状态查询推迟文件系统探测，不运行 Plastic CLI。枚举 GUID 稳定；点击时重新读取选择，拒绝跨工作区/元数据/无效路径。目录背景通过 Shell site 解析；导航树缺失明确选中项时拒绝操作，避免误用当前文件夹。经典菜单重复项抑制参考保留的上游实现。
+- 原生源码测试 321 条 PASS；直接加载正式 DLL 的接口及进程传递检查 203 条 PASS。后者通过 `DllGetClassObject` 创建实际产品 DLL 中的对象，核对图标路径对应的 DLL 版本，并在隔离目录以短命 recorder 代替 GUI EXE 验证真正的 `Invoke` → `CreateProcess` → UTF-8 pathfile，覆盖中文、空格、`&` 及选择改变。测试命令为 `ShellTests.exe --modern-dll <binary-directory>`，已纳入 `build-tortoisescm.ps1 -Test`。
+- 可选 `Install.ps1 -EnableModernMenu`、Sparse MSIX、独立注册/注销脚本、图标及文件哈希清单已加入包。同版本迁移仅对 `0x80073CFB` 移除重试，核对实际 external location；失败恢复原注册，独立尝试恢复经典注册，回退失败保留文件。卸载旧版本不注销新版本，独立注册的目录也不能在仍被使用时移除。
+- 44 项包/隔离安装/卸载测试、27 项现代包测试通过；后者真实检查 MSIX/manifest/哈希，然后替换 Appx 系统调用边界验证版本迁移、任意失败、移除失败、部署无操作和回退，**不等于真实 Appx 升级已通过**。另有 4 项非管理员真实预检通过，拒绝前不创建安装目录、不改变当前版本指针或经典/Appx 注册。
+- 主机为 Windows 11 build 26200，非管理员。真实 `Add-AppxPackage -AllowUnsigned -ExternalLocation` 返回 `0x80073D2B`（未签名包不能包含可执行激活）；独立测试身份的开发注册返回 `0x80073CFF`（开发/旁加载策略未满足）。没有修改信任证书、开发者模式或系统策略；最终没有本任务的 Appx 包残留。因此 **打包 COM 激活和 Explorer 现代菜单实机显示尚未验收**，不应把接口测试当成已显示菜单的证据。已提供 `ShellTests.exe --modern-registered <binary-directory>` 供成功注册后的环境验证。
+- 最终 `build-tortoisescm.ps1 -Configuration Release -Test` 退出 0，包含全部 Core、2068 项既有 CLI、5 项 blame CLI、21 项 shelveset 内容 CLI、21 项仓库浏览 CLI、524 条 Shell PASS（321 + 203）及完整本地 WinForms 检查。CI 已加入现代包/注册回退专项测试。
+- Computer-use 初始化后 native pipe 不可用，按要求重试、重置后仍失败；没有宣称完成桌面点击或截图验证。现有系统安装/经典注册未替换，TestSCM 保持干净。
+- 日志：`qa/modern-menu-full-build.log`、`modern-menu-package-final.log`、`modern-menu-lifecycle-final.log`、`modern-menu-preflight-final.log`；专项原生日志另见 `qa/modern-shell-agent/{test-results,production-results}.txt`。预览包是本地开发测试产物；受信任签名及真实 Explorer 验收仍需后续完成。
+
 ## 固定快照仓库浏览器（2026-09-28）
 
 - 新增原生目录树、文件列表、只读预览和单文件导出，入口包括 Explorer、主窗口及历史记录右键；CLI 新增 `repository-list`。默认使用当前分支头，可指定 cs:0。目录读取固定仓库/变更集，不依赖本地加载范围。

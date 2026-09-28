@@ -72,6 +72,8 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Shell test compilation failed.' }
     & (Join-Path $out 'ShellTests.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Shell tests failed.' }
+    & (Join-Path $out 'ShellTests.exe') --modern-dll $out
+    if ($LASTEXITCODE -ne 0) { throw 'Modern shell production DLL tests failed.' }
     $uiSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
     $uiSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\UiTests.cs'

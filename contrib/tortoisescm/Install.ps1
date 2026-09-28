@@ -3,18 +3,33 @@ param(
     [string]$PackageDirectory = $PSScriptRoot,
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\TortoiseSCM'),
     [Alias('MachineOverlays')][switch]$EnableMachineOverlays,
+    [switch]$EnableModernMenu,
     [switch]$NoRegister
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Package.Common.ps1')
+. (Join-Path $PSScriptRoot 'ModernMenu.Common.ps1')
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell to install TortoiseSCM.' }
 if ($EnableMachineOverlays -and $NoRegister) { throw '-EnableMachineOverlays cannot be combined with -NoRegister.' }
+if ($EnableModernMenu -and $NoRegister) { throw '-EnableModernMenu cannot be combined with -NoRegister.' }
 if ($EnableMachineOverlays -and -not (Test-TscmAdministrator)) { throw 'Machine overlays require elevated PowerShell. No files or registration were changed.' }
 $installationMutex = Enter-TscmInstallMutex
 try {
 $package = Assert-TscmPlainPath $PackageDirectory
 $manifest = Read-TscmManifest $package -VerifyFiles
 $rootPath = Assert-TscmPlainPath $InstallRoot
+$previousDirectory = $null
+$pointerPath = Join-TscmOwnedPath $rootPath 'current-install.json'
+if (Test-Path -LiteralPath $pointerPath -PathType Leaf) {
+    $previousRecord = [IO.File]::ReadAllText($pointerPath) | ConvertFrom-Json
+    if ($previousRecord.PSObject.Properties['modernMenu'] -and $previousRecord.modernMenu) {
+        if ($NoRegister) { throw 'This installation has the modern menu enabled; -NoRegister would leave the old version active. Use a separate portable installation root.' }
+        $previousDirectory = Assert-TscmPlainPath $previousRecord.versionDirectory
+        if ([IO.Path]::GetDirectoryName($previousDirectory) -ne (Join-TscmOwnedPath $rootPath 'versions')) { throw 'Invalid prior modern installation ownership.' }
+        $EnableModernMenu = $true
+    }
+}
+if ($EnableModernMenu) { Assert-TscmModernSupport; Assert-TscmModernFiles $package | Out-Null }
 if ($rootPath -eq [IO.Path]::GetPathRoot($rootPath) -or $rootPath -eq [Environment]::GetFolderPath('UserProfile') -or
     ($rootPath -split '[\\/]') -contains '.plastic') { throw 'Choose a dedicated application installation root.' }
 $packageHash = (Get-FileHash -LiteralPath (Join-Path $package 'package-manifest.json') -Algorithm SHA256).Hash
@@ -23,7 +38,7 @@ $target = Join-TscmOwnedPath $rootPath ('versions\' + $id)
 if (-not $PSCmdlet.ShouldProcess($target, 'Copy verified package to a new version directory and register TortoiseSCM')) { return }
 if (Test-Path -LiteralPath $target) { throw 'The new version directory already exists. Nothing was overwritten.' }
 $copied = New-Object 'Collections.Generic.List[string]'
-$snapshot = @(); $registrationAttempted = $false
+$snapshot = @(); $registrationAttempted = $false; $modernAttempted = $false; $modernSnapshot = $null
 [IO.Directory]::CreateDirectory($target) | Out-Null
 try {
     foreach ($entry in $manifest.files) {
@@ -36,7 +51,7 @@ try {
     [IO.File]::Copy((Join-Path $package 'package-manifest.json'), $manifestTarget, $false); $copied.Add($manifestTarget)
     Read-TscmManifest $target -VerifyFiles | Out-Null
     $record = [ordered]@{ schemaVersion = 1; product = 'TortoiseSCM'; installRoot = $rootPath; versionDirectory = $target;
-        packageManifestSha256 = $packageHash; registered = -not $NoRegister; machineOverlays = [bool]$EnableMachineOverlays; installedUtc = [DateTime]::UtcNow.ToString('o') }
+        packageManifestSha256 = $packageHash; registered = -not $NoRegister; machineOverlays = [bool]$EnableMachineOverlays; modernMenu = [bool]$EnableModernMenu; installedUtc = [DateTime]::UtcNow.ToString('o') }
     $recordPath = Join-TscmOwnedPath $target '.tortoisescm-install.json'
     Write-TscmJson $recordPath $record; $copied.Add($recordPath)
     if (-not $NoRegister) {
@@ -44,12 +59,22 @@ try {
         $registrationAttempted = $true
         & (Join-Path $target 'Register-Shell.ps1') -BinaryDirectory $target -EnableMachineOverlays:$EnableMachineOverlays | Write-Verbose
     }
+    if ($EnableModernMenu) {
+        $modernSnapshot = Get-TscmModernRegistration
+        $modernAttempted = $true
+        Register-TscmModernMenu $target $previousDirectory | Out-Null
+    }
     # Publish the active version only after registration succeeds. Older version files
     # stay intact because Explorer may still have their DLL loaded.
     Write-TscmJson (Join-TscmOwnedPath $rootPath 'current-install.json') $record
-    [pscustomobject]@{ version = $manifest.version; versionDirectory = $target; registered = -not $NoRegister; machineOverlays = [bool]$EnableMachineOverlays }
+    [pscustomobject]@{ version = $manifest.version; versionDirectory = $target; registered = -not $NoRegister; machineOverlays = [bool]$EnableMachineOverlays; modernMenu = [bool]$EnableModernMenu }
 } catch {
     $failure = $_
+    $rollbackFailures = New-Object 'Collections.Generic.List[string]'
+    if ($modernAttempted) {
+        try { Restore-TscmModernRegistration $modernSnapshot $target }
+        catch { $rollbackFailures.Add("Modern menu rollback failed: $_") }
+    }
     if ($registrationAttempted) {
         try {
             if ($EnableMachineOverlays) {
@@ -69,8 +94,9 @@ try {
                 }
             }
         }
-        catch { throw "Installation failed: $failure. Registration rollback also failed: $_. Keep $target for recovery." }
+        catch { $rollbackFailures.Add("Classic registration rollback failed: $_") }
     }
+    if ($rollbackFailures.Count) { throw "Installation failed: $failure. $($rollbackFailures -join ' ') Keep $target for recovery." }
     # Only paths copied by this invocation are removed; never recursively remove an
     # installation root, previous version, user-added file, settings or workspace.
     foreach ($file in $copied) {

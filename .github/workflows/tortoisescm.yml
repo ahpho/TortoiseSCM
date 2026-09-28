@@ -43,6 +43,8 @@ jobs:
         run: .\build-tortoisescm.ps1 -Configuration Release -Test
       - name: Verify portable package and isolated installation
         run: .\test\TortoiseSCM\PackageTests.ps1
+      - name: Verify modern menu package and registration rollback
+        run: .\test\TortoiseSCM\ModernPackageTests.ps1
       - name: Create portable package
         run: .\contrib\tortoisescm\Package.ps1 -Version "0.1.0-ci-$env:GITHUB_RUN_NUMBER"
       - name: Upload portable package

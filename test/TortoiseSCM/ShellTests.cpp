@@ -4,6 +4,7 @@
 #include <fstream>
 #include <cassert>
 #include <chrono>
+#include <algorithm>
 
 class Selection : public IDataObject {
     std::vector<std::wstring> entries;
@@ -213,7 +214,11 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     context->Release(); initialize->Release();
 }
 
+#include "ModernShellTests.h"
+
 int wmain(int argc, wchar_t** argv) {
+    const int recorder = ModernHandoffRecorder(argc, argv);
+    if (recorder >= 0) return recorder;
     if (argc == 4 && wcscmp(argv[1], L"--overlay-probe") == 0)
     {
         const int expected = _wtoi(argv[3]);
@@ -222,7 +227,9 @@ int wmain(int argc, wchar_t** argv) {
         RegisteredOverlayProbe(argv[2], expected); CoUninitialize(); return 0;
     }
     const bool registered = argc == 2 && wcscmp(argv[1], L"--registered") == 0;
-    if (argc > 1 && !registered) { std::cerr << "Usage: ShellTests.exe [--registered | --overlay-probe <path> <state 0..8>]\n"; return 2; }
+    const bool modernRegistered = argc == 3 && wcscmp(argv[1], L"--modern-registered") == 0;
+    const bool modernDll = argc == 3 && wcscmp(argv[1], L"--modern-dll") == 0;
+    if (argc > 1 && !registered && !modernRegistered && !modernDll) { std::cerr << "Usage: ShellTests.exe [--registered | --modern-registered <binary-directory> | --modern-dll <binary-directory> | --overlay-probe <path> <state 0..8>]\n"; return 2; }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     auto base = std::filesystem::temp_directory_path() / (L"TortoiseSCMShellTest-" + std::to_wstring(GetCurrentProcessId()));
     std::filesystem::create_directories(base / L"first/.plastic");
@@ -233,11 +240,18 @@ int wmain(int argc, wchar_t** argv) {
     std::ofstream(base / L"first/child/file.txt") << "test";
     std::ofstream(base / L"first/child/second.txt") << "test";
     auto first = base / L"first", second = base / L"second";
-    if (registered)
+    if (modernRegistered || modernDll)
+    {
+        ModernShellTests(first, second, argv[2], modernDll);
+        if (modernDll) ModernHandoffTest(first, argv[2]);
+    }
+    else if (registered)
         RegisteredSmoke(first, second);
     else
     {
     OverlayTests(base);
+    ModernShellTests(first, second);
+    require(DllCanUnloadNow() == S_OK, "modern commands enumerators and sites release module references");
     require(WorkspaceRoot((first / L"child/file.txt").native()) == first.native(), "nested file workspace");
     require(WorkspaceRoot((first / L".plastic/plastic.workspace").native()).empty(), "metadata excluded");
     require(WorkspaceRoot(base.native()).empty(), "outside workspace excluded");

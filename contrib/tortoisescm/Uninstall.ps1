@@ -7,6 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Package.Common.ps1')
+. (Join-Path $PSScriptRoot 'ModernMenu.Common.ps1')
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell to uninstall TortoiseSCM.' }
 if ($RemoveMachineOverlays -and -not (Test-TscmAdministrator)) { throw 'Machine overlays require elevated PowerShell. No files or registration were changed.' }
 $installationMutex = Enter-TscmInstallMutex
@@ -28,7 +29,21 @@ if ($record.schemaVersion -ne 1 -or $record.product -ne 'TortoiseSCM' -or $recor
 $manifest = Read-TscmManifest $target
 if ($record.registered -and $NoUnregister) { throw 'A registered installation must be unregistered before its binaries can be removed.' }
 if ($record.machineOverlays -and -not $RemoveMachineOverlays) { throw 'This installation owns machine overlays. Rerun elevated with -RemoveMachineOverlays so its DLL is not removed while registered.' }
+if ($record.registered) {
+    $unregister = $manifest.files | Where-Object path -eq 'Unregister-Shell.ps1'
+    if ((Get-FileHash -LiteralPath (Join-Path $target $unregister.path) -Algorithm SHA256).Hash -ne $unregister.sha256) { throw 'Unregister script was changed. Nothing was removed.' }
+}
 if (-not $PSCmdlet.ShouldProcess($target, 'Unregister this exact version and remove unchanged package-owned files')) { return }
+$ownsModern = $record.PSObject.Properties['modernMenu'] -and $record.modernMenu
+$actualModern = if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) { Get-TscmModernRegistration } else { $null }
+if ($ownsModern -or ($actualModern -and $actualModern.binaryDirectory -eq $target)) {
+    if ($NoUnregister -and $actualModern -and $actualModern.binaryDirectory -eq $target) { throw 'This directory has an active modern menu. Omit -NoUnregister before removing its binaries.' }
+    foreach ($name in @('ModernMenu.Common.ps1', 'Unregister-ModernShell.ps1')) {
+        $entry = @($manifest.files | Where-Object path -EQ $name)
+        if ($entry.Count -ne 1 -or (Get-FileHash -LiteralPath (Join-Path $target $name) -Algorithm SHA256).Hash -ne $entry[0].sha256) { throw 'Modern unregister component was changed. Nothing was removed.' }
+    }
+    Remove-TscmModernRegistration $target | Out-Null
+}
 if ($record.registered) {
     # Verify the script before executing it; other modified files are preserved below.
     $unregister = $manifest.files | Where-Object path -eq 'Unregister-Shell.ps1'
@@ -37,7 +52,7 @@ if ($record.registered) {
 }
 $retained = New-Object 'Collections.Generic.List[string]'
 # Keep installer metadata and scripts when a loaded/modified product file needs a later retry.
-$deferred = @('Uninstall.ps1', 'Package.Common.ps1', 'Unregister-Shell.ps1')
+$deferred = @('Uninstall.ps1', 'Package.Common.ps1', 'Unregister-Shell.ps1', 'ModernMenu.Common.ps1', 'Unregister-ModernShell.ps1')
 foreach ($entry in $manifest.files | Where-Object { $_.path -notin $deferred }) {
     $file = Join-TscmOwnedPath $target $entry.path
     if (-not (Test-Path -LiteralPath $file)) { continue }

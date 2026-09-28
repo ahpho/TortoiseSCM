@@ -1,0 +1,20 @@
+Windows 11 modern Explorer command / unsigned preview milestone, 2026-09-28
+Native implementation: IExplorerCommand + IObjectWithSite + enumerator, dedicated DB CLSID; shares classic commands/filters/launcher.
+Native private validation: 321 source assertions + 203 production DLL assertions, exit 0.
+Production DLL SHA256: 1F4A07730A9AC70A1A3A86267E20B43B358EF1D2A9D2BD101AF9FDA0766E269B
+Actual process handoff: copied test recorder receives status command and exact fresh Chinese/space/ampersand UTF-8 pathfile from production DLL Invoke; temporary process exits.
+Package tests: 44 assertions, exit 0. Modern package tests: 27 assertions, exit 0. Tests verify real package contents, mock Appx OS boundary for registration lifecycle.
+Real non-admin install preflight: 4 assertions, exit 0; no files, version pointer, classic registry or Appx registration changed.
+Package: bin/TortoiseSCM/packages/TortoiseSCM-0.2.0-modern-menu-preview-20260928-windows-x64.zip
+Package SHA256: F734FFE30C7097A676387C2C38FF45D81CFE30A6C5BEEA822F5265297132FEFA
+Artifact record: bin/TortoiseSCM/qa/modern-menu-artifact-record.json (package constructed from milestone working tree before commit).
+Host: Windows 11 build 26200, non-administrator.
+Real unsigned sparse deployment failed 0x80073D2B: executable activation prohibited in unsigned package in current session. ActivityId 2997b294-49ca-000b-0df3-fc39ca49dd01.
+Independent loose-manifest LocalTest registration failed 0x80073CFF: developer/sideload policy unavailable. ActivityId 2997b294-49ca-000b-d45f-fd39ca49dd01.
+No task Appx package remains installed. No certificates or developer/security settings changed; existing classic install unchanged.
+Computer-use native pipe unavailable after prescribed lightweight retry and kernel reset. No Explorer desktop click/screenshot verification performed.
+IMPORTANT: Production DLL tests load DllGetClassObject directly. They do not establish successful packaged surrogate activation or visible modern menu. --modern-registered probe provided for a deployment-capable machine.
+Logs: bin/TortoiseSCM/qa/modern-menu-full-build.log, modern-menu-package-final.log, modern-menu-lifecycle-final.log, modern-menu-preflight-final.log; modern-shell-agent/test-results.txt and production-results.txt.
+Final build-tortoisescm.ps1 -Configuration Release -Test: exit 0. All Core suites, 2068 CLI + 5 blame CLI + 21 shelveset content CLI + 21 repository browser CLI, 524 native Shell PASS lines (321 + 203), and full local WinForms suite passed.
+Deferred: trusted signing / production distribution, real packaged activation and Explorer modern-menu rendering acceptance.
+Original TestSCM remains clean on /main; no server writes were needed for this milestone.

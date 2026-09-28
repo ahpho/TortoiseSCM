@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <wrl/client.h>
 #include <strsafe.h>
 #include <atomic>
 #include <filesystem>
@@ -17,6 +18,7 @@
 namespace
 {
 constexpr CLSID ShellClsid = {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd2}};
+constexpr CLSID ExplorerCommandClsid = {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xdb}};
 constexpr CLSID OverlayClsids[] = {
     {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd3}},
     {0xb1da45f9, 0x4cd4, 0x4857, {0xa5, 0x91, 0x96, 0xb0, 0x69, 0x53, 0xa0, 0xd4}},
@@ -56,6 +58,19 @@ constexpr Command commands[] = {
 const wchar_t* Label(const Command& command)
 {
     return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? command.chineseLabel : command.label;
+}
+
+bool CommandVisible(size_t index, const std::vector<std::wstring>& paths)
+{
+    if (index >= ARRAYSIZE(commands) || paths.empty()) return false;
+    const bool singlePathOnly = index == 6 || index == 7 || index >= 10;
+    if (singlePathOnly && paths.size() != 1) return false;
+    if (index == 6 || wcscmp(commands[index].name, L"blame") == 0)
+    {
+        const DWORD attributes = GetFileAttributesW(paths.front().c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) return false;
+    }
+    return true;
 }
 
 std::wstring WorkspaceRoot(const std::wstring& input)
@@ -252,9 +267,7 @@ public:
                 // Path-specific dialogs are intentionally limited to one item.
                 // This keeps move/remove/ignore and history actions safe for
                 // Explorer multi-selection while retaining the full GUI flow.
-                const bool singlePathOnly = index == 6 || index == 7 || index >= 10;
-                if (((index == 6 || wcscmp(commands[index].name, L"blame") == 0) && (paths.size() != 1 || (GetFileAttributesW(paths.front().c_str()) & FILE_ATTRIBUTE_DIRECTORY))) ||
-                    (singlePathOnly && paths.size() != 1)) continue;
+                if (!CommandVisible(index, paths)) continue;
                 if (visibleCommands.size() > last - first) break;
                 if (!AppendMenuW(submenu, MF_STRING, first + visibleCommands.size(), Label(commands[index]))) { DestroyMenu(submenu); return E_FAIL; }
                 visibleCommands.push_back(index);
@@ -311,6 +324,8 @@ public:
         catch (...) { return E_FAIL; }
     }
 };
+
+#include "PlasticExplorerCommand.h"
 
 class Overlay final : public IShellIconOverlayIdentifier
 {
@@ -376,8 +391,9 @@ class Factory final : public IClassFactory
 {
     std::atomic<ULONG> references{1};
     const PlasticOverlay::State overlayState;
+    const bool modern;
 public:
-    explicit Factory(PlasticOverlay::State state = PlasticOverlay::None) : overlayState(state) { ++moduleReferences; }
+    explicit Factory(PlasticOverlay::State state = PlasticOverlay::None, bool explorer = false) : overlayState(state), modern(explorer) { ++moduleReferences; }
     ~Factory() { --moduleReferences; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** output) override
     {
@@ -393,6 +409,12 @@ public:
         if (!output) return E_POINTER;
         *output = nullptr;
         if (outer) return CLASS_E_NOAGGREGATION;
+        if (modern)
+        {
+            auto command = new (std::nothrow) PlasticExplorerCommand;
+            if (!command) return E_OUTOFMEMORY;
+            const HRESULT result = command->QueryInterface(iid, output); command->Release(); return result;
+        }
         if (overlayState != PlasticOverlay::None)
         {
             auto overlay = new (std::nothrow) Overlay(overlayState);
@@ -418,13 +440,13 @@ extern "C" HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** o
     if (!output) return E_POINTER;
     *output = nullptr;
     PlasticOverlay::State state = PlasticOverlay::None;
-    if (clsid != ShellClsid)
+    if (clsid != ShellClsid && clsid != ExplorerCommandClsid)
     {
         for (size_t i = 0; i < ARRAYSIZE(OverlayClsids); ++i)
             if (clsid == OverlayClsids[i]) state = static_cast<PlasticOverlay::State>(i + 1);
         if (state == PlasticOverlay::None) return CLASS_E_CLASSNOTAVAILABLE;
     }
-    auto factory = new (std::nothrow) Factory(state);
+    auto factory = new (std::nothrow) Factory(state, clsid == ExplorerCommandClsid);
     if (!factory) return E_OUTOFMEMORY;
     const HRESULT result = factory->QueryInterface(iid, output); factory->Release(); return result;
 }
