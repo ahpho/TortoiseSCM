@@ -19,6 +19,7 @@ namespace TortoiseSCM
         private PlasticWorkspace workspace;
         private readonly ListView files = new ListView();
         private readonly TextBox comment = new TextBox();
+        private readonly Button messageLibrary = DialogStyle.Button("说明历史 / 模板…");
         private readonly TextBox output = new TextBox();
         private readonly Button actions = new Button();
         private readonly Label status = new Label();
@@ -38,6 +39,9 @@ namespace TortoiseSCM
         private Func<PlasticCheckinPreview, string, CancellationToken, Task<PlasticCommandResult>> submitCheckin;
         private Func<PlasticCheckinPreview, string, bool, DialogResult> reviewCheckin;
         private Action<string> reportError;
+        private CommitMessageStore messageStore = CommitMessageStore.CreateDefault();
+        private Func<string, string, string> showMessageLibrary;
+        private Func<string, bool> confirmMessageReplacement;
 
         public MainForm(LaunchRequest request) : this(request, true) { }
 
@@ -51,6 +55,13 @@ namespace TortoiseSCM
                 using (var dialog = new CheckinReviewForm(preview, message, uncertain)) return dialog.ShowDialog(this);
             };
             reportError = message => MessageBox.Show(this, message, "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            showMessageLibrary = (repository, draft) => {
+                using (var dialog = new CommitMessageLibraryForm(messageStore, repository, draft))
+                    return dialog.ShowDialog(this) == DialogResult.OK ? dialog.SelectedMessage : null;
+            };
+            confirmMessageReplacement = message => MessageBox.Show(this, "当前提交说明已有内容。使用所选说明替换全部现有内容？",
+                "替换提交说明 - TortoiseSCM", MessageBoxButtons.OKCancel, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2) == DialogResult.OK;
             Text = "TortoiseSCM — 待定更改";
             DialogStyle.Apply(this);
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -94,7 +105,17 @@ namespace TortoiseSCM
             comment.ScrollBars = ScrollBars.Vertical;
             comment.Dock = DockStyle.Fill;
             comment.AccessibleName = "签入说明";
-            messageGroup.Controls.Add(comment);
+            comment.MaxLength = CommitMessageStore.MaxMessageLength;
+            var messageLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+            messageLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            messageLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            messageLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var messageTools = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
+            messageLibrary.Width = 160; messageLibrary.Dock = DockStyle.Right; messageLibrary.Enabled = false;
+            messageLibrary.Click += delegate { OpenMessageLibrary(); };
+            messageTools.Controls.Add(messageLibrary);
+            messageLayout.Controls.Add(messageTools, 0, 0); messageLayout.Controls.Add(comment, 0, 1);
+            messageGroup.Controls.Add(messageLayout);
             split.Panel1.Controls.Add(messageGroup);
 
             var changesGroup = new GroupBox { Text = "更改的文件", Dock = DockStyle.Fill, Padding = new Padding(8, 6, 8, 8) };
@@ -239,6 +260,23 @@ namespace TortoiseSCM
             CancelButton = close;
             output.Multiline = true;
             output.ReadOnly = true;
+        }
+
+        private void OpenMessageLibrary()
+        {
+            if (busy || !loaded) return;
+            try {
+                ValidatePendingContext();
+                string selected = showMessageLibrary(workspace.Repository, comment.Text);
+                if (selected == null) return;
+                ValidatePendingContext();
+                if (String.IsNullOrWhiteSpace(selected) || selected.Length > CommitMessageStore.MaxMessageLength)
+                    throw new InvalidOperationException("所选提交说明无效，请重新选择。");
+                if (comment.Text.Length != 0 && comment.Text != selected && !confirmMessageReplacement(selected)) return;
+                ValidatePendingContext();
+                comment.Text = selected; comment.Focus(); comment.SelectionStart = comment.TextLength;
+            }
+            catch (Exception ex) { AppendOutput(ex.Message); reportError("无法使用提交说明：" + ex.Message); }
         }
 
         private void AddSelectionLink(FlowLayoutPanel panel, string text, Func<PlasticStatusItem, bool> predicate)
@@ -587,10 +625,12 @@ namespace TortoiseSCM
             var paths = (explicitPaths ?? SelectedPaths(false, false).Where(path => !coveredPrivate.Contains(path)).ToList()).ToArray();
             if (paths.Length == 0) { reportError("请先勾选要提交的项。"); return; }
             string message = comment.Text;
+            string messageRepository = workspace.Repository;
             if (String.IsNullOrWhiteSpace(message)) { reportError("请填写签入说明。"); comment.Focus(); return; }
             if (explicitPaths == null && selectedRows.Any(row => IsPrivate(row.StatusCode) && !coveredPrivate.Contains(row.Path)))
             { reportError("请先将私有项加入版本控制，再提交。"); return; }
             bool dispatched = false, succeeded = false;
+            string historyWarning = null;
             SetBusy(true, "正在准备提交范围与内容预览…");
             try
             {
@@ -608,6 +648,13 @@ namespace TortoiseSCM
                 if (!succeeded) throw new InvalidOperationException("签入未确认。说明和勾选已保留；请先刷新状态并查看历史核对服务器结果。\r\n" + result.Error);
                 comment.Clear(); submissionUncertain = submissionNeedsRefresh = false;
                 submissionNotice = "签入成功。";
+                // Local history is optional: its failure must never turn an accepted
+                // server check-in into an uncertain write or invite a duplicate retry.
+                try { messageStore.RecordSuccess(messageRepository, message); }
+                catch (Exception ex) {
+                    historyWarning = "签入成功，但本机说明历史未保存；无需重新提交。";
+                    AppendOutput(historyWarning + " " + ex.Message);
+                }
                 foreach (string path in paths) SHChangeNotify(0x00002000, 0x0005, path, IntPtr.Zero);
             }
             catch (Exception ex)
@@ -619,7 +666,13 @@ namespace TortoiseSCM
             }
             finally { SetBusy(false, submissionNotice); UpdateSelectionCount(); }
             // A failed/uncertain write never refreshes away the user's reviewed selection.
-            if (succeeded) await RefreshAsync();
+            if (succeeded) {
+                bool refreshed = await RefreshAsync();
+                if (historyWarning != null) {
+                    submissionNotice = historyWarning;
+                    if (refreshed) UpdateSelectionCount(); else status.Text += " " + historyWarning;
+                }
+            }
         }
 
         private async Task ExecuteAsync(PlasticCommand command, List<string> explicitPaths)
@@ -703,6 +756,7 @@ namespace TortoiseSCM
             checkin.Enabled = !value && loaded && !submissionNeedsRefresh;
             files.Enabled = !value;
             comment.Enabled = !value;
+            messageLibrary.Enabled = !value && loaded;
             selectAll.Enabled = selectNone.Enabled = !value;
             progress.Visible = value;
             status.Text = text;

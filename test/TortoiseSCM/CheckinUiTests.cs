@@ -79,6 +79,7 @@ namespace TortoiseSCM
         {
             using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root }), false))
             {
+                Set(form, "messageStore", new CommitMessageStore(Path.Combine(root, "message-history")));
                 Set(form, "client", client); Set(form, "workspace", client.DiscoverWorkspace(root)); Set(form, "loaded", true);
                 var list = Field<ListView>(form, "files");
                 foreach (PlasticStatusItem item in rows)
@@ -122,6 +123,7 @@ namespace TortoiseSCM
         {
             using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root }), false))
             {
+                Set(form, "messageStore", new CommitMessageStore(Path.Combine(root, "message-history")));
                 Set(form, "client", client); Set(form, "workspace", client.DiscoverWorkspace(root)); Set(form, "loaded", true);
                 var list = Field<ListView>(form, "files");
                 foreach (PlasticStatusItem item in rows)
@@ -154,6 +156,7 @@ namespace TortoiseSCM
 
             using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root }), false))
             {
+                Set(form, "messageStore", new CommitMessageStore(Path.Combine(root, "message-history")));
                 Set(form, "client", client); Set(form, "workspace", client.DiscoverWorkspace(root)); Set(form, "loaded", true);
                 var list = Field<ListView>(form, "files");
                 foreach (PlasticStatusItem item in rows) list.Items.Add(new ListViewItem(item.Path) { Tag = item, Checked = item.IsDirectory || item.Path.EndsWith("a.txt", StringComparison.OrdinalIgnoreCase) });
@@ -200,6 +203,7 @@ namespace TortoiseSCM
         {
             using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root }), false))
             {
+                Set(form, "messageStore", new CommitMessageStore(Path.Combine(root, "message-history")));
                 Set(form, "client", client); Set(form, "workspace", client.DiscoverWorkspace(root)); Set(form, "loaded", true);
                 var list = Field<ListView>(form, "files");
                 Set(form, "changingChecks", true);

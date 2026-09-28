@@ -91,6 +91,7 @@ namespace TortoiseSCM
                 BeyondCompareSettingsUiTests.Run(artifacts);
                 HistoricalBeyondCompareUiTests.Run(artifacts);
                 CheckinUiTests.Run(artifacts);
+                CommitMessageUiTests.Run(artifacts);
                 BranchRenameUiTests.Run(artifacts);
                 BranchDeleteUiTests.Run(artifacts);
                 PartialBranchSwitchUiTests.Run(artifacts);

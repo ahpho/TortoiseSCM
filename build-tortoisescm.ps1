@@ -35,7 +35,7 @@ if ($Test -or $Integration) {
     if ($LASTEXITCODE -ne 0) { throw 'Revision test compilation failed.' }
     & $revisionOutput
     if ($LASTEXITCODE -ne 0) { throw 'Revision tests failed.' }
-    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'WorkingBeyondCompareTests', 'ShelveBeyondCompareTests', 'HistoricalBeyondCompareTests', 'CheckinPreflightTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchRenameTests', 'BranchDeleteTests', 'PartialBranchSwitchTests', 'PartialBranchSwitchPreviewTests', 'PartialBranchSwitchScaleTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
+    foreach ($suite in @('TextComparisonTests', 'TextMergePlanTests', 'BuiltInToolTests', 'BeyondCompareTests', 'BeyondCompareProcessTests', 'WorkingBeyondCompareTests', 'ShelveBeyondCompareTests', 'HistoricalBeyondCompareTests', 'CheckinPreflightTests', 'CommitMessageStoreTests', 'WorkspaceRollbackTests', 'FileOperationTests', 'HistoricalFileTests', 'RepositoryBrowserTests', 'ChangesetComparisonTests', 'BranchTests', 'BranchRenameTests', 'BranchDeleteTests', 'PartialBranchSwitchTests', 'PartialBranchSwitchPreviewTests', 'PartialBranchSwitchScaleTests', 'BranchHierarchyTests', 'LabelTests', 'RevisionGraphTests', 'ShelvesTests', 'BlameTests', 'LockTests', 'MergeTests', 'DirectoryMergeTests', 'OverlayTests', 'HistoryTests')) {
         $suiteOutput = Join-Path $out "$suite.exe"
         $suiteSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
         $suiteSources += Join-Path $PSScriptRoot "test\TortoiseSCM\$suite.cs"
@@ -93,6 +93,7 @@ if ($Test -or $Integration) {
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BeyondCompareSettingsUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\HistoricalBeyondCompareUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CheckinUiTests.cs'
+    $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CommitMessageUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchRenameUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\BranchDeleteUiTests.cs'
     $uiSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\PartialBranchSwitchUiTests.cs'
@@ -170,6 +171,17 @@ if ($Test -or $Integration) {
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-checkin-preflight.txt'), $checkinManifest)
         & $checkinOutput $checkinManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
         if ($LASTEXITCODE -ne 0) { throw "Checkin preflight integration failed. Inspect $checkinManifest." }
+        $messageOutput = Join-Path $out 'CommitMessageIntegrationTests.exe'
+        $messageSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM') -Filter '*.cs' | ForEach-Object FullName)
+        $messageSources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src\TortoiseSCM\Core') -Filter '*.cs' | ForEach-Object FullName)
+        $messageSources += Join-Path $PSScriptRoot 'test\TortoiseSCM\CommitMessageIntegrationTests.cs'
+        & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /main:CommitMessageIntegrationTests /r:System.Xml.Linq.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$messageOutput" $messageSources
+        if ($LASTEXITCODE -ne 0) { throw 'Commit message integration compilation failed.' }
+        $messageManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
+        if (-not $messageManifest -or -not (Test-Path -LiteralPath $messageManifest)) { throw 'Commit message fixture setup failed.' }
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-commit-messages.txt'), $messageManifest)
+        & $messageOutput $messageManifest 'D:\Program Files\PlasticSCM5\client\cm.exe'
+        if ($LASTEXITCODE -ne 0) { throw "Commit message integration failed. Inspect $messageManifest." }
         $comparisonManifest = & (Join-Path $PSScriptRoot 'test\TortoiseSCM\New-TestWorkspace.ps1') @setupArguments
         if (-not $comparisonManifest -or -not (Test-Path -LiteralPath $comparisonManifest)) { throw 'Changeset comparison setup did not produce a manifest.' }
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'bin\TortoiseSCM\qa\latest-comparison.txt'), $comparisonManifest)
