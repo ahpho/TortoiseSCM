@@ -23,6 +23,7 @@ namespace TortoiseSCM
         private readonly TextBox description = new TextBox();
         private readonly Label status = new Label();
         private readonly Label historySummary = new Label();
+        private readonly ProgressBar historyProgress = new ProgressBar();
         private readonly Button refreshHistory = new Button();
         private readonly Button cancelHistory = new Button();
         private readonly Button restore = new Button();
@@ -218,6 +219,13 @@ namespace TortoiseSCM
                 if (detailRequest != null) detailRequest.Cancel();
                 status.Text = "已取消加载；已加载历史保留，可重试。";
             };
+            historyProgress.Style = ProgressBarStyle.Marquee;
+            historyProgress.MarqueeAnimationSpeed = 30;
+            historyProgress.Width = 118;
+            historyProgress.Dock = DockStyle.Right;
+            historyProgress.Margin = new Padding(4, 6, 4, 6);
+            historyProgress.Visible = false;
+            historyNavigation.Controls.Add(historyProgress);
             paging.Controls.Add(refreshHistory); paging.Controls.Add(cancelHistory);
             historyNavigation.Controls.Add(paging);
             snapshot.Text = "切换历史快照…";
@@ -237,7 +245,8 @@ namespace TortoiseSCM
             normalRevisionFont = new Font(revisions.Font, FontStyle.Regular);
             notLoadedFont = new Font(normalRevisionFont, FontStyle.Bold);
             revisions.ShowItemToolTips = true;
-            revisions.LostFocus += delegate { foreach (ListViewItem row in revisions.Items) ApplyLocalRowStyle(row); revisions.Invalidate(); };
+            // Row fonts are applied when local-state work completes. Reapplying
+            // them on focus changes causes ListView to repaint stale bold state.
             Shown += async delegate { await LoadHistoryPageAsync(true); };
             Activated += async delegate
             {
@@ -268,6 +277,7 @@ namespace TortoiseSCM
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             historyRequest = cancellation;
             refreshHistory.Enabled = false; cancelHistory.Enabled = true;
+            historyProgress.Visible = true;
             status.Text = "正在读取全部历史；可随时取消…";
             // During refresh retain old rows alongside completed batches; on failure
             // restore the previous result. Native hints never establish completeness.
@@ -368,6 +378,7 @@ namespace TortoiseSCM
             finally
             {
                 historyRequest = null; cancellation.Dispose();
+                historyProgress.Visible = false;
                 if (!lifetime.IsCancellationRequested)
                 {
                     refreshHistory.Enabled = !writing; cancelHistory.Enabled = false;
