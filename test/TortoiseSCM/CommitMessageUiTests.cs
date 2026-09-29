@@ -93,9 +93,16 @@ namespace TortoiseSCM
             }
             store.RecordSuccess(Repository, message);
             using (var form = new CommitMessageLibraryForm(store, Repository, "draft")) {
-                form.Show(); Application.DoEvents(); Field<ListBox>(form, "recent").SelectedIndex = 0;
-                Field<Button>(form, "use").PerformClick();
-                Require(form.DialogResult == DialogResult.OK && form.SelectedMessage == message, "Explicit Use returns complete recent success");
+                form.Show(); Application.DoEvents(); var recent = Field<ListBox>(form, "recent"); recent.SelectedIndex = 0;
+                DoubleClick(recent);
+                Require(form.DialogResult == DialogResult.OK && form.SelectedMessage == message, "Double-clicking recent history uses the complete message");
+            }
+            using (var form = new CommitMessageLibraryForm(store, Repository, "draft")) {
+                form.Show(); Application.DoEvents(); Field<TabControl>(form, "tabs").SelectedIndex = 1;
+                var templates = Field<ListBox>(form, "templates"); templates.SelectedIndex = 0;
+                string templateText = Field<TextBox>(form, "templateText").Text;
+                DoubleClick(templates);
+                Require(form.DialogResult == DialogResult.OK && form.SelectedMessage == templateText, "Double-clicking a template uses its complete message");
             }
             using (var form = new CommitMessageLibraryForm(store, Repository, "draft")) {
                 form.Show(); Application.DoEvents(); Field<ListBox>(form, "recent").SelectedIndex = 0;
@@ -270,6 +277,8 @@ namespace TortoiseSCM
         private static IEnumerable<Control> Descendants(Control parent)
         { foreach (Control child in parent.Controls) { yield return child; foreach (Control nested in Descendants(child)) yield return nested; } }
         private static object Invoke(object target, string method, params object[] args) { return target.GetType().GetMethod(method, Flags).Invoke(target, args); }
+        private static void DoubleClick(Control control)
+        { typeof(Control).GetMethod("OnDoubleClick", Flags).Invoke(control, new object[] { EventArgs.Empty }); Application.DoEvents(); }
         private static T Field<T>(object target, string name) { return (T)target.GetType().GetField(name, Flags).GetValue(target); }
         private static void Set(object target, string name, object value) { target.GetType().GetField(name, Flags).SetValue(target, value); }
         private static void Require(bool value, string message) { if (!value) throw new Exception(message); assertions++; }

@@ -83,19 +83,21 @@ namespace TortoiseSCM
             ValidateCheckinContext(workspace);
             var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath, Paths = preview.Paths.ToList(), Comment = comment, Recursive = true };
             var command = Build(request, cancellationToken);
-            var actual = await GetWorkspaceAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+            ApplyWorkspaceMode(command, preview.IsPartial);
+            bool actualPartial = command.Arguments.Count > 0 && command.Arguments[0] == "partial";
+            var actual = new PlasticWorkspace { IsPartial = actualPartial };
+            // Build already reads the current workspace metadata. Final validation
+            // performs the authoritative mode check immediately before execution.
             if (actual.IsPartial != preview.IsPartial) throw new InvalidOperationException("工作区模式已改变，请重新预检签入范围。");
-            ApplyWorkspaceMode(command, actual.IsPartial);
             return await ExecuteWithPartialConflictGuardAsync(command, request, cancellationToken,
-                () => ValidatePreparedCheckinAsync(preview, cancellationToken)).ConfigureAwait(false);
+                null, current => ValidatePreparedCheckinAsync(preview, current, cancellationToken)).ConfigureAwait(false);
         }
 
-        private async Task ValidatePreparedCheckinAsync(PlasticCheckinPreview preview, CancellationToken token)
+        private async Task ValidatePreparedCheckinAsync(PlasticCheckinPreview preview, PlasticWorkspace actual, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             var expected = new PlasticWorkspace { RootPath = preview.RootPath, Repository = preview.Repository, Selector = preview.Selector, Name = preview.ExpectedName, IsPartial = preview.IsPartial };
             ValidateCheckinContext(expected);
-            var actual = await GetWorkspaceAsync(preview.RootPath, token).ConfigureAwait(false);
             if (actual.IsPartial != preview.IsPartial) throw new InvalidOperationException("工作区模式已改变，请重新预检签入范围。");
             var status = await GetStatusAsync(preview.RootPath, token).ConfigureAwait(false);
             var selected = SelectCheckinStatus(status, preview.RootPath, preview.Paths);

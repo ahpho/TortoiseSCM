@@ -90,6 +90,7 @@ namespace TortoiseSCM
             recent.SelectedIndexChanged += delegate {
                 recentText.Text = recent.SelectedIndex < 0 ? "" : library.Recent[recent.SelectedIndex]; UpdateButtons();
             };
+            recent.DoubleClick += delegate { UseMessage(); };
             ConfigureBody(recentText, "历史说明完整内容"); recentText.ReadOnly = true;
             layout.Controls.Add(recent, 0, 1); layout.Controls.Add(recentText, 0, 2); page.Controls.Add(layout); return page;
         }
@@ -112,6 +113,7 @@ namespace TortoiseSCM
                 }
                 UpdateButtons();
             };
+            templates.DoubleClick += delegate { UseMessage(); };
             layout.Controls.Add(templates, 0, 0);
             var nameRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
             nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));

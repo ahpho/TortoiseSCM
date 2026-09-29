@@ -54,9 +54,11 @@ namespace TortoiseSCM
             prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinAsync(root, paths, repository, selector, token);
             submitCheckin = (preview, message, token) => client.CheckinPreparedAsync(preview, message, token);
             runCommand = (commandRequest, token) => client.RunAsync(commandRequest, token);
-            reviewCheckin = (preview, message, uncertain) => {
-                using (var dialog = new CheckinReviewForm(preview, message, uncertain)) return dialog.ShowDialog(this);
-            };
+            // The preview is already shown in the main check-in window. Submit
+            // immediately after preflight; keep this delegate as a test seam so
+            // UI tests can still simulate a cancelled submission without opening
+            // a second confirmation dialog in production.
+            reviewCheckin = (preview, message, uncertain) => DialogResult.OK;
             reportError = message => MessageBox.Show(this, message, "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
             showMessageLibrary = (repository, draft) => {
                 using (var dialog = new CommitMessageLibraryForm(messageStore, repository, draft))
@@ -676,7 +678,7 @@ namespace TortoiseSCM
                 var preview = await prepareCheckin(workspace.RootPath, paths, workspace.Repository, workspace.Selector, CancellationToken.None);
                 if (reviewCheckin(preview, message, submissionUncertain) != DialogResult.OK) return;
                 ValidatePendingContext();
-                status.Text = "正在重新核对预览并签入…";
+                status.Text = "正在签入…";
                 AppendOutput("\r\n[" + DateTime.Now.ToString("HH:mm:ss") + "] 签入\r\n" + String.Join("\r\n", preview.Paths));
                 dispatched = true;
                 var result = await submitCheckin(preview, message, CancellationToken.None);

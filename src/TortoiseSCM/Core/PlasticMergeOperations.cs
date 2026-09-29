@@ -541,7 +541,8 @@ namespace TortoiseSCM
             return true;
         }
 
-        private async Task<PlasticCommandResult> ExecuteWithMergeGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken, Func<Task> beforeExecute = null)
+        private async Task<PlasticCommandResult> ExecuteWithMergeGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken,
+            Func<Task> beforeExecute = null, Func<PlasticWorkspace, Task> beforeExecuteWithWorkspace = null, PlasticWorkspace knownWorkspace = null)
         {
             if (request.Command != PlasticCommand.Checkin && request.Command != PlasticCommand.Undo)
             {
@@ -553,7 +554,8 @@ namespace TortoiseSCM
             {
                 if (request.Command == PlasticCommand.Checkin && File.Exists(Path.Combine(command.WorkingDirectory, ".plastic", "plastic.mergeprogress")))
                     throw new ArgumentException("This native merge has no session for the current client settings. Complete it in the client that started it; no checkin was performed.");
-                if (beforeExecute != null) await beforeExecute().ConfigureAwait(false);
+                if (beforeExecuteWithWorkspace != null) await beforeExecuteWithWorkspace(knownWorkspace).ConfigureAwait(false);
+                else if (beforeExecute != null) await beforeExecute().ConfigureAwait(false);
                 return await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
             }
             using (var gate = OpenMergeGate(command.WorkingDirectory))
@@ -575,7 +577,8 @@ namespace TortoiseSCM
                     if (request.Paths.Count != 1 || !SamePath(Path.GetFullPath(Path.IsPathRooted(request.Paths[0]) ? request.Paths[0] : Path.Combine(request.WorkingDirectory, request.Paths[0])), workspace.RootPath))
                         throw new ArgumentException("Check in the explicit workspace root to include the complete native merge.");
                 }
-                if (beforeExecute != null) await beforeExecute().ConfigureAwait(false);
+                if (beforeExecuteWithWorkspace != null) await beforeExecuteWithWorkspace(knownWorkspace).ConfigureAwait(false);
+                else if (beforeExecute != null) await beforeExecute().ConfigureAwait(false);
                 var result = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
                 if (result.Succeeded) await RetireCompletedMergeAsync(command.WorkingDirectory, cancellationToken).ConfigureAwait(false);
                 return result;
