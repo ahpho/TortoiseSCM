@@ -40,6 +40,7 @@ namespace TortoiseSCM
         private bool historyCompatibilityFallback;
         private string historyRepository;
         private Font notLoadedFont;
+        private Font normalRevisionFont;
         private PlasticHistoryLocalState localState;
         private readonly Dictionary<long, bool> notLoaded = new Dictionary<long, bool>();
         private readonly Dictionary<long, ListViewItem> revisionRows = new Dictionary<long, ListViewItem>();
@@ -233,8 +234,10 @@ namespace TortoiseSCM
             layout.Controls.Add(footer, 0, 4);
             Controls.Add(layout);
             DialogStyle.Apply(this);
-            notLoadedFont = new Font(revisions.Font, revisions.Font.Style | FontStyle.Bold);
+            normalRevisionFont = new Font(revisions.Font, FontStyle.Regular);
+            notLoadedFont = new Font(normalRevisionFont, FontStyle.Bold);
             revisions.ShowItemToolTips = true;
+            revisions.LostFocus += delegate { foreach (ListViewItem row in revisions.Items) ApplyLocalRowStyle(row); revisions.Invalidate(); };
             Shown += async delegate { await LoadHistoryPageAsync(true); };
             Activated += async delegate
             {
@@ -243,7 +246,7 @@ namespace TortoiseSCM
             };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (writing) e.Cancel = true; else lifetime.Cancel(); };
             FormClosed += delegate { if (detailRequest != null) detailRequest.Cancel(); };
-            Disposed += delegate { lifetime.Cancel(); if (detailRequest != null) detailRequest.Cancel(); notLoadedFont.Dispose(); };
+            Disposed += delegate { lifetime.Cancel(); if (detailRequest != null) detailRequest.Cancel(); if (notLoadedFont != null) notLoadedFont.Dispose(); if (normalRevisionFont != null) normalRevisionFont.Dispose(); };
         }
 
         private static void ConfigureList(ListView list, string name, string[] columns, int[] widths)
@@ -509,7 +512,7 @@ namespace TortoiseSCM
         {
             bool missing;
             bool known = notLoaded.TryGetValue(((PlasticHistoryItem)row.Tag).Changeset, out missing);
-            row.Font = known && missing ? notLoadedFont : revisions.Font;
+            row.Font = known && missing ? notLoadedFont : normalRevisionFont;
             row.ToolTipText = known ? (missing ? "当前更新范围内尚未拉取到本地" :
                 (localState != null && !localState.HeadAncestors.Contains(((PlasticHistoryItem)row.Tag).Changeset) ?
                     "不属于当前工作区的更新范围，无需拉取" : "已包含在本地加载版本中（当前范围）")) :
