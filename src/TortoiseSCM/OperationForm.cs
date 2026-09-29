@@ -23,6 +23,7 @@ namespace TortoiseSCM
         private readonly ListView files = new ListView();
         private readonly TextBox output = new TextBox();
         private readonly Label status = new Label();
+        private readonly Button checkoutAlternative = DialogStyle.Button("撤销签出");
         private readonly CheckBox selectAll = new CheckBox();
         private readonly Button execute = DialogStyle.Button("执行");
         private readonly Button refresh = DialogStyle.Button("刷新范围");
@@ -55,9 +56,12 @@ namespace TortoiseSCM
             layout.Controls.Add(files, 0, 2);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; layout.Controls.Add(status, 0, 3);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
-            execute.Text = CommandLabel(command); buttons.Controls.Add(close); buttons.Controls.Add(execute); buttons.Controls.Add(refresh);
+            execute.Text = CommandLabel(command); checkoutAlternative.Visible = false;
+            buttons.Controls.Add(close); buttons.Controls.Add(checkoutAlternative); buttons.Controls.Add(execute); buttons.Controls.Add(refresh);
             layout.Controls.Add(buttons, 0, 4); Controls.Add(layout);
-            execute.Click += async delegate { await ExecuteAsync(); }; refresh.Click += async delegate { await LoadScopeAsync(); };
+            execute.Click += async delegate { await ExecuteAsync(); };
+            checkoutAlternative.Click += async delegate { await ExecuteAsync(!checkoutCancellation); };
+            refresh.Click += async delegate { await LoadScopeAsync(); };
             selectAll.CheckStateChanged += delegate { ApplySelectAllState(); };
             close.Click += delegate { Close(); }; CancelButton = close; AcceptButton = close;
             Shown += async delegate { await LoadScopeAsync(); };
@@ -94,6 +98,8 @@ namespace TortoiseSCM
                 else if (candidates.Count == 0 && commandName == "undo") candidates = SelectedFallback(all, "所选路径");
                 checkoutCancellation = IsCheckout() && candidates.Count > 0 && candidates.All(item => item.StatusCode == "CO");
                 execute.Text = EffectiveLabel();
+                checkoutAlternative.Visible = IsCheckout();
+                checkoutAlternative.Text = checkoutCancellation ? CommandLabel(commandName) : "撤销签出";
                 Text = EffectiveLabel() + " - TortoiseSCM";
                 changingChecks = true;
                 try
@@ -138,13 +144,19 @@ namespace TortoiseSCM
         }
 
         private async Task ExecuteAsync()
+        { await ExecuteAsync(checkoutCancellation); }
+
+        private async Task ExecuteAsync(bool cancelCheckout)
         {
             if (busy || !ready) return;
-            var paths = files.CheckedItems.Cast<ListViewItem>().Select(item => ((PlasticStatusItem)item.Tag).Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            bool undo = commandName == "undo" || (IsCheckout() && cancelCheckout);
+            var paths = files.CheckedItems.Cast<ListViewItem>()
+                .Select(item => (PlasticStatusItem)item.Tag)
+                .Where(item => !undo || item.StatusCode == "CO")
+                .Select(item => item.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (IsRecursiveCheckout()) paths = CollapseRecursivePaths(paths);
             if (paths.Count == 0) { status.Text = "请先勾选要操作的文件。"; return; }
-            string label = EffectiveLabel();
-            bool undo = commandName == "undo" || checkoutCancellation;
+            string label = undo ? "撤销签出" : CommandLabel(commandName);
             string warning = undo ? "所选项的本地更改将丢失。\r\n" : "";
             if (paths.Any(Directory.Exists)) warning += "目录操作会包含其全部子项，包括没有单独勾选的子项。\r\n";
             if (MessageBox.Show(this, warning + String.Join("\r\n", paths.Take(12).ToArray()) +
@@ -156,7 +168,7 @@ namespace TortoiseSCM
             {
                 var workspace = client.DiscoverWorkspace(paths[0]);
                 if (workspace == null) throw new InvalidOperationException("工作区已改变，请刷新范围。");
-                var request = new PlasticCommandRequest { Command = Parse(commandName, checkoutCancellation), WorkingDirectory = workspace.RootPath,
+                var request = new PlasticCommandRequest { Command = Parse(commandName, undo), WorkingDirectory = workspace.RootPath,
                     Paths = paths, Recursive = commandName == "add" || commandName == "checkout-recursive" || undo };
                 output.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + label + Environment.NewLine + String.Join(Environment.NewLine, paths.ToArray()) + Environment.NewLine);
                 var result = await client.RunAsync(request, CancellationToken.None);
@@ -168,7 +180,14 @@ namespace TortoiseSCM
             finally { busy = false; SetButtons(); }
         }
 
-        private void SetButtons() { execute.Enabled = !busy && ready; refresh.Enabled = close.Enabled = !busy; selectAll.Enabled = !busy && files.Items.Count > 0; }
+        private void SetButtons()
+        {
+            execute.Enabled = !busy && ready;
+            checkoutAlternative.Enabled = !busy && ready && files.CheckedItems.Cast<ListViewItem>()
+                .Any(row => ((PlasticStatusItem)row.Tag).StatusCode == "CO");
+            refresh.Enabled = close.Enabled = !busy;
+            selectAll.Enabled = !busy && files.Items.Count > 0;
+        }
 
         private void OnItemChecked(object sender, ItemCheckedEventArgs e)
         {
@@ -213,6 +232,7 @@ namespace TortoiseSCM
             int checkedCount = files.CheckedItems.Count;
             selectAll.CheckState = checkedCount == 0 ? CheckState.Unchecked :
                 checkedCount == files.Items.Count ? CheckState.Checked : CheckState.Indeterminate;
+            if (!busy) SetButtons();
         }
 
         private bool IsCheckout() { return commandName == "checkout" || commandName == "checkout-recursive"; }
