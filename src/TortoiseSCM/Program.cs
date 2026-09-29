@@ -82,7 +82,7 @@ namespace TortoiseSCM
                 form = new HistoryForm(client, request.Paths[0], workspace.RootPath);
             }
             else if (request.Command == "checkin") form = new MainForm(request);
-            else if (request.Command == "add" || request.Command == "checkout" || request.Command == "undo")
+            else if (request.Command == "add" || request.Command == "checkout" || request.Command == "checkout-recursive" || request.Command == "undo")
                 form = new OperationForm(client, request.Command, request.Paths);
             else if (request.Command == "locks" || request.Command == "unlock")
             {
@@ -165,7 +165,7 @@ namespace TortoiseSCM
             // Explorer extension.  File operations are deliberately routed
             // through MainForm so they retain the same confirmation and
             // workspace safety checks as the in-app menus.
-            string[] commands = { "status", "checkin", "update", "add", "checkout", "undo", "diff", "history", "blame", "gluon", "settings",
+            string[] commands = { "status", "checkin", "update", "add", "checkout", "checkout-recursive", "undo", "diff", "history", "blame", "gluon", "settings",
                 "move", "remove", "ignore", "locks", "unlock", "merge", "branches", "shelves", "labels", "repository-browser", "revision-graph", "export", "rollback", "recover", "create-workspace", "version" };
             if (!commands.Contains(result.Command)) throw new ArgumentException("未知操作：" + result.Command);
             if (result.Command == "create-workspace" && result.Paths.Count > 1) throw new ArgumentException("拉取仓库只能指定一个新的本地工作区目录。");

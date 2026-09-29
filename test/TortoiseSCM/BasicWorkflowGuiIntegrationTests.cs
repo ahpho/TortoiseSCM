@@ -192,6 +192,27 @@ namespace TortoiseSCM
                 }
                 Require(Pending(root, path, "CO"), "Confirmed checkout creates native checkout state");
             }
+            using (var checkin = Launch("checkin", root, false, null, null))
+            {
+                var rows = Field<ListView>(checkin, "files");
+                var row = rows.Items.Cast<ListViewItem>().SingleOrDefault(item => Same(((PlasticStatusItem)item.Tag).Path, path));
+                Require(row != null && row.SubItems.Count > 2 && row.SubItems[2].Text.Contains("签出"),
+                    "Check-in interface shows checked-out file status");
+            }
+            string checkoutDirectory = Path.Combine(root, mode + " recursive checkout");
+            string checkoutFirst = Path.Combine(checkoutDirectory, "first.txt"), checkoutSecond = Path.Combine(checkoutDirectory, "second.txt");
+            Directory.CreateDirectory(checkoutDirectory); File.WriteAllText(checkoutFirst, "recursive first"); File.WriteAllText(checkoutSecond, "recursive second");
+            foreach (var command in new[] { PlasticCommand.Add, PlasticCommand.Checkin })
+                Require(Wait(client.RunAsync(new PlasticCommandRequest { Command = command, WorkingDirectory = root,
+                    Paths = new[] { checkoutDirectory }, Recursive = true, Comment = "GUI recursive checkout fixture" }, CancellationToken.None)).Succeeded,
+                    "Seed recursive checkout directory with " + command);
+            using (var form = LaunchOperation("checkout-recursive", checkoutDirectory, true, "继续递归签出", checkoutDirectory))
+                Require(Pending(root, checkoutFirst, "CO") && Pending(root, checkoutSecond, "CO"),
+                    "Recursive checkout checks out every descendant");
+            Require(Wait(client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Undo, WorkingDirectory = root,
+                Paths = new[] { checkoutDirectory }, Recursive = true }, CancellationToken.None)).Succeeded &&
+                !Pending(root, checkoutFirst, "CO") && !Pending(root, checkoutSecond, "CO"),
+                "Recursive checkout cleanup restores unlocked state");
             File.WriteAllText(path, baseline + "local edit to discard\r\n", new UTF8Encoding(false));
             string edited = File.ReadAllText(path), dirty = Status(root);
             using (var form = Launch("status", root, false, null, null))

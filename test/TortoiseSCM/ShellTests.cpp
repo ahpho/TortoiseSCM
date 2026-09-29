@@ -136,12 +136,12 @@ void CheckMenuBitmap(HMENU menu, HMODULE resourceModule)
 // retain their pre-reorder values even though visible offsets have changed.
 constexpr const wchar_t* expectedMenuVerbs[] = {
     L"update", L"checkin", L"diff", L"history",
-    L"add", L"checkout", L"undo", L"move", L"remove", L"ignore",
+    L"add", L"checkout", L"checkout-recursive", L"undo", L"move", L"remove", L"ignore",
     L"branches", L"merge", L"shelves", L"labels", L"repository-browser",
     L"revision-graph", L"blame", L"export", L"recover", L"rollback",
     L"locks", L"unlock", L"gluon", L"settings", L"version", L"create-workspace"
 };
-constexpr size_t expectedMenuIdentities[] = {2,1,6,7,3,4,5,10,11,12,19,15,20,23,22,24,21,16,18,17,13,14,8,9,25,26};
+constexpr size_t expectedMenuIdentities[] = {2,1,6,7,3,4,27,5,10,11,12,19,15,20,23,22,24,21,16,18,17,13,14,8,9,25,26};
 
 void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionKind)
 {
@@ -151,6 +151,8 @@ void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionK
         const std::wstring name = expectedMenuVerbs[index];
         if (selectionKind >= 3 ? name != L"create-workspace" : name == L"create-workspace") continue;
         if ((selectionKind == 1 || selectionKind == 2) && (name == L"diff" || name == L"blame")) continue;
+        if ((selectionKind == 1 || selectionKind == 2) && name == L"checkout") continue;
+        if (selectionKind == 0 && name == L"checkout-recursive") continue;
         if (name == L"add")
         {
             MENUITEMINFOW separator{sizeof(separator)}; separator.fMask = MIIM_FTYPE;
@@ -394,7 +396,10 @@ void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binar
             require(SUCCEEDED(queried) && HRESULT_CODE(queried) == expectedCount, "classic handoff filtered menu populated");
             if (selectionKind == 0) CheckMenuBitmap(menu, loaded);
             CheckClassicOrder(context.Get(), GetSubMenu(menu, 0), selectionKind);
-            for (const wchar_t* command : (selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove"} : std::vector<const wchar_t*>{L"create-workspace"}))
+            const auto commands = selectionKind == 0 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove", L"checkout"} :
+                selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove", L"checkout-recursive"} :
+                std::vector<const wchar_t*>{L"create-workspace"};
+            for (const wchar_t* command : commands)
             {
                 const std::wstring canonical = L"tortoisescm." + std::wstring(command);
                 UINT offset = 0;

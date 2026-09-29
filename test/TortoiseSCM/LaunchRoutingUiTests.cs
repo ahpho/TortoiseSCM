@@ -138,7 +138,7 @@ namespace TortoiseSCM
             // matrix verifies that every dispatched verb reaches the intended
             // WinForms surface instead of silently opening the check-in editor.
             string[] commands = {
-                "update", "checkin", "diff", "history", "add", "checkout", "undo",
+                "update", "checkin", "diff", "history", "add", "checkout", "checkout-recursive", "undo",
                 "move", "remove", "ignore", "branches", "merge", "shelves", "labels",
                 "repository-browser", "revision-graph", "blame", "export", "recover", "rollback",
                 "locks", "unlock", "gluon", "settings", "version", "create-workspace"
@@ -152,7 +152,7 @@ namespace TortoiseSCM
                     Require(form is UpdateForm, command + " opens UpdateForm");
             using (var history = Program.CreateLaunchForm(Request("history", file)))
                 Require(history is HistoryForm, "history opens HistoryForm");
-            foreach (string command in new[] { "add", "checkout", "undo" })
+            foreach (string command in new[] { "add", "checkout", "checkout-recursive", "undo" })
                 using (var form = Program.CreateLaunchForm(Request(command, file)))
                 {
                     Require(form is OperationForm, command + " opens OperationForm");

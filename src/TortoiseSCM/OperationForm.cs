@@ -79,7 +79,7 @@ namespace TortoiseSCM
 
                 var all = await client.GetStatusAsync(workspace.RootPath, CancellationToken.None);
                 var candidates = BuildCandidates(all);
-                if (commandName == "checkout") candidates = SelectedFallback(all, "受控路径");
+                if (IsCheckout()) candidates = SelectedFallback(all, "受控路径");
                 else if (candidates.Count == 0 && commandName == "undo") candidates = SelectedFallback(all, "所选路径");
                 foreach (var item in candidates.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
                 {
@@ -135,7 +135,7 @@ namespace TortoiseSCM
                 var workspace = client.DiscoverWorkspace(paths[0]);
                 if (workspace == null) throw new InvalidOperationException("工作区已改变，请刷新范围。");
                 var request = new PlasticCommandRequest { Command = Parse(commandName), WorkingDirectory = workspace.RootPath,
-                    Paths = paths, Recursive = true };
+                    Paths = paths, Recursive = commandName == "add" || commandName == "checkout-recursive" || commandName == "undo" };
                 output.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + label + Environment.NewLine + String.Join(Environment.NewLine, paths.ToArray()) + Environment.NewLine);
                 var result = await client.RunAsync(request, CancellationToken.None);
                 output.AppendText(result.Output + Environment.NewLine + result.Error + Environment.NewLine + "退出码：" + result.ExitCode + Environment.NewLine);
@@ -169,8 +169,17 @@ namespace TortoiseSCM
             finally { changingChecks = false; }
         }
 
+        private bool IsCheckout() { return commandName == "checkout" || commandName == "checkout-recursive"; }
         private static bool IsPrivate(string code) { return code == "PR" || code == "IG"; }
-        private static PlasticCommand Parse(string command) { return (PlasticCommand)Enum.Parse(typeof(PlasticCommand), command, true); }
-        private static string CommandLabel(string command) { return command == "add" ? "添加" : command == "checkout" ? "签出" : "撤销更改"; }
+        private static PlasticCommand Parse(string command)
+        {
+            return command == "checkout-recursive" ? PlasticCommand.Checkout :
+                (PlasticCommand)Enum.Parse(typeof(PlasticCommand), command, true);
+        }
+        private static string CommandLabel(string command)
+        {
+            return command == "add" ? "添加" : command == "checkout" ? "签出" :
+                command == "checkout-recursive" ? "递归签出" : "撤销更改";
+        }
     }
 }

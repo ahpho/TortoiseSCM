@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 #include <strsafe.h>
 #include <atomic>
+#include <algorithm>
 #include <filesystem>
 #include <new>
 #include <string>
@@ -70,7 +71,7 @@ struct Command { const wchar_t* name; const wchar_t* label; const wchar_t* chine
 constexpr Command commands[] = {
     {L"status", L"Pending changes...", L"待处理更改..."}, {L"checkin", L"Check in...", L"签入..."},
     {L"update", L"Update...", L"更新..."}, {L"add", L"Add...", L"添加..."},
-    {L"checkout", L"Check out...", L"签出..."}, {L"undo", L"Undo changes...", L"撤销更改..."},
+    {L"checkout", L"Check out", L"签出"}, {L"undo", L"Undo changes...", L"撤销更改..."},
     {L"diff", L"Diff...", L"比较差异..."}, {L"history", L"History...", L"历史记录..."},
     {L"gluon", L"Open Gluon", L"打开 Gluon"}, {L"settings", L"Settings...", L"设置..."},
     // Keep command identities stable (including modern canonical GUIDs).
@@ -91,7 +92,8 @@ constexpr Command commands[] = {
     {L"labels", L"Labels...", L"标签..."},
     {L"revision-graph", L"Revision graph...", L"提交关系图..."},
     {L"version", L"Version information...", L"版本信息..."},
-    {L"create-workspace", L"Check out repository...", L"\u62c9\u53d6\u4ed3\u5e93..."}
+    {L"create-workspace", L"Check out repository...", L"\u62c9\u53d6\u4ed3\u5e93..."},
+    {L"checkout-recursive", L"Recursive check out", L"递归签出"}
 };
 
 // Shared presentation order for classic and modern Explorer menus. The values
@@ -101,7 +103,7 @@ constexpr size_t MenuSeparator = static_cast<size_t>(-1);
 constexpr size_t menuOrder[] = {
     2, 1, 6, 7,             // Update, check in, diff, history.
     MenuSeparator,
-    3, 4, 5, 10, 11, 12,    // Add, checkout, undo, move, remove, ignore.
+    3, 4, 27, 5, 10, 11, 12, // Add, checkout, recursive checkout, undo, move, remove, ignore.
     19, 15, 20, 23,         // Branches, merge, shelvesets, labels.
     22, 24, 21, 16, 18, 17, // Repository, graph, blame, export, recover, rollback.
     13, 14, 8, 9, 25,       // Locks, unlock, Gluon, settings, version.
@@ -136,6 +138,20 @@ bool CommandVisible(size_t index, const std::vector<std::wstring>& paths)
     if (index >= ARRAYSIZE(commands) || paths.empty()) return false;
     if (wcscmp(commands[index].name, L"create-workspace") == 0) return CheckoutParent(paths);
     if (WorkspaceRoot(paths.front()).empty()) return false;
+    if (wcscmp(commands[index].name, L"checkout") == 0)
+    {
+        return std::all_of(paths.begin(), paths.end(), [](const std::wstring& path)
+        {
+            const DWORD attributes = GetFileAttributesW(path.c_str());
+            return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+        });
+    }
+    if (wcscmp(commands[index].name, L"checkout-recursive") == 0)
+    {
+        if (paths.size() != 1) return false;
+        const DWORD attributes = GetFileAttributesW(paths.front().c_str());
+        return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+    }
     const bool singlePathOnly = index == 6 || index == 7 || index >= 10;
     if (singlePathOnly && paths.size() != 1) return false;
     if (index == 6 || wcscmp(commands[index].name, L"blame") == 0)

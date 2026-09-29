@@ -325,7 +325,7 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
                 require(std::filesystem::exists(operationPath), "modern recorder never removes selected fixture");
             }
         }
-        enumerator->Reset(); enumerator->Skip(26);
+        enumerator->Reset(); enumerator->Skip(27);
         ComPtr<IExplorerCommand> checkout; require(enumerator->Next(1, &checkout, &fetched) == S_OK, "modern handoff checkout command");
         const auto unicodeParent = first.parent_path() / L"checkout \u4e2d\u6587 & parent";
         std::filesystem::create_directory(unicodeParent);
