@@ -159,7 +159,7 @@ namespace TortoiseSCM
                 Set(form, "reportError", new Action<string>(message => error = message));
                 Set(form, "prepareCheckin", new Func<string, IList<string>, string, string, CancellationToken, Task<PlasticCheckinPreview>>((path, selected, repository, selector, token) =>
                 {
-                    prepares++; Require(selected.SequenceEqual(new[] { rows[0].Path, rows[1].Path }), "Preparation receives checked directory and its exact child"); return Task.FromResult(preview);
+                    prepares++; Require(selected.SequenceEqual(new[] { rows[0].Path }), "Preparation collapses checked directory descendants"); return Task.FromResult(preview);
                 }));
                 Set(form, "reviewCheckin", new Func<PlasticCheckinPreview, string, bool, DialogResult>((prepared, message, uncertain) =>
                 { reviews++; acknowledged = uncertain; Require(message.Contains("保留"), "Review receives the complete original comment"); return DialogResult.OK; }));
@@ -295,7 +295,7 @@ namespace TortoiseSCM
                 {
                     prepares++;
                     Require(prepares == 1
-                        ? paths.SequenceEqual(new[] { rows[0].Path, rows[1].Path })
+                        ? paths.SequenceEqual(new[] { rows[0].Path })
                         : paths.Count == 1 && paths[0].EndsWith("private.txt", StringComparison.OrdinalIgnoreCase),
                         prepares == 1 ? "Checked private descendants are excluded from explicit check-in while controlled directory scope is retained" :
                         "The added private file is passed to check-in preparation");

@@ -647,10 +647,12 @@ namespace TortoiseSCM
                     item.Path.StartsWith(parent.Path.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase)))
                 .Select(item => item.Path), StringComparer.OrdinalIgnoreCase);
             var privatePaths = explicitPaths == null
-                ? selectedRows.Where(item => IsPrivate(item.StatusCode) && !coveredPrivate.Contains(item.Path))
-                    .Select(item => item.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                ? CollapseCheckinPaths(selectedRows.Where(item => IsPrivate(item.StatusCode) && !coveredPrivate.Contains(item.Path)))
                 : new List<string>();
-            var paths = (explicitPaths ?? SelectedPaths(false, false).Where(path => !coveredPrivate.Contains(path)).ToList()).ToArray();
+            var checkinItems = explicitPaths == null
+                ? selectedRows.Where(item => !coveredPrivate.Contains(item.Path))
+                : explicitPaths.Select(path => new PlasticStatusItem { Path = path, IsDirectory = Directory.Exists(path) });
+            var paths = CollapseCheckinPaths(checkinItems).ToArray();
             if (paths.Length == 0) { reportError("请先勾选要提交的项。"); return; }
             string message = comment.Text;
             string messageRepository = workspace.Repository;
@@ -770,6 +772,26 @@ namespace TortoiseSCM
 
         private static bool IsPrivate(string state)
         { return state.IndexOf("private", StringComparison.OrdinalIgnoreCase) >= 0 || state.IndexOf("ignored", StringComparison.OrdinalIgnoreCase) >= 0 || state == "PR" || state == "IG"; }
+
+        private static List<string> CollapseCheckinPaths(IEnumerable<PlasticStatusItem> items)
+        {
+            var ordered = items.Where(item => item != null && !String.IsNullOrWhiteSpace(item.Path))
+                .GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase).Select(group => group.First())
+                .OrderBy(item => item.Path.Length).ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase);
+            var selected = new List<PlasticStatusItem>();
+            foreach (var item in ordered)
+            {
+                if (selected.Any(parent => parent.IsDirectory && IsDescendantPath(item.Path, parent.Path))) continue;
+                selected.Add(item);
+            }
+            return selected.Select(item => item.Path).ToList();
+        }
+
+        private static bool IsDescendantPath(string path, string parent)
+        {
+            return String.Equals(path, parent, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(parent.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase);
+        }
 
         private static PlasticCommand ParseCommand(string name)
         { return (PlasticCommand)Enum.Parse(typeof(PlasticCommand), name, true); }
