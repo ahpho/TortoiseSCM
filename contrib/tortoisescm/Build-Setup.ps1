@@ -3,13 +3,16 @@ param(
     [string]$PackageArchive,
     [string]$BeyondCompareDirectory,
     [string]$TortoiseToolsDirectory,
-    [string]$BinaryDirectory = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/Release'),
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '../../bin/TortoiseSCM/packages'),
+    [string]$BinaryDirectory,
+    [string]$OutputDirectory,
     [string]$Version = ('0.1.0-dev-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
     [string]$IsccPath,
     [switch]$TestSetup
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell -File can evaluate parameter defaults before PSScriptRoot is set.
+if ([string]::IsNullOrWhiteSpace($BinaryDirectory)) { $BinaryDirectory = Join-Path $PSScriptRoot '../../bin/TortoiseSCM/Release' }
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $PSScriptRoot '../../bin/TortoiseSCM/packages' }
 . (Join-Path $PSScriptRoot 'Package.Common.ps1')
 $output = Assert-TscmPlainPath $OutputDirectory
 [IO.Directory]::CreateDirectory($output) | Out-Null

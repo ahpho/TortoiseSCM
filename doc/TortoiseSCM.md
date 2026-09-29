@@ -131,6 +131,21 @@ $resolved = (& $exe --cli --json --command label-resolve --path $workspace --lab
 
 ### 可安装包
 
+仓库根目录提供两个可双击的批处理入口：
+
+- `build-tortoisescm.bat`：默认构建 Release；支持透传 `-Test`、`-Configuration Debug` 等构建参数。
+- `package-tortoisescm.bat`：使用已构建的 Release 生成完整 Setup EXE、ZIP 和 SHA-256 文件，默认输出至 `bin/TortoiseSCM/packages`；包含 Tortoise 原生工具和 BC 备选。先构建，再打包。
+
+无参数双击时会停留显示成功或错误；带参数运行时不暂停，并返回实际退出码。两个入口都可以从其他工作目录启动。示例：
+
+```bat
+build-tortoisescm.bat -Configuration Release
+package-tortoisescm.bat -Version 0.2.0-preview
+```
+
+打包默认读取 `bin/TortoiseSCM/native-tools`，不存在时使用本机已准备的 `native-tools-2.19.0-verified`；BC 默认读取仓库同级 `Tool/BeyondCompare`。可用环境变量 `TSCM_TORTOISE_TOOLS`、`TSCM_BEYOND_COMPARE` 指定其他运行文件目录。新克隆需先按下文准备原生工具及源码；缺少工具会明确报错，不会生成省略工具的安装包。其他打包参数（如 `-Version`、`-OutputDirectory`）透传给 `Build-Setup.ps1`。
+
+
 新版完整 Setup 的构建方式（先运行 `build-tortoisescm.ps1`）：
 
 ```powershell
