@@ -75,12 +75,23 @@ namespace TortoiseSCM
             using (var form = new OperationForm(null, "add", new string[0]))
             {
                 var rows = Field<ListView>(form, "files");
+                var selectAll = Field<CheckBox>(form, "selectAll");
                 form.CreateControl(); rows.CreateControl();
+                Require(rows.Columns.Count == 3 && rows.Columns[1].Text == "后缀名",
+                    "Add operation list exposes path, extension and status columns");
                 var directory = new ListViewItem("root") { Tag = new PlasticStatusItem { Path = root, IsDirectory = true }, Checked = true };
                 var nestedDirectory = new ListViewItem("root\\nested") { Tag = new PlasticStatusItem { Path = nested, IsDirectory = true }, Checked = true };
                 var child = new ListViewItem("root\\nested\\child.txt") { Tag = new PlasticStatusItem { Path = Path.Combine(nested, "child.txt") }, Checked = true };
                 var sibling = new ListViewItem("sibling.txt") { Tag = new PlasticStatusItem { Path = root + "-sibling.txt" }, Checked = true };
                 rows.Items.Add(directory); rows.Items.Add(nestedDirectory); rows.Items.Add(child); rows.Items.Add(sibling);
+
+                selectAll.CheckState = CheckState.Checked;
+                selectAll.CheckState = CheckState.Unchecked;
+                Require(rows.Items.Cast<ListViewItem>().All(item => !item.Checked),
+                    "Add select-all checkbox clears every listed item");
+                selectAll.CheckState = CheckState.Checked;
+                Require(rows.Items.Cast<ListViewItem>().All(item => item.Checked),
+                    "Add select-all checkbox selects every listed item");
 
                 directory.Checked = false;
                 typeof(OperationForm).GetMethod("OnItemChecked", Flags).Invoke(form, new object[] { rows, new ItemCheckedEventArgs(directory) });

@@ -23,6 +23,7 @@ namespace TortoiseSCM
         private readonly ListView files = new ListView();
         private readonly TextBox output = new TextBox();
         private readonly Label status = new Label();
+        private readonly CheckBox selectAll = new CheckBox();
         private readonly Button execute = DialogStyle.Button("执行");
         private readonly Button refresh = DialogStyle.Button("刷新范围");
         private readonly Button close = DialogStyle.Button("关闭");
@@ -35,23 +36,29 @@ namespace TortoiseSCM
         {
             this.client = client; commandName = command; selectedPaths = new List<string>(paths ?? new string[0]);
             Text = Title(command); DialogStyle.Apply(this); Size = new Size(780, 540); MinimumSize = new Size(620, 430);
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 4 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 5 };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             scope.Dock = DockStyle.Fill; scope.UseMnemonic = false; scope.AutoEllipsis = true; layout.Controls.Add(scope, 0, 0);
+            var selectionBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+            selectAll.Text = "全选 / 全不选"; selectAll.AutoSize = true; selectAll.ThreeState = true;
+            selectAll.AccessibleName = "全选或全不选可操作文件";
+            selectionBar.Controls.Add(selectAll); layout.Controls.Add(selectionBar, 0, 1);
             files.Dock = DockStyle.Fill; files.View = View.Details; files.CheckBoxes = true; files.FullRowSelect = true;
             files.MultiSelect = true; files.HideSelection = false; files.GridLines = true; files.AllowColumnReorder = false;
             DialogStyle.ApplyList(files); files.AccessibleName = "可操作文件列表";
-            files.Columns.Add("路径", 570); files.Columns.Add("状态", 150);
+            files.Columns.Add("路径", 480); files.Columns.Add("后缀名", 90); files.Columns.Add("状态", 150);
             files.ItemChecked += OnItemChecked;
-            layout.Controls.Add(files, 0, 1);
-            status.Dock = DockStyle.Fill; status.AutoEllipsis = true; layout.Controls.Add(status, 0, 2);
+            layout.Controls.Add(files, 0, 2);
+            status.Dock = DockStyle.Fill; status.AutoEllipsis = true; layout.Controls.Add(status, 0, 3);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
             execute.Text = CommandLabel(command); buttons.Controls.Add(close); buttons.Controls.Add(execute); buttons.Controls.Add(refresh);
-            layout.Controls.Add(buttons, 0, 3); Controls.Add(layout);
+            layout.Controls.Add(buttons, 0, 4); Controls.Add(layout);
             execute.Click += async delegate { await ExecuteAsync(); }; refresh.Click += async delegate { await LoadScopeAsync(); };
+            selectAll.CheckStateChanged += delegate { ApplySelectAllState(); };
             close.Click += delegate { Close(); }; CancelButton = close; AcceptButton = close;
             Shown += async delegate { await LoadScopeAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (busy) e.Cancel = true; };
@@ -63,7 +70,7 @@ namespace TortoiseSCM
         {
             if (busy) return;
             checkoutCancellation = false;
-            busy = true; ready = false; SetButtons(); files.Items.Clear(); status.Text = "正在读取可操作文件…";
+            busy = true; ready = false; SetButtons(); changingChecks = true; files.Items.Clear(); selectAll.CheckState = CheckState.Unchecked; changingChecks = false; status.Text = "正在读取可操作文件…";
             try
             {
                 if (selectedPaths.Count == 0) throw new ArgumentException("请选择至少一个文件或目录。");
@@ -88,14 +95,20 @@ namespace TortoiseSCM
                 checkoutCancellation = IsCheckout() && candidates.Count > 0 && candidates.All(item => item.StatusCode == "CO");
                 execute.Text = EffectiveLabel();
                 Text = EffectiveLabel() + " - TortoiseSCM";
-                foreach (var item in candidates.OrderBy(item => item, new PlasticStatusPathComparer()))
+                changingChecks = true;
+                try
                 {
-                    string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
-                        ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
-                    var row = new ListViewItem(relative) { Tag = item, Checked = commandName == "add" || !IsPrivate(item.StatusCode) };
-                    row.SubItems.Add(String.IsNullOrWhiteSpace(item.StatusDescription) ? item.StatusCode : item.StatusDescription);
-                    files.Items.Add(row);
+                    foreach (var item in candidates.OrderBy(item => item, new PlasticStatusPathComparer()))
+                    {
+                        string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
+                            ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
+                        var row = new ListViewItem(relative) { Tag = item, Checked = commandName == "add" || !IsPrivate(item.StatusCode) };
+                        row.SubItems.Add(item.IsDirectory ? "" : Path.GetExtension(item.Path));
+                        row.SubItems.Add(String.IsNullOrWhiteSpace(item.StatusDescription) ? item.StatusCode : item.StatusDescription);
+                        files.Items.Add(row);
+                    }
                 }
+                finally { changingChecks = false; UpdateSelectAllState(); }
                 ready = files.Items.Count != 0;
                 status.Text = ready ? "请核对列表后点击“" + EffectiveLabel() + "”。" :
                     (commandName == "add" ? "当前范围没有可添加的文件。" : "当前范围没有可操作的更改。");
@@ -155,27 +168,51 @@ namespace TortoiseSCM
             finally { busy = false; SetButtons(); }
         }
 
-        private void SetButtons() { execute.Enabled = !busy && ready; refresh.Enabled = close.Enabled = !busy; }
+        private void SetButtons() { execute.Enabled = !busy && ready; refresh.Enabled = close.Enabled = !busy; selectAll.Enabled = !busy && files.Items.Count > 0; }
 
         private void OnItemChecked(object sender, ItemCheckedEventArgs e)
         {
             if (changingChecks || e.Item.Tag == null) return;
             var changed = e.Item.Tag as PlasticStatusItem;
-            if (changed == null || !changed.IsDirectory) return;
+            if (changed == null) return;
 
-            string descendantPrefix = changed.Path.TrimEnd('\\', '/') + "\\";
+            if (changed.IsDirectory)
+            {
+                string descendantPrefix = changed.Path.TrimEnd('\\', '/') + "\\";
+                changingChecks = true;
+                try
+                {
+                    foreach (ListViewItem row in files.Items)
+                    {
+                        if (row == e.Item || row.Tag == null) continue;
+                        var item = row.Tag as PlasticStatusItem;
+                        if (item != null && item.Path.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
+                            row.Checked = e.Item.Checked;
+                    }
+                }
+                finally { changingChecks = false; }
+            }
+            UpdateSelectAllState();
+        }
+
+        private void ApplySelectAllState()
+        {
+            if (changingChecks || selectAll.CheckState == CheckState.Indeterminate) return;
             changingChecks = true;
             try
             {
-                foreach (ListViewItem row in files.Items)
-                {
-                    if (row == e.Item || row.Tag == null) continue;
-                    var item = row.Tag as PlasticStatusItem;
-                    if (item != null && item.Path.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
-                        row.Checked = e.Item.Checked;
-                }
+                bool checkedValue = selectAll.CheckState == CheckState.Checked;
+                foreach (ListViewItem row in files.Items) row.Checked = checkedValue;
             }
             finally { changingChecks = false; }
+        }
+
+        private void UpdateSelectAllState()
+        {
+            if (changingChecks) return;
+            int checkedCount = files.CheckedItems.Count;
+            selectAll.CheckState = checkedCount == 0 ? CheckState.Unchecked :
+                checkedCount == files.Items.Count ? CheckState.Checked : CheckState.Indeterminate;
         }
 
         private bool IsCheckout() { return commandName == "checkout" || commandName == "checkout-recursive"; }
