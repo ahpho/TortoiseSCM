@@ -15,6 +15,7 @@ namespace TortoiseSCM
         private readonly PlasticClient client;
         private readonly string root;
         private readonly IList<string> selectedPaths;
+        private readonly Label scope = new Label();
         private readonly ComboBox resolution = new ComboBox();
         private Func<string, string, CancellationToken, Task<PlasticMergeConflictFiles>> prepareConflict;
         private Func<string, string, string, string, CancellationToken, Task<PlasticCommandResult>> mergeTool;
@@ -27,12 +28,13 @@ namespace TortoiseSCM
         private readonly Button cancelPreparation = DialogStyle.Button("取消未应用准备…");
         private readonly Button close = DialogStyle.Button("关闭");
         private readonly Button structure = DialogStyle.Button("结构冲突…");
+        private readonly ToolTip toolTips = new ToolTip();
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private readonly Dictionary<string, PlasticMergeConflictFiles> prepared = new Dictionary<string, PlasticMergeConflictFiles>(StringComparer.Ordinal);
         private IList<PlasticPartialConflict> conflicts = new List<PlasticPartialConflict>();
         private PlasticPartialConflictSession session;
         private bool busy;
-        private const string Guidance = "此窗口处理 Partial 工作区内已加载文件的传入内容冲突；新增、移动、删除冲突请点击“结构冲突”（该窗口显示整个工作区）。\r\n文本可通过三方工具合并，二进制可保留本地或采用服务器版本；先准备独立结果，再明确确认应用；加载范围保持不变，有差异的结果留作待定更改，完全采用服务器版本则无需再签入。\r\n中断时请保留会话中的原始文件及审核结果，先检查备份，再明确撤销受影响文件并重新预检。";
+        private const string Guidance = "此窗口只处理当前 Partial 工作区中已加载文件的传入内容冲突，不是整个服务器仓库。若从更新窗口打开，列表只显示本次选中的范围；直接从操作菜单打开则显示当前 Partial 工作区的全部已加载文件。新增、移动、删除冲突请点击“结构冲突”（该窗口按整个 Partial 工作区处理）。\r\n文本可通过三方工具合并，二进制可保留本地或采用服务器版本；先准备独立结果，再明确确认应用；加载范围保持不变，有差异的结果留作待定更改，完全采用服务器版本则无需再签入。\r\n中断时请保留会话中的原始文件及审核结果，先检查备份，再明确撤销受影响文件并重新预检。";
 
         internal PartialConflictForm(PlasticClient client, string root) : this(client, root, null) { }
 
@@ -46,14 +48,15 @@ namespace TortoiseSCM
             Size = new Size(960, 660); MinimumSize = new Size(840, 550);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 5 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            layout.Controls.Add(new Label { Text = root, Dock = DockStyle.Fill, AutoEllipsis = true, UseMnemonic = false }, 0, 0);
+            scope.Dock = DockStyle.Fill; scope.AutoEllipsis = true; scope.UseMnemonic = false; scope.Text = ScopeDescription();
+            layout.Controls.Add(scope, 0, 0);
             var top = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            refresh.Width = 145; top.Controls.Add(refresh); structure.Width = 115; top.Controls.Add(structure);
+            refresh.Width = 145; top.Controls.Add(refresh); structure.Width = 190; toolTips.SetToolTip(structure, "处理整个 Partial 工作区的目录结构冲突，不受本次内容冲突列表筛选限制。"); top.Controls.Add(structure);
             resolution.DropDownStyle = ComboBoxStyle.DropDownList; resolution.Width = 220;
             resolution.Items.AddRange(new object[] { "文本：比较工具 三方合并", "保留本地版本（准备独立结果）", "采用服务器版本（准备独立结果）" });
             resolution.SelectedIndex = 0; resolution.AccessibleName = "冲突处理方式";
@@ -69,7 +72,7 @@ namespace TortoiseSCM
             items.DoubleClick += async delegate { await PrepareAsync(); };
             split.Panel1.Controls.Add(items);
             details.Dock = DockStyle.Fill; details.Multiline = true; details.ReadOnly = true; details.ScrollBars = ScrollBars.Vertical;
-            details.Text = Guidance; details.AccessibleName = "操作说明与备份恢复信息";
+            details.Text = Guidance + "\r\n\r\n" + ScopeDescription(); details.AccessibleName = "操作说明与备份恢复信息";
             split.Panel2.Controls.Add(details); layout.Controls.Add(split, 0, 2);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; status.TextAlign = ContentAlignment.MiddleLeft;
             layout.Controls.Add(status, 0, 3);
@@ -127,11 +130,11 @@ namespace TortoiseSCM
                 var row = new ListViewItem(new[] { conflict.RepositoryPath, conflict.BaseChangeset.ToString(), conflict.IncomingChangeset.ToString(), state }) { Tag = conflict };
                 items.Items.Add(row); if (conflict.RepositoryPath == selected) row.Selected = true;
             }
-            status.Text = items.Items.Count + " 个范围内项目；选择处理方式后准备结果，不自动签入。";
+            status.Text = items.Items.Count + " 个" + (selectedPaths == null ? "当前 Partial 工作区已加载" : "本次选中范围内") + "的内容冲突项目；选择处理方式后准备结果，不自动签入。";
             if (session != null && (!session.Ready || session.Applying))
             {
                 status.Text = "上次应用未完成。请先检查会话备份；当前禁止继续应用和签入。";
-                details.Text = "会话：" + session.SessionId + "\r\n恢复备份目录：" + session.RecoveryDirectory + "\r\n" + Guidance;
+                details.Text = "会话：" + session.SessionId + "\r\n恢复备份目录：" + session.RecoveryDirectory + "\r\n" + Guidance + "\r\n\r\n" + ScopeDescription();
             }
             else if (session != null && conflicts.Count > 0 && conflicts.All(item => item.Resolved))
                 status.Text = "准备的结果均已应用。有差异的结果需单独签入；采用服务器原样内容无需签入。";
@@ -146,6 +149,12 @@ namespace TortoiseSCM
             return paths.Any(path => String.Equals(local, path, StringComparison.OrdinalIgnoreCase) ||
                 local.StartsWith(path.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(local.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private string ScopeDescription()
+        {
+            if (selectedPaths == null) return "工作区：" + root + "\r\n内容冲突范围：当前 Partial 工作区内所有已加载文件（不是服务器仓库）。";
+            return "工作区：" + root + "\r\n内容冲突范围：本次更新选中的范围（" + String.Join("；", selectedPaths.ToArray()) + "）。结构冲突仍按整个 Partial 工作区处理。";
         }
 
         private async Task ReadStateAsync()

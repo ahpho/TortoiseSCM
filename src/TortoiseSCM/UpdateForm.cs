@@ -19,10 +19,11 @@ namespace TortoiseSCM
         private readonly TableLayoutPanel layout = new TableLayoutPanel();
         private readonly Label status = new Label();
         private readonly Button update = DialogStyle.Button("更新(&U)");
-        private readonly Button refresh = DialogStyle.Button("刷新范围(&R)");
+        private readonly Button refresh = DialogStyle.Button("重新读取范围(&R)");
         private readonly Button close = DialogStyle.Button("关闭");
         private readonly Button conflicts = DialogStyle.Button("处理传入冲突…");
         private readonly Button pending = DialogStyle.Button("检查 / 丢弃修改…");
+        private readonly ToolTip toolTips = new ToolTip();
         private Func<string, CancellationToken, Task<PlasticWorkspace>> getWorkspace;
         private Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>> run;
         private Func<string, CancellationToken, Task<IList<PlasticPartialConflict>>> previewConflicts;
@@ -64,6 +65,7 @@ namespace TortoiseSCM
             layout.Controls.Add(status, 0, 3);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Margin = Padding.Empty, WrapContents = false };
             buttons.Controls.Add(close); buttons.Controls.Add(update); buttons.Controls.Add(refresh);
+            toolTips.SetToolTip(refresh, "重新读取工作区身份和当前选中的文件/目录范围；不会执行更新。");
             conflicts.Width = 118; pending.Width = 132;
             conflicts.Visible = pending.Visible = false;
             buttons.Controls.Add(conflicts); buttons.Controls.Add(pending);
@@ -91,23 +93,23 @@ namespace TortoiseSCM
         private async Task LoadScopeAsync()
         {
             if (busy) return;
-            ready = false; SetBusy(true); status.Text = "正在识别工作区…";
-            scope.Text = "正在识别更新范围…";
+            ready = false; SetBusy(true); status.Text = "正在重新读取工作区和更新范围…";
+            scope.Text = "正在重新读取更新范围…";
             try
             {
                 var local = Program.ValidateWorkspacePaths(client, selectedPaths);
                 workspace = await getWorkspace(selectedPaths[0], CancellationToken.None);
                 if (workspace == null) throw new InvalidOperationException("工作区不存在。");
-                if (!SameIdentity(local, workspace)) throw new InvalidOperationException("工作区或分支已改变，请重新刷新范围。");
+                if (!SameIdentity(local, workspace)) throw new InvalidOperationException("工作区或分支已改变，请重新读取范围。");
                 string range = String.Join("；", EffectivePaths().ToArray());
                 scope.Text = (workspace.IsPartial
                     ? "Gluon / 部分工作区：仅更新所选范围；目录包含全部子项。"
                     : "完整工作区：将整体更新工作区中的受控文件，包括所选路径以外的文件。") +
                     "\r\n工作区：" + workspace.RootPath + "\r\n范围：" + range;
                 conflicts.Visible = pending.Visible = workspace.IsPartial;
-                ready = true; status.Text = "请核对范围，点击“更新”后才会执行。";
+                ready = true; status.Text = "范围已重新读取；此按钮不会更新文件。核对后点击“更新”才会执行。";
             }
-            catch (Exception ex) { scope.Text = "无法识别更新范围；请检查工作区后刷新范围。"; output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法识别更新范围；请检查工作区后刷新范围。"; }
+            catch (Exception ex) { scope.Text = "无法读取更新范围；请检查工作区后重新读取范围。"; output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法读取更新范围；请检查工作区后重新读取范围。"; }
             finally { SetBusy(false); }
         }
 
@@ -123,7 +125,7 @@ namespace TortoiseSCM
                 var local = Program.ValidateWorkspacePaths(client, selectedPaths);
                 var current = await getWorkspace(selectedPaths[0], CancellationToken.None);
                 if (current == null || !SameIdentity(local, workspace) || !SameIdentity(current, workspace) || current.IsPartial != workspace.IsPartial)
-                    throw new InvalidOperationException("工作区或分支已改变。请刷新范围并重新核对后更新。");
+                    throw new InvalidOperationException("工作区或分支已改变。请重新读取范围并重新核对后更新。");
                 if (workspace.IsPartial)
                 {
                     status.Text = "正在预检所选范围内的传入冲突…";
@@ -135,14 +137,14 @@ namespace TortoiseSCM
                             String.Join(Environment.NewLine, blocked.Select(item => item.RepositoryPath + (item.IsBinary ? " [二进制]" : "") +
                                 (item.CanResolve ? "" : " — " + item.Reason))) + Environment.NewLine +
                             "保留修改：点击“处理传入冲突”，文本可用 比较工具 合并，二进制选择本地或服务器版本。" + Environment.NewLine +
-                            "丢弃修改：点击“检查 / 丢弃修改”，仅选择确实不需要的文件，确认撤销后返回刷新范围并再次更新。" + Environment.NewLine);
-                        status.Text = "发现传入冲突，尚未更新。请先处理或明确丢弃，再刷新范围。";
+                            "丢弃修改：点击“检查 / 丢弃修改”，仅选择确实不需要的文件，确认撤销后返回重新读取范围并再次更新。" + Environment.NewLine);
+                        status.Text = "发现传入冲突，尚未更新。请先处理或明确丢弃，再重新读取范围。";
                         return;
                     }
                     // Preview is not a native transaction. Revalidate identity after the awaited read.
                     current = await getWorkspace(selectedPaths[0], CancellationToken.None);
                     if (current == null || !SameIdentity(current, workspace) || current.IsPartial != workspace.IsPartial)
-                        throw new InvalidOperationException("预检期间工作区已改变，请重新刷新范围。");
+                        throw new InvalidOperationException("预检期间工作区已改变，请重新读取范围。");
                 }
                 var request = new PlasticCommandRequest { Command = PlasticCommand.Update, WorkingDirectory = workspace.RootPath,
                     Paths = EffectivePaths(), Recursive = true };
@@ -170,7 +172,7 @@ namespace TortoiseSCM
             {
                 var current = await getWorkspace(selectedPaths[0], CancellationToken.None);
                 if (current == null || !SameIdentity(current, workspace) || !current.IsPartial)
-                    throw new InvalidOperationException("工作区已改变，请先刷新范围。");
+                    throw new InvalidOperationException("工作区已改变，请先重新读取范围。");
                 if (incoming) showConflicts(); else showPending();
             }
             catch (Exception ex) { output.AppendText(ex.Message + Environment.NewLine); }
