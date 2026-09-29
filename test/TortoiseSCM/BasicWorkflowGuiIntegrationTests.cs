@@ -51,12 +51,14 @@ namespace TortoiseSCM
                 }
                 if (args.Length == 4)
                 {
+                    CheckOperationDirectorySelection();
                     RunFileActions(producer, "standard");
                     Update(partial);
                     RunFileActions(partial, "partial");
                     Console.WriteLine("PASS: file actions GUI integration (" + assertions + " assertions; in-process dialogs, not Explorer clicks)");
                     return 0;
                 }
+                CheckOperationDirectorySelection();
                 RunMode(producer, consumer, false);
                 Update(partial);
                 RunMode(partial, consumer, true);
@@ -64,6 +66,31 @@ namespace TortoiseSCM
                 return 0;
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+        }
+
+        private static void CheckOperationDirectorySelection()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "tscm-add-selection-" + Guid.NewGuid().ToString("N"));
+            string nested = Path.Combine(root, "nested");
+            using (var form = new OperationForm(null, "add", new string[0]))
+            {
+                var rows = Field<ListView>(form, "files");
+                form.CreateControl(); rows.CreateControl();
+                var directory = new ListViewItem("root") { Tag = new PlasticStatusItem { Path = root, IsDirectory = true }, Checked = true };
+                var nestedDirectory = new ListViewItem("root\\nested") { Tag = new PlasticStatusItem { Path = nested, IsDirectory = true }, Checked = true };
+                var child = new ListViewItem("root\\nested\\child.txt") { Tag = new PlasticStatusItem { Path = Path.Combine(nested, "child.txt") }, Checked = true };
+                var sibling = new ListViewItem("sibling.txt") { Tag = new PlasticStatusItem { Path = root + "-sibling.txt" }, Checked = true };
+                rows.Items.Add(directory); rows.Items.Add(nestedDirectory); rows.Items.Add(child); rows.Items.Add(sibling);
+
+                directory.Checked = false;
+                typeof(OperationForm).GetMethod("OnItemChecked", Flags).Invoke(form, new object[] { rows, new ItemCheckedEventArgs(directory) });
+                Require(!directory.Checked && !nestedDirectory.Checked && !child.Checked && sibling.Checked,
+                    "Add directory unchecking clears all recursive descendants only");
+                directory.Checked = true;
+                typeof(OperationForm).GetMethod("OnItemChecked", Flags).Invoke(form, new object[] { rows, new ItemCheckedEventArgs(directory) });
+                Require(directory.Checked && nestedDirectory.Checked && child.Checked && sibling.Checked,
+                    "Add directory checking selects all recursive descendants");
+            }
         }
 
         private static void RunMode(string root, string consumer, bool partial)

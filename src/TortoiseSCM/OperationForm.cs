@@ -28,6 +28,7 @@ namespace TortoiseSCM
         private readonly Button close = DialogStyle.Button("关闭");
         private bool busy;
         private bool ready;
+        private bool changingChecks;
 
         internal OperationForm(PlasticClient client, string command, IList<string> paths)
         {
@@ -43,6 +44,7 @@ namespace TortoiseSCM
             files.MultiSelect = true; files.HideSelection = false; files.GridLines = true; files.AllowColumnReorder = false;
             DialogStyle.ApplyList(files); files.AccessibleName = "可操作文件列表";
             files.Columns.Add("路径", 570); files.Columns.Add("状态", 150);
+            files.ItemChecked += OnItemChecked;
             layout.Controls.Add(files, 0, 1);
             status.Dock = DockStyle.Fill; status.AutoEllipsis = true; layout.Controls.Add(status, 0, 2);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
@@ -145,6 +147,28 @@ namespace TortoiseSCM
         }
 
         private void SetButtons() { execute.Enabled = !busy && ready; refresh.Enabled = close.Enabled = !busy; }
+
+        private void OnItemChecked(object sender, ItemCheckedEventArgs e)
+        {
+            if (changingChecks || e.Item.Tag == null) return;
+            var changed = e.Item.Tag as PlasticStatusItem;
+            if (changed == null || !changed.IsDirectory) return;
+
+            string descendantPrefix = changed.Path.TrimEnd('\\', '/') + "\\";
+            changingChecks = true;
+            try
+            {
+                foreach (ListViewItem row in files.Items)
+                {
+                    if (row == e.Item || row.Tag == null) continue;
+                    var item = row.Tag as PlasticStatusItem;
+                    if (item != null && item.Path.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
+                        row.Checked = e.Item.Checked;
+                }
+            }
+            finally { changingChecks = false; }
+        }
+
         private static bool IsPrivate(string code) { return code == "PR" || code == "IG"; }
         private static PlasticCommand Parse(string command) { return (PlasticCommand)Enum.Parse(typeof(PlasticCommand), command, true); }
         private static string CommandLabel(string command) { return command == "add" ? "添加" : command == "checkout" ? "签出" : "撤销更改"; }
