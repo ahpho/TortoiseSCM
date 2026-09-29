@@ -109,7 +109,7 @@ namespace TortoiseSCM
                 conflicts.Visible = pending.Visible = workspace.IsPartial;
                 ready = true; status.Text = "范围已重新读取；此按钮不会更新文件。核对后点击“更新”才会执行。";
             }
-            catch (Exception ex) { scope.Text = "无法读取更新范围；请检查工作区后重新读取范围。"; output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法读取更新范围；请检查工作区后重新读取范围。"; }
+            catch (Exception ex) { scope.Text = "无法识别更新范围；请检查工作区后重新读取范围。"; output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法识别更新范围；请检查工作区后重新读取范围。"; }
             finally { SetBusy(false); }
         }
 
