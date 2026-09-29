@@ -29,6 +29,7 @@ namespace TortoiseSCM
         private bool busy;
         private bool ready;
         private bool changingChecks;
+        private bool checkoutCancellation;
 
         internal OperationForm(PlasticClient client, string command, IList<string> paths)
         {
@@ -61,6 +62,7 @@ namespace TortoiseSCM
         private async Task LoadScopeAsync()
         {
             if (busy) return;
+            checkoutCancellation = false;
             busy = true; ready = false; SetButtons(); files.Items.Clear(); status.Text = "正在读取可操作文件…";
             try
             {
@@ -81,7 +83,10 @@ namespace TortoiseSCM
                 var candidates = BuildCandidates(all);
                 if (IsCheckout()) candidates = SelectedFallback(all, "受控路径");
                 else if (candidates.Count == 0 && commandName == "undo") candidates = SelectedFallback(all, "所选路径");
-                foreach (var item in candidates.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
+                checkoutCancellation = IsCheckout() && candidates.Count > 0 && candidates.All(item => item.StatusCode == "CO");
+                execute.Text = EffectiveLabel();
+                Text = EffectiveLabel() + " - TortoiseSCM";
+                foreach (var item in candidates.OrderBy(item => item, new PlasticStatusPathComparer()))
                 {
                     string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
                         ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
@@ -90,7 +95,7 @@ namespace TortoiseSCM
                     files.Items.Add(row);
                 }
                 ready = files.Items.Count != 0;
-                status.Text = ready ? "请核对列表后点击“" + CommandLabel(commandName) + "”。" :
+                status.Text = ready ? "请核对列表后点击“" + EffectiveLabel() + "”。" :
                     (commandName == "add" ? "当前范围没有可添加的文件。" : "当前范围没有可操作的更改。");
             }
             catch (Exception ex) { output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法读取操作范围，请刷新后重试。"; }
@@ -122,20 +127,21 @@ namespace TortoiseSCM
             if (busy || !ready) return;
             var paths = files.CheckedItems.Cast<ListViewItem>().Select(item => ((PlasticStatusItem)item.Tag).Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths.Count == 0) { status.Text = "请先勾选要操作的文件。"; return; }
-            string label = CommandLabel(commandName);
-            string warning = commandName == "undo" ? "所选项的本地更改将丢失。\r\n" : "";
+            string label = EffectiveLabel();
+            bool undo = commandName == "undo" || checkoutCancellation;
+            string warning = undo ? "所选项的本地更改将丢失。\r\n" : "";
             if (paths.Any(Directory.Exists)) warning += "目录操作会包含其全部子项，包括没有单独勾选的子项。\r\n";
             if (MessageBox.Show(this, warning + String.Join("\r\n", paths.Take(12).ToArray()) +
                 (paths.Count > 12 ? "\r\n… 共 " + paths.Count + " 项" : "") + "\r\n\r\n继续" + label + "？",
                 "TortoiseSCM — " + label, MessageBoxButtons.OKCancel,
-                commandName == "undo" ? MessageBoxIcon.Warning : MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
+                undo ? MessageBoxIcon.Warning : MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             busy = true; ready = false; SetButtons(); status.Text = "正在" + label + "…";
             try
             {
                 var workspace = client.DiscoverWorkspace(paths[0]);
                 if (workspace == null) throw new InvalidOperationException("工作区已改变，请刷新范围。");
-                var request = new PlasticCommandRequest { Command = Parse(commandName), WorkingDirectory = workspace.RootPath,
-                    Paths = paths, Recursive = commandName == "add" || commandName == "checkout-recursive" || commandName == "undo" };
+                var request = new PlasticCommandRequest { Command = Parse(commandName, checkoutCancellation), WorkingDirectory = workspace.RootPath,
+                    Paths = paths, Recursive = commandName == "add" || commandName == "checkout-recursive" || undo };
                 output.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + label + Environment.NewLine + String.Join(Environment.NewLine, paths.ToArray()) + Environment.NewLine);
                 var result = await client.RunAsync(request, CancellationToken.None);
                 output.AppendText(result.Output + Environment.NewLine + result.Error + Environment.NewLine + "退出码：" + result.ExitCode + Environment.NewLine);
@@ -170,16 +176,38 @@ namespace TortoiseSCM
         }
 
         private bool IsCheckout() { return commandName == "checkout" || commandName == "checkout-recursive"; }
+        private string EffectiveLabel() { return checkoutCancellation ? "撤销签出" : CommandLabel(commandName); }
         private static bool IsPrivate(string code) { return code == "PR" || code == "IG"; }
-        private static PlasticCommand Parse(string command)
+        private static PlasticCommand Parse(string command, bool checkoutCancellation)
         {
-            return command == "checkout-recursive" ? PlasticCommand.Checkout :
+            return checkoutCancellation ? PlasticCommand.Undo : command == "checkout-recursive" ? PlasticCommand.Checkout :
                 (PlasticCommand)Enum.Parse(typeof(PlasticCommand), command, true);
         }
         private static string CommandLabel(string command)
         {
             return command == "add" ? "添加" : command == "checkout" ? "签出" :
                 command == "checkout-recursive" ? "递归签出" : "撤销更改";
+        }
+
+        private sealed class PlasticStatusPathComparer : IComparer<PlasticStatusItem>
+        {
+            public int Compare(PlasticStatusItem left, PlasticStatusItem right)
+            {
+                if (ReferenceEquals(left, right)) return 0;
+                if (left == null) return -1;
+                if (right == null) return 1;
+                string[] leftParts = SplitPath(left.Path), rightParts = SplitPath(right.Path);
+                int count = Math.Min(leftParts.Length, rightParts.Length);
+                for (int index = 0; index < count; ++index)
+                {
+                    int result = StringComparer.OrdinalIgnoreCase.Compare(leftParts[index], rightParts[index]);
+                    if (result != 0) return result;
+                }
+                return leftParts.Length.CompareTo(rightParts.Length);
+            }
+
+            private static string[] SplitPath(string path)
+            { return (path ?? "").Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries); }
         }
     }
 }

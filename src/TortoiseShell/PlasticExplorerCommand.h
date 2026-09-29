@@ -131,7 +131,10 @@ public:
             wchar_t path[32768]{};
             const DWORD count = GetModuleFileNameW(moduleInstance, path, ARRAYSIZE(path));
             if (!count || count >= ARRAYSIZE(path)) return E_FAIL;
-            return CopyCommandText((std::wstring(path) + L",-1").c_str(), output);
+            const std::wstring location = commandIndex == ARRAYSIZE(commands)
+                ? std::wstring(path) + L",-1"
+                : std::wstring(path) + L",-" + std::to_wstring(commandIconResources[commandIndex]);
+            return CopyCommandText(location.c_str(), output);
         }
         catch (...) { return E_OUTOFMEMORY; }
     }

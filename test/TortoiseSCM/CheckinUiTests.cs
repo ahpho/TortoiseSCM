@@ -73,12 +73,22 @@ namespace TortoiseSCM
                 form.Show(); Application.DoEvents();
                 Await(form, "RefreshAsync", new object[0]);
                 var list = Field<ListView>(form, "files");
-                Require(list.CheckedItems.Count == rows.Count && !list.Items[3].Checked, "All controlled pending changes start checked; untracked files require explicit selection");
+                var showUnversioned = Field<CheckBox>(form, "showUnversioned");
+                Require(list.Items.Count == rows.Count && list.CheckedItems.Count == rows.Count && !showUnversioned.Checked,
+                    "Controlled pending changes start checked while unversioned files stay hidden");
+                showUnversioned.Checked = true;
+                PumpUntil(() => !(bool)Get(form, "busy") && list.Items.Cast<ListViewItem>().Any(item => ((PlasticStatusItem)item.Tag).StatusCode == "PR"),
+                    "Show unversioned files refreshes the pending list");
+                var unversioned = list.Items.Cast<ListViewItem>().Single(item => ((PlasticStatusItem)item.Tag).StatusCode == "PR");
+                Require(!unversioned.Checked, "Revealed unversioned files remain unchecked");
+                showUnversioned.Checked = false;
+                PumpUntil(() => !(bool)Get(form, "busy") && !list.Items.Cast<ListViewItem>().Any(item => ((PlasticStatusItem)item.Tag).StatusCode == "PR"),
+                    "Unversioned files can be hidden again");
                 Save(form, Path.Combine(artifacts, "pending-default-checks.png"));
                 list.Items[1].Checked = false;
                 pending.Add(new PlasticStatusItem { Path = Path.Combine(root, "new-change.txt"), StatusCode = "CH" });
                 Await(form, "RefreshAsync", new object[0]);
-                Require(!list.Items[0].Checked && !list.Items[1].Checked && list.Items[2].Checked && list.Items[4].Checked,
+                Require(!list.Items[0].Checked && !list.Items[1].Checked && list.Items[2].Checked && list.Items[3].Checked,
                     "Refresh preserves explicit exclusions and checks newly discovered controlled changes");
                 int activations = 0;
                 list.DoubleClick += delegate { activations++; };

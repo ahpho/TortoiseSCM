@@ -96,6 +96,16 @@ constexpr Command commands[] = {
     {L"checkout-recursive", L"Recursive check out", L"递归签出"}
 };
 
+// Resource IDs are kept in command identity order, not display order. The
+// same table feeds the classic bitmap menu and Explorer's IExplorerCommand
+// icon locations so both shell surfaces always show the matching action icon.
+constexpr unsigned commandIconResources[] = {
+    200, 201, 202, 203, 204, 205, 206, 207, 208, 209,
+    210, 211, 212, 213, 214, 215, 216, 217, 218, 219,
+    220, 221, 222, 223, 224, 225, 226, 227
+};
+static_assert(ARRAYSIZE(commandIconResources) == ARRAYSIZE(commands), "Every command must have an icon resource");
+
 // Shared presentation order for classic and modern Explorer menus. The values
 // refer to stable command identities above, not visible menu offsets.
 // Status (identity 0) shares the check-in window and has no separate menu entry.
@@ -317,9 +327,30 @@ class PlasticShell final : public IShellExtInit, public IContextMenu
     std::vector<std::wstring> paths;
     std::vector<size_t> visibleCommands;
     HBITMAP menuBitmap = nullptr;
+    HBITMAP commandBitmaps[ARRAYSIZE(commands)]{};
 public:
     PlasticShell() { ++moduleReferences; }
-    ~PlasticShell() { if (menuBitmap) DeleteObject(menuBitmap); --moduleReferences; }
+    ~PlasticShell()
+    {
+        if (menuBitmap) DeleteObject(menuBitmap);
+        for (HBITMAP bitmap : commandBitmaps) if (bitmap) DeleteObject(bitmap);
+        --moduleReferences;
+    }
+    HBITMAP CommandBitmap(size_t index)
+    {
+        if (index >= ARRAYSIZE(commands)) return nullptr;
+        if (!commandBitmaps[index])
+        {
+            HICON icon = static_cast<HICON>(LoadImageW(moduleInstance,
+                MAKEINTRESOURCEW(commandIconResources[index]), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR));
+            if (icon)
+            {
+                commandBitmaps[index] = CreateMenuBitmap(icon, 16, 16);
+                DestroyIcon(icon);
+            }
+        }
+        return commandBitmaps[index];
+    }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** output) override
     {
         if (!output) return E_POINTER;
@@ -391,6 +422,20 @@ public:
                 { DestroyMenu(submenu); return E_FAIL; }
                 separatorPending = false;
                 if (!AppendMenuW(submenu, MF_STRING, first + visibleCommands.size(), Label(commands[index]))) { DestroyMenu(submenu); return E_FAIL; }
+                HBITMAP commandBitmap = CommandBitmap(index);
+                if (!commandBitmap)
+                {
+                    DestroyMenu(submenu);
+                    return E_FAIL;
+                }
+                MENUITEMINFOW commandItem{sizeof(commandItem)};
+                commandItem.fMask = MIIM_BITMAP;
+                commandItem.hbmpItem = commandBitmap;
+                if (!SetMenuItemInfoW(submenu, static_cast<UINT>(GetMenuItemCount(submenu) - 1), TRUE, &commandItem))
+                {
+                    DestroyMenu(submenu);
+                    return E_FAIL;
+                }
                 visibleCommands.push_back(index);
             }
             if (visibleCommands.empty()) { DestroyMenu(submenu); return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0); }

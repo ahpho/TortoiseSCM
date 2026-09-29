@@ -146,6 +146,20 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
         require(identity.Data1 == 0xb1da4600 + expectedMenuIdentities[index], "modern reordered command preserves stable canonical GUID");
         names.push_back(identity);
         require(SUCCEEDED(child->GetTitle(nullptr, &title)) && wcscmp(title, Label(commands[expectedMenuIdentities[index]])) == 0, "modern frequent-first command labels"); CoTaskMemFree(title);
+        LPWSTR icon = nullptr;
+        require(SUCCEEDED(child->GetIcon(nullptr, &icon)) && icon, "modern child command supplies an icon location");
+        std::wstring iconModulePath;
+        if (registeredDirectory)
+            iconModulePath = (std::filesystem::path(registeredDirectory) / L"TortoiseSCMShell.dll").native();
+        else
+        {
+            wchar_t modulePath[32768]{};
+            require(GetModuleFileNameW(moduleInstance, modulePath, ARRAYSIZE(modulePath)) != 0, "modern child icon module path resolves");
+            iconModulePath = modulePath;
+        }
+        const std::wstring expectedIcon = iconModulePath + L",-" + std::to_wstring(commandIconResources[expectedMenuIdentities[index]]);
+        require(_wcsicmp(icon, expectedIcon.c_str()) == 0, "modern child icon matches its command resource");
+        CoTaskMemFree(icon);
         require(SUCCEEDED(child->GetFlags(&flags)) && flags == ECF_DEFAULT, "modern child flags");
         child->GetState(file.Get(), TRUE, &state); fileCount += state == ECS_ENABLED;
         child->GetState(directory.Get(), TRUE, &state); directoryCount += state == ECS_ENABLED;

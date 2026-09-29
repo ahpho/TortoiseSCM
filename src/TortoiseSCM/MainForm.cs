@@ -28,6 +28,7 @@ namespace TortoiseSCM
         private readonly Button checkin = new Button();
         private readonly LinkLabel selectAll = new LinkLabel();
         private readonly LinkLabel selectNone = new LinkLabel();
+        private readonly CheckBox showUnversioned = new CheckBox();
         private bool busy;
         private bool loaded;
         private bool changingChecks;
@@ -133,6 +134,11 @@ namespace TortoiseSCM
             selectNone.LinkClicked += delegate { foreach (ListViewItem item in files.Items) item.Checked = false; };
             selectionBar.Controls.Add(selectAll);
             selectionBar.Controls.Add(selectNone);
+            showUnversioned.Text = "显示未版本控制文件";
+            showUnversioned.AutoSize = true;
+            showUnversioned.Margin = new Padding(0, 1, 12, 0);
+            showUnversioned.CheckedChanged += async delegate { if (loaded && !busy) await RefreshAsync(); };
+            selectionBar.Controls.Add(showUnversioned);
             AddSelectionLink(selectionBar, "已版本控制", item => !IsPrivate(item.StatusCode));
             AddSelectionLink(selectionBar, "未版本控制", item => IsPrivate(item.StatusCode));
             changes.Controls.Add(selectionBar, 0, 0);
@@ -516,7 +522,7 @@ namespace TortoiseSCM
                 try
                 {
                     files.Items.Clear();
-                    foreach (var item in items.Where(i => InScope(i.Path)))
+                    foreach (var item in items.Where(i => InScope(i.Path) && (showUnversioned.Checked || !IsPrivate(i.StatusCode))))
                     {
                         string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
                             ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;

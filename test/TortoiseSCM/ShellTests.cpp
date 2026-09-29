@@ -164,6 +164,10 @@ void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionK
             verb == L"tortoisescm." + name, "classic frequent-first visible verb order");
         require(GetMenuStringW(submenu, position++, label, ARRAYSIZE(label), MF_BYPOSITION) > 0 &&
             wcscmp(label, Label(commands[expectedMenuIdentities[index]])) == 0, "classic visible label matches reordered verb");
+        MENUITEMINFOW icon{sizeof(icon)};
+        icon.fMask = MIIM_BITMAP;
+        require(GetMenuItemInfoW(submenu, position - 1, TRUE, &icon) && icon.hbmpItem,
+            "classic child command supplies an icon bitmap");
         ++offset;
     }
     require(GetMenuItemCount(submenu) == static_cast<int>(position), "classic menu has exactly the expected commands and separator");
@@ -465,6 +469,7 @@ int wmain(int argc, wchar_t** argv) {
     const bool classicDll = argc == 3 && wcscmp(argv[1], L"--classic-dll") == 0;
     if (argc > 1 && !registered && !modernRegistered && !modernDll && !classicDll) { std::cerr << "Usage: ShellTests.exe [--registered | --modern-registered <binary-directory> | --modern-dll <binary-directory> | --classic-dll <binary-directory> | --overlay-probe <path> <state 0..8>]\n"; return 2; }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (!moduleInstance) moduleInstance = GetModuleHandleW(nullptr);
     auto base = std::filesystem::temp_directory_path() / (L"TortoiseSCMShellTest-" + std::to_wstring(GetCurrentProcessId()));
     std::filesystem::create_directories(base / L"first/.plastic");
     std::filesystem::create_directories(base / L"second/.plastic");

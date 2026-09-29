@@ -5,5 +5,5 @@
  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
  <PropertyGroup><OutDir>$(ProjectDir)..\..\bin\TortoiseSCM\$(Configuration)\</OutDir><IntDir>$(ProjectDir)..\..\obj\TortoiseSCMShellTests\$(Configuration)\</IntDir><TargetName>ShellTests</TargetName></PropertyGroup>
  <ItemDefinitionGroup><ClCompile><LanguageStandard>stdcpp17</LanguageStandard><ExceptionHandling>Sync</ExceptionHandling><AdditionalOptions>/utf-8</AdditionalOptions><RuntimeLibrary>MultiThreaded</RuntimeLibrary></ClCompile><Link><AdditionalDependencies>shell32.lib;ole32.lib;uuid.lib;user32.lib;gdi32.lib</AdditionalDependencies></Link></ItemDefinitionGroup>
- <ItemGroup><ClCompile Include="ShellTests.cpp" /><ClInclude Include="ModernShellTests.h" /></ItemGroup><Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+ <ItemGroup><ClCompile Include="ShellTests.cpp" /><ClInclude Include="ModernShellTests.h" /><ResourceCompile Include="..\..\src\TortoiseShell\PlasticShell.rc" /></ItemGroup><Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

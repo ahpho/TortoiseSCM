@@ -145,8 +145,18 @@ namespace TortoiseSCM
             string directory = Path.Combine(root, prefix + " 递归目录"); Directory.CreateDirectory(directory);
             string first = Path.Combine(directory, "甲.txt"), second = Path.Combine(directory, "乙.txt");
             File.WriteAllText(first, "alpha"); File.WriteAllText(second, "beta");
-            using (var form = LaunchOperation("add", directory, true, "目录操作会包含其全部子项", directory))
-                Require(Pending(root, first, "AD") && Pending(root, second, "AD"), "Directory Add recursively includes both children after explicit warning");
+            using (var form = OpenOperation("add", directory))
+            {
+                var ordered = Field<ListView>(form, "files").Items.Cast<ListViewItem>().Select(item => ((PlasticStatusItem)item.Tag).Path).ToArray();
+                Require(ordered.Length >= 3 && Same(ordered[0], directory) && Same(ordered[1], first) && Same(ordered[2], second),
+                    "Add list keeps directory immediately before its descendants");
+                using (var guard = new DialogGuard(form, true, "继续添加", directory))
+                {
+                    Field<Button>(form, "execute").PerformClick();
+                    Pump(() => !Field<bool>(form, "busy") && guard.Count == 1, "Directory Add handler completes");
+                }
+            }
+            Require(Pending(root, first, "AD") && Pending(root, second, "AD"), "Directory Add recursively includes both children after explicit warning");
             using (var form = Launch("checkin", directory, true, null, null))
             {
                 var rows = Field<ListView>(form, "files"); var folder = rows.Items.Cast<ListViewItem>().Single(row => ((PlasticStatusItem)row.Tag).IsDirectory);
@@ -198,7 +208,28 @@ namespace TortoiseSCM
                 var row = rows.Items.Cast<ListViewItem>().SingleOrDefault(item => Same(((PlasticStatusItem)item.Tag).Path, path));
                 Require(row != null && row.SubItems.Count > 2 && row.SubItems[2].Text.Contains("签出"),
                     "Check-in interface shows checked-out file status");
+                var showUnversioned = Field<CheckBox>(checkin, "showUnversioned");
+                Require(!showUnversioned.Checked && !rows.Items.Cast<ListViewItem>().Any(item => Same(((PlasticStatusItem)item.Tag).Path, sibling)),
+                    "Check-in hides unversioned files by default");
+                showUnversioned.Checked = true;
+                Pump(() => !Field<bool>(checkin, "busy") && rows.Items.Cast<ListViewItem>().Any(item => Same(((PlasticStatusItem)item.Tag).Path, sibling)),
+                    "Show unversioned files refreshes the pending list");
+                Require(!rows.Items.Cast<ListViewItem>().Single(item => Same(((PlasticStatusItem)item.Tag).Path, sibling)).Checked,
+                    "Unversioned files remain unchecked when revealed");
             }
+            using (var cancelCheckout = OpenOperation("checkout", path))
+            {
+                Require(Field<Button>(cancelCheckout, "execute").Text == "撤销签出" && cancelCheckout.Text.Contains("撤销签出"),
+                    "Checked-out file changes the checkout action to cancel checkout");
+                using (var guard = new DialogGuard(cancelCheckout, true, "继续撤销签出", path))
+                {
+                    Field<Button>(cancelCheckout, "execute").PerformClick();
+                    Pump(() => !Field<bool>(cancelCheckout, "busy") && guard.Count == 1, "Cancel checkout handler completes");
+                }
+            }
+            Require(!Pending(root, path, "CO"), "Cancel checkout clears the native checkout state");
+            using (var restoreCheckout = LaunchOperation("checkout", path, true, "继续签出", path)) { }
+            Require(Pending(root, path, "CO"), "Checkout action can be used again after cancellation");
             string checkoutDirectory = Path.Combine(root, mode + " recursive checkout");
             string checkoutFirst = Path.Combine(checkoutDirectory, "first.txt"), checkoutSecond = Path.Combine(checkoutDirectory, "second.txt");
             Directory.CreateDirectory(checkoutDirectory); File.WriteAllText(checkoutFirst, "recursive first"); File.WriteAllText(checkoutSecond, "recursive second");
