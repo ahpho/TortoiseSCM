@@ -313,8 +313,7 @@ namespace TortoiseSCM
                     {
                         cancellation.Token.ThrowIfCancellationRequested();
                         if (branch != null) ValidateHistoryContext();
-                        var page = branch == null ? await client.GetHistoryPageAsync(path, before, 50, cancellation.Token) :
-                            await client.GetHistoryPageAsync(path, branch, before, 50, cancellation.Token);
+                        var page = await client.GetHistoryPageAsync(path, branch, before, wholeWorkspace ? 100 : 50, cancellation.Token);
                         cancellation.Token.ThrowIfCancellationRequested();
                         if (branch != null)
                         {
@@ -386,7 +385,7 @@ namespace TortoiseSCM
 
         private void UpdateHistorySummary()
         {
-            historySummary.Text = (localStateError == null ? "粗体：未拉取到本地；" : "本地拉取状态暂不可用；") +
+            historySummary.Text = (localStateError == null ? "粗体：当前更新范围内未拉取；" : "本地拉取状态暂不可用；") +
                 revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
                 " 个提交；" + (hasMoreHistory ? (loadingHistory ? "正在读取全部历史，可取消" : "加载未完成，请刷新全部重试") : "已扫描全部历史") +
                 (branch != null ? "（仅本分支提交，不含祖先）" :
@@ -511,7 +510,9 @@ namespace TortoiseSCM
             bool missing;
             bool known = notLoaded.TryGetValue(((PlasticHistoryItem)row.Tag).Changeset, out missing);
             row.Font = known && missing ? notLoadedFont : revisions.Font;
-            row.ToolTipText = known ? (missing ? "尚未拉取到本地（当前范围）" : "已包含在本地加载版本中（当前范围）") :
+            row.ToolTipText = known ? (missing ? "当前更新范围内尚未拉取到本地" :
+                (localState != null && !localState.HeadAncestors.Contains(((PlasticHistoryItem)row.Tag).Changeset) ?
+                    "不属于当前工作区的更新范围，无需拉取" : "已包含在本地加载版本中（当前范围）")) :
                 (localStateError == null ? "正在检查本地拉取状态…" : "无法判断本地拉取状态：" + localStateError);
         }
 

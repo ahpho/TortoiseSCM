@@ -21,8 +21,10 @@ internal static class HistoryLocalStateTests
         if (args.Length > 0 && new[] { "status", "ls", "log", "diff", "find" }.Contains(args[0])) return Fake(args);
         try
         {
-            if (args.Length == 5 && args[0] == "--live") Live(args).GetAwaiter().GetResult();
-            else Run().GetAwaiter().GetResult();
+            if (args.Length == 3 && args[0] == "--read-only") ReadOnly(args[1], Int32.Parse(args[2])).GetAwaiter().GetResult();
+            else if (args.Length == 5 && args[0] == "--live") Live(args).GetAwaiter().GetResult();
+            else if (args.Length == 0) Run().GetAwaiter().GetResult();
+            else throw new ArgumentException("Use --read-only <workspace> <expected-bold-count> or --live <producer> <partial> <repository> <branch>.");
             Console.WriteLine("PASS: history local state (" + assertions + " assertions)"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
@@ -40,10 +42,26 @@ internal static class HistoryLocalStateTests
             var state = await client.GetHistoryLocalStateAsync(root, Token);
             Require(!await Missing(client, state, 10), "Complete workspace contains its loaded changeset");
             Require(!await Missing(client, state, 2), "Complete workspace includes merged/parent ancestors");
-            Require(await Missing(client, state, 4), "An older unrelated branch is not loaded");
+            Require(!await Missing(client, state, 4), "An older unmerged branch is not an incoming update");
             Require(await Missing(client, state, 11), "A newer commit is not loaded");
+            Require(await Missing(client, state, 7), "An incoming ancestor remains bold regardless of its older changeset number");
+            string selector = File.ReadAllText(Path.Combine(root, ".plastic", "plastic.selector"));
+            File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"" + Repository + "\"\n changeset \"10\"");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(!await Missing(client, state, 11), "A pinned workspace does not claim later branch changes need downloading");
+            File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), selector);
+            File.WriteAllText(Path.Combine(root, ".plastic", "complete"), "");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            for (long cs = 0; cs <= 12; cs++) Require(!await Missing(client, state, cs), "Fully updated standard workspace has no bold rows");
+            File.Delete(Path.Combine(root, ".plastic", "complete"));
             File.WriteAllText(Path.Combine(root, ".plastic", "partial"), "");
             state = await client.GetHistoryLocalStateAsync(root, Token);
+            int calls = File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Length;
+            Require(!await Missing(client, state, 4), "Unmerged branch is also regular in mixed-version workspaces");
+            for (long unrelated = 100; unrelated < 1100; unrelated++)
+                Require(!await Missing(client, state, unrelated), "Unrelated history is not pending download");
+            Require(File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Length == calls,
+                "A thousand unrelated rows need zero additional native processes");
             Require(await Missing(client, state, 5), "Upper directory stays bold when only one of two changed files is pulled");
             var fileState = await client.GetHistoryLocalStateAsync(Path.Combine(root, "new.txt"), Token);
             Require(!await Missing(client, fileState, 5), "File history only considers its selected scope");
@@ -77,12 +95,14 @@ internal static class HistoryLocalStateTests
         string root = Environment.CurrentDirectory;
         bool partial = File.Exists(Path.Combine(root, ".plastic", "partial"));
         bool updated = File.Exists(Path.Combine(root, ".plastic", "updated"));
+        File.AppendAllText(Path.Combine(root, ".plastic", "calls"), String.Join(" ", args) + "\n");
         Console.OutputEncoding = new UTF8Encoding(false);
         if (args[0] == "status")
         {
             if (File.Exists(Path.Combine(root, ".plastic", "broken"))) { Console.WriteLine("<invalid/>"); return 0; }
             Console.WriteLine(new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status",
-                new XElement("Changeset", partial ? -1 : 10), new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))))); return 0;
+                new XElement("Changeset", partial ? -1 : File.Exists(Path.Combine(root, ".plastic", "complete")) ? 12 : 10), new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))),
+                new XElement("WkConfigName", "/main@" + Repository))); return 0;
         }
         if (args[0] == "ls")
         {
@@ -92,8 +112,13 @@ internal static class HistoryLocalStateTests
         if (args[0] == "log")
         {
             long top = Int64.Parse(args[1].Substring(3).Split('@')[0]);
-            long[] ids = top == 10 ? new long[] { 10, 6, 5, 2, 0 } : top == 5 ? new long[] { 5, 2, 0 } : top == 2 ? new long[] { 2, 0 } : new long[] { 0 };
+            long[] ids = top == 12 ? new long[] { 12, 11, 10, 9, 8, 7, 6, 5, 2, 0 } : top == 10 ? new long[] { 10, 6, 5, 2, 0 } : top == 5 ? new long[] { 5, 2, 0 } : top == 2 ? new long[] { 2, 0 } : new long[] { 0 };
             Console.WriteLine(new XElement("LogList", ids.Select(id => new XElement("Changeset", new XElement("ChangesetId", id))))); return 0;
+        }
+        if (args[0] == "find" && args[1] == "branch")
+        {
+            Console.WriteLine(new XElement("PLASTICQUERY", new XElement("BRANCH", new XElement("NAME", "/main"),
+                new XElement("CHANGESET", 12), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")))); return 0;
         }
         if (args[0] == "find")
         {
@@ -119,6 +144,23 @@ internal static class HistoryLocalStateTests
     private static XElement Item(string root, string name, long revision, long cs)
     { return new XElement("LsItem", new XElement("CurrentPath", Path.Combine(root, name)), new XElement("RevId", revision),
         new XElement("Changeset", cs), new XElement("ItemId", name == "" ? 1 : name == "stale.txt" ? 2000 : 1000), new XElement("Repository", "rep:" + Repository)); }
+
+    private static async Task ReadOnly(string path, int expectedBold)
+    {
+        var client = new PlasticClient(new PlasticClientConfig());
+        var watch = Stopwatch.StartNew();
+        var state = await client.GetHistoryLocalStateAsync(path, Token);
+        Console.WriteLine("Local snapshot ms: " + watch.ElapsedMilliseconds + "; update head: " + state.HeadChangeset);
+        int rows = 0, bold = 0; long? before = null;
+        do
+        {
+            var page = await client.GetHistoryPageAsync(path, before, 100, Token);
+            foreach (var entry in page.Items) { rows++; if (await client.IsHistoryNotLoadedAsync(state, entry, Token)) bold++; }
+            before = page.HasMore ? page.NextBeforeChangeset : null;
+        } while (before.HasValue);
+        Console.WriteLine("History rows: " + rows + "; bold: " + bold + "; total ms: " + watch.ElapsedMilliseconds);
+        Require(bold == expectedBold, "Read-only real workspace has expected incoming history markers");
+    }
 
     private static async Task Live(string[] args)
     {

@@ -39,7 +39,7 @@ namespace TortoiseSCM
             string root = Path.Combine(Path.GetTempPath(), "TortoiseSCM-history-loading-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(root, ".plastic"));
             File.WriteAllText(Meta(root, "plastic.workspace"), "history-loading\nguid\nStandard\n");
-            File.WriteAllText(Meta(root, "plastic.selector"), "repository \"test@server:8087\"");
+            File.WriteAllText(Meta(root, "plastic.selector"), "repository \"test@server:8087\"\n branch \"/main\"");
             File.WriteAllText(Meta(root, "history-loading-fixture"), "");
             Write(root, "head", "125");
             try
@@ -48,23 +48,25 @@ namespace TortoiseSCM
                 {
                     form.Show(); Pump(() => !Field<bool>(form, "loadingHistory"));
                     var revisions = Field<ListView>(form, "revisions");
-                    Require(revisions.Items.Count == 126 && Ids(form).First() == 125 && Ids(form).Last() == 0, "Opening automatically loads every repository changeset across three batches: " + revisions.Items.Count + " / " + Field<Label>(form, "status").Text);
-                    Require(PageQueries(root) == 3 && !Field<bool>(form, "hasMoreHistory"), "Exhaustion is based on server continuation, not first page size");
+                    Require(revisions.Items.Count == 126 && Ids(form).First() == 125 && Ids(form).Last() == 0, "Opening automatically loads every repository changeset across two batches: " + revisions.Items.Count + " / " + Field<Label>(form, "status").Text);
+                    Require(PageQueries(root) == 2 && !Field<bool>(form, "hasMoreHistory"), "Exhaustion is based on server continuation, not first page size");
                     Require(Ids(form).Distinct().Count() == 126, "Automatic pages contain no duplicates");
                     Require(revisions.Items.Cast<ListViewItem>().All(row => row.Font.Bold ==
-                        (((PlasticHistoryItem)row.Tag).Changeset > 110 || new long[] { 1, 4 }.Contains(((PlasticHistoryItem)row.Tag).Changeset))),
-                        "Unpulled rows and older unrelated branch commits are bold across every column");
+                        ((PlasticHistoryItem)row.Tag).Changeset > 110),
+                        "Only incoming current-branch commits are bold; unmerged branches are regular");
                     Require(ReadCalls(root).Count(line => line.Contains("changesetid = ")) == 2, "Intermediate batches do not reload details; completion refreshes the final selected changeset once");
                     var filter = Field<TextBox>(form, "filter");
                     filter.Text = "oldest-only"; Pump(() => Field<Button>(form, "restore").Enabled);
-                    Require(Ids(form).SequenceEqual(new long[] { 1 }), "Filtering finds a match beyond the first two batches");
-                    Require(revisions.Items[0].Font.Bold && revisions.Items[0].UseItemStyleForSubItems, "Filtering retains the bold font on the entire row");
+                    Require(Ids(form).SequenceEqual(new long[] { 1 }), "Filtering finds a match beyond the first batch");
+                    Require(!revisions.Items[0].Font.Bold && revisions.Items[0].ToolTipText.Contains("无需拉取"), "Unmerged branch tooltip explains why it is not bold");
+                    filter.Text = "commit 125"; Pump(() => Field<Button>(form, "restore").Enabled);
+                    Require(revisions.Items.Count == 1 && revisions.Items[0].Font.Bold && revisions.Items[0].UseItemStyleForSubItems, "Filtering retains bold for actual incoming commits");
                     filter.Clear(); Pump(() => Field<Button>(form, "restore").Enabled);
                     Require(revisions.Items.Count == 126, "Clearing the filter restores all history");
                     Write(root, "head", "130");
                     int pagesBefore = PageQueries(root);
                     Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
-                    Require(revisions.Items.Count == 131 && Ids(form).First() == 130 && Ids(form).Last() == 0 && PageQueries(root) - pagesBefore == 3,
+                    Require(revisions.Items.Count == 131 && Ids(form).First() == 130 && Ids(form).Last() == 0 && PageQueries(root) - pagesBefore == 2,
                         "Refresh retrieves the new head and all older history again");
                     Require(Field<Button>(form, "refreshHistory").Text == "刷新全部", "Refresh label explicitly describes full refresh");
                     revisions.TopItem = revisions.Items.Cast<ListViewItem>().Single(row => ((PlasticHistoryItem)row.Tag).Changeset == 114);
@@ -81,8 +83,8 @@ namespace TortoiseSCM
                     Pump(() => localRefresh.IsCompleted); localRefresh.GetAwaiter().GetResult();
                     localRefresh = (Task)typeof(HistoryForm).GetMethod("UpdateLocalRowsAsync", Flags).Invoke(form, new object[] { CancellationToken.None });
                     Pump(() => localRefresh.IsCompleted); localRefresh.GetAwaiter().GetResult();
-                    Require(!revisions.Items[0].Font.Bold && revisions.Items.Cast<ListViewItem>().Count(row => row.Font.Bold) == 2,
-                        "Refreshing local state after pulling clears bold while preserving unrelated branch markers");
+                    Require(revisions.Items.Cast<ListViewItem>().All(row => !row.Font.Bold),
+                        "After fully updating no row is bold, including unrelated branch commits");
                     Write(root, "invalid-local-state", "");
                     typeof(Form).GetMethod("OnActivated", Flags).Invoke(form, new object[] { EventArgs.Empty });
                     Pump(() => !Field<bool>(form, "checkingLocalState"));
@@ -126,9 +128,9 @@ namespace TortoiseSCM
                 Write(root, "slow-continuation", "");
                 using (var form = new HistoryForm(Client(), root, root)) {
                     form.Show(); Pump(() => File.Exists(Meta(root, "continuation-entered")));
-                    Require(Ids(form).Length == 50 && Field<Button>(form, "cancelHistory").Enabled, "First load publishes the first batch while scanning older history");
+                    Require(Ids(form).Length == 100 && Field<Button>(form, "cancelHistory").Enabled, "First load publishes the first batch while scanning older history");
                     Field<Button>(form, "cancelHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
-                    Require(Ids(form).Length == 50 && Field<bool>(form, "hasMoreHistory"), "Cancelling initial load preserves already visible rows");
+                    Require(Ids(form).Length == 100 && Field<bool>(form, "hasMoreHistory"), "Cancelling initial load preserves already visible rows");
                     form.Close();
                 }
                 File.Delete(Meta(root, "slow-continuation")); File.Delete(Meta(root, "continuation-entered"));
@@ -238,7 +240,7 @@ namespace TortoiseSCM
             if (args[0] == "find" && args[1] == "branch") {
                 Console.WriteLine(new XElement("PLASTICQUERY", new[] { "/main", "/main/older" }.Select(name => new XElement("BRANCH",
                     new XElement("NAME", name), new XElement("PARENT", name == "/main" ? "" : "/main"),
-                    new XElement("CHANGESET", 110), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087"))))); return 0;
+                    new XElement("CHANGESET", File.ReadAllText(Meta(root, "head"))), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087"))))); return 0;
             }
             if (args[0] != "find" || args[1] != "changeset") return 97;
             string query = args[2];
@@ -266,7 +268,7 @@ namespace TortoiseSCM
         private static string Meta(string root, string name) { return Path.Combine(root, ".plastic", name); }
         private static void Write(string root, string name, string value) { File.WriteAllText(Meta(root, name), value, new UTF8Encoding(false)); }
         private static string[] ReadCalls(string root) { return File.ReadAllLines(Meta(root, "calls.log")); }
-        private static int PageQueries(string root) { return ReadCalls(root).Count(line => line.Contains("order by changesetid desc limit 51")); }
+        private static int PageQueries(string root) { return ReadCalls(root).Count(line => line.Contains("order by changesetid desc limit ")); }
         private static T Field<T>(object owner, string name) { return (T)owner.GetType().GetField(name, Flags).GetValue(owner); }
         private static long[] Ids(HistoryForm form) { return Field<ListView>(form, "revisions").Items.Cast<ListViewItem>().Select(row => ((PlasticHistoryItem)row.Tag).Changeset).ToArray(); }
         private static void Pump(Func<bool> ready) {

@@ -23,6 +23,7 @@ namespace TortoiseSCM
         internal readonly Dictionary<long, long> RevisionItems = new Dictionary<long, long>();
         internal HashSet<long> HeadItems;
         internal HashSet<long> HeadAncestors;
+        internal long HeadChangeset;
     }
 
     internal sealed class HistoryLoadedItem
@@ -85,14 +86,32 @@ namespace TortoiseSCM
                     state.RevisionItems[revision] = id;
                 }
             }
+            // Only commits reachable from the selected update target can be
+            // pending downloads. Unmerged sibling branches remain in Show Log,
+            // but neither need downloading nor expensive per-item diff queries.
+            var branch = (await GetBranchesAsync(workspace.RootPath, token).ConfigureAwait(false)).SingleOrDefault(item => item.IsCurrent);
+            if (branch != null)
+            {
+                state.HeadChangeset = branch.HeadChangeset;
+                state.HeadAncestors = await HistoryAncestorsAsync(state, branch.HeadChangeset, token).ConfigureAwait(false);
+            }
+            else if (state.LoadedChangesets != null)
+            {
+                // A changeset/label-pinned workspace has no advancing branch target.
+                state.HeadChangeset = changeset;
+                state.HeadAncestors = state.LoadedChangesets;
+            }
+            else throw new InvalidDataException("无法确定当前工作区的更新目标。");
             ValidateHistoryLocalContext(state);
             return state;
         }
 
         internal async Task<bool> IsHistoryNotLoadedAsync(PlasticHistoryLocalState state, PlasticHistoryItem entry, CancellationToken token)
         {
+            token.ThrowIfCancellationRequested();
             ValidateHistoryLocalContext(state);
             if (entry.Repository != state.Workspace.Repository) throw new InvalidOperationException("历史记录的仓库已改变。");
+            if (!state.HeadAncestors.Contains(entry.Changeset)) return false;
             if (state.LoadedChangesets != null) return !state.LoadedChangesets.Contains(entry.Changeset);
             bool missing;
             if (state.Missing.TryGetValue(entry.Changeset, out missing)) return missing;
@@ -163,10 +182,8 @@ namespace TortoiseSCM
         {
             if (state.HeadItems == null)
             {
-                var branch = (await GetBranchesAsync(state.Workspace.RootPath, token).ConfigureAwait(false)).SingleOrDefault(item => item.IsCurrent);
-                if (branch == null) return false;
                 var result = await ExecuteAsync(RevisionCommand(state.Workspace.RootPath, new[] { "ls", "/",
-                    "--tree=cs:" + branch.HeadChangeset.ToString(CultureInfo.InvariantCulture) + "@" + state.Workspace.Repository,
+                    "--tree=cs:" + state.HeadChangeset.ToString(CultureInfo.InvariantCulture) + "@" + state.Workspace.Repository,
                     "--recursive", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
                 RequireSuccess(result);
                 var document = SafeXml.Load(result.Output);
@@ -180,7 +197,6 @@ namespace TortoiseSCM
                         throw new InvalidDataException("分支目录项标识无效。");
                     ids.Add(number);
                 }
-                state.HeadAncestors = await HistoryAncestorsAsync(state, branch.HeadChangeset, token).ConfigureAwait(false);
                 state.HeadItems = ids;
             }
             // Historical changes later deleted on the selected branch need no download.
