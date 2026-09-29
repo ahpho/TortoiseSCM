@@ -43,6 +43,7 @@ internal static class HistoricalBeyondCompareTests
             "Parent comparison preserves authoritative historical source path");
         foreach (string mode in new[] { "parent-root", "parent-wrong", "parent-malformed", "find-fail", "find-selector" })
         {
+            client = NewClient(executable, bc);
             File.WriteAllText(Path.Combine(root, "mode"), mode);
             await Reject<Exception>(() => client.GetChangesetParentComparisonAsync(root, 10, Repository, Token),
                 "Parent lookup rejects invalid identity, absence, server error or context race: " + mode);
@@ -74,10 +75,13 @@ internal static class HistoricalBeyondCompareTests
             Check((bool)recording.Element("readonly"), "Both downloaded and synthetic empty files are read-only");
             Check(!File.Exists(argv[2]) && !File.Exists(argv[3]) && !Directory.Exists(Path.GetDirectoryName(argv[2])), "Historical temporary inputs removed after BC completes");
             string commands = File.ReadAllText(Path.Combine(root, "commands"));
-            Check(commands.Split('\n').First() == "diff", "Selected row is re-proved by native tree comparison before reads");
+            Check(!commands.Split('\n').Contains("diff"), "Selected row is validated against cached immutable comparison without repeating native diff");
             Check(commands.Split('\n').Count(x => x == "cat") == (row.Status == "A" || row.Status == "D" ? 1 : 2), "Only proven existing endpoints are downloaded");
         }
         var added = comparison.Files.Single(x => x.Status == "A");
+        File.Delete(Path.Combine(root, "commands"));
+        Check((await client.OpenChangesetFileDiffToolAsync(root, comparison, added, Token)).Succeeded, "Repeated historical diff launches successfully");
+        Check(!File.Exists(Path.Combine(root, "commands")), "Repeated diff reuses comparison, endpoint validation and exact bytes with zero cm processes");
         foreach (var spoof in new[] {
             new PlasticChangesetFile { Status = "D", Path = added.Path, ItemType = "F" },
             new PlasticChangesetFile { Status = "A", Path = "/invented.txt", ItemType = "F" },
@@ -94,12 +98,14 @@ internal static class HistoricalBeyondCompareTests
 
         foreach (string mode in new[] { "different-row", "duplicate-row", "diff-fail", "ls-fail", "cat-fail", "diff-selector", "cat-selector" })
         {
+            client = NewClient(executable, bc);
             File.WriteAllText(Path.Combine(root, "mode"), mode); File.Delete(Path.Combine(root, "viewer.xml"));
             await Reject<Exception>(() => client.OpenChangesetFileDiffToolAsync(root, comparison, added, Token), "Failure or context race rejects selected comparison: " + mode);
             Check(!File.Exists(Path.Combine(root, "viewer.xml")), "Failure never substitutes absent content or launches BC: " + mode);
             RestoreSelector();
         }
         File.WriteAllText(Path.Combine(root, "mode"), "");
+        client = NewClient(executable, bc);
         comparison.Repository = "other@server:8087";
         await Reject<InvalidOperationException>(() => client.OpenChangesetFileDiffToolAsync(root, comparison, added, Token), "Reviewed repository mismatch rejects comparison");
         comparison.Repository = Repository;
@@ -143,6 +149,8 @@ internal static class HistoricalBeyondCompareTests
 
     private static byte[] Bytes(string path, bool first)
     { return path == "/binary.bin" ? new byte[] { 0, 255, (byte)(first ? 1 : 2), 13, 10 } : Encoding.UTF8.GetBytes((first ? "before " : "after ") + path + "\r\n"); }
+    private static PlasticClient NewClient(string executable, string bc)
+    { return new PlasticClient(new PlasticClientConfig { CmPath = executable, BeyondComparePath = bc, UseBeyondCompare = true, Timeout = TimeSpan.FromSeconds(10) }); }
     private static void RestoreSelector()
     { File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"" + Repository + "\""); }
     private static int Child(string[] args)
@@ -161,7 +169,12 @@ internal static class HistoricalBeyondCompareTests
             if (mode == "wait") for (int i = 0; i < 200 && !File.Exists(Path.Combine(testRoot, "release")); i++) Thread.Sleep(50);
             return mode.StartsWith("exit") ? Int32.Parse(mode.Substring(4)) : 0;
         }
-        File.AppendAllText(Path.Combine(testRoot, "commands"), args[0] + "\n");
+        using (var mutex = new Mutex(false, "Local\\TortoiseSCM-HistoryTest-" + Path.GetFileName(testRoot)))
+        {
+            mutex.WaitOne();
+            try { File.AppendAllText(Path.Combine(testRoot, "commands"), args[0] + "\n"); }
+            finally { mutex.ReleaseMutex(); }
+        }
         if (mode == args[0] + "-fail") { Console.Error.WriteLine("Deliberate server failure"); return 19; }
         if (mode == args[0] + "-selector") File.WriteAllText(Path.Combine(testRoot, ".plastic", "plastic.selector"), "repository \"other@server\"");
         if (args[0] == "find")

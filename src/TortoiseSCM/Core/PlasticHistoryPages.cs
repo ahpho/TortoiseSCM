@@ -185,10 +185,7 @@ namespace TortoiseSCM
             if (changeset == 0) files = new List<PlasticChangesetFile>();
             else
             {
-                var response = await ExecuteAsync(RevisionCommand(root, new[] { "diff", "cs:" + changeset.ToString(CultureInfo.InvariantCulture) + "@" + repository,
-                    "--repositorypaths", "--encoding=utf-8", "--format={status}|{path}|{type}|{srccmpath}|{dstcmpath}" }), cancellationToken).ConfigureAwait(false);
-                RequireSuccess(response);
-                files = ParseChangesetFiles(response.Output);
+                files = ParseChangesetFiles(await HistoryDiffAsync(root, repository, changeset, cancellationToken).ConfigureAwait(false));
             }
             ValidateHistoryRepository(root, repository);
             cancellationToken.ThrowIfCancellationRequested();

@@ -139,8 +139,8 @@ namespace TortoiseSCM
             ValidateExpectedHistoricalRepository(context, expectedRepository);
             // Validate both endpoints even for the native viewer, which otherwise owns errors
             // in its GUI. Missing historical paths remain explicit errors, never empty bytes.
-            await ValidateHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, cancellationToken).ConfigureAwait(false);
-            await ValidateHistoricalFileAsync(context, toRepositoryPath, toChangeset, cancellationToken).ConfigureAwait(false);
+            await ValidateHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, cancellationToken, true).ConfigureAwait(false);
+            await ValidateHistoricalFileAsync(context, toRepositoryPath, toChangeset, cancellationToken, true).ConfigureAwait(false);
             ValidateHistoricalContext(context);
             if (host == null && beyondCompare == null && String.IsNullOrWhiteSpace(config.DiffToolPath))
                 return await ExecuteAsync(new PlasticProcessCommand { FileName = config.CmPath, WorkingDirectory = context.RootPath, Interactive = true,
@@ -153,8 +153,8 @@ namespace TortoiseSCM
             bool preserve = false;
             try
             {
-                await DownloadHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, before, cancellationToken).ConfigureAwait(false);
-                await DownloadHistoricalFileAsync(context, toRepositoryPath, toChangeset, after, cancellationToken).ConfigureAwait(false);
+                await Task.WhenAll(DownloadHistoricalFileAsync(context, fromRepositoryPath, fromChangeset, before, cancellationToken, true),
+                    DownloadHistoricalFileAsync(context, toRepositoryPath, toChangeset, after, cancellationToken, true)).ConfigureAwait(false);
                 ValidateHistoricalContext(context);
                 File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
                 File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
@@ -173,8 +173,8 @@ namespace TortoiseSCM
             finally { if (!preserve) RemoveHistoricalTemporaryDirectory(temporary, before, after); }
         }
 
-        // A missing endpoint is only represented by empty bytes after the server has
-        // re-proved the selected added/deleted row in this exact pair of complete trees.
+        // A missing endpoint is only represented by empty bytes after validating the
+        // selected added/deleted row against the server's immutable tree comparison.
         // Ordinary historical comparisons continue to reject missing paths.
         public async Task<PlasticCommandResult> OpenChangesetFileDiffToolAsync(string workspacePath,
             PlasticChangesetComparison comparison, PlasticChangesetFile file, CancellationToken cancellationToken)
@@ -206,9 +206,10 @@ namespace TortoiseSCM
             try
             {
                 if (status == "A") File.WriteAllBytes(before, new byte[0]);
-                else await DownloadHistoricalFileAsync(context, sourcePath, fromChangeset, before, cancellationToken).ConfigureAwait(false);
                 if (status == "D") File.WriteAllBytes(after, new byte[0]);
-                else await DownloadHistoricalFileAsync(context, path, toChangeset, after, cancellationToken).ConfigureAwait(false);
+                // Wait for both tasks, including on failure, before removing temp files.
+                await Task.WhenAll(status == "A" ? Task.FromResult(0) : DownloadHistoricalFileAsync(context, sourcePath, fromChangeset, before, cancellationToken, true),
+                    status == "D" ? Task.FromResult(0) : DownloadHistoricalFileAsync(context, path, toChangeset, after, cancellationToken, true)).ConfigureAwait(false);
                 ValidateHistoricalContext(context);
                 File.SetAttributes(before, File.GetAttributes(before) | FileAttributes.ReadOnly);
                 File.SetAttributes(after, File.GetAttributes(after) | FileAttributes.ReadOnly);
@@ -261,14 +262,20 @@ namespace TortoiseSCM
                 throw new InvalidOperationException("The workspace repository no longer matches the reviewed historical snapshot. Refresh before continuing.");
         }
 
-        private async Task ValidateHistoricalFileAsync(PlasticWorkspace context, string repositoryPath, long changeset, CancellationToken cancellationToken)
+        private async Task ValidateHistoricalFileAsync(PlasticWorkspace context, string repositoryPath, long changeset, CancellationToken cancellationToken, bool cache = false)
         {
             ValidateHistoricalContext(context);
-            var result = await ExecuteAsync(RevisionCommand(context.RootPath, new[] { "ls", repositoryPath,
-                "--tree=cs:" + changeset.ToString(CultureInfo.InvariantCulture) + "@" + context.Repository, "--xml", "--encoding=utf-8" }), cancellationToken).ConfigureAwait(false);
-            RequireSuccess(result);
+            var arguments = new[] { "ls", repositoryPath,
+                "--tree=cs:" + changeset.ToString(CultureInfo.InvariantCulture) + "@" + context.Repository, "--xml", "--encoding=utf-8" };
+            string xml;
+            if (cache) xml = await HistoricalReadAsync(context.RootPath, context.Repository, arguments, cancellationToken).ConfigureAwait(false);
+            else
+            {
+                var result = await ExecuteAsync(RevisionCommand(context.RootPath, arguments), cancellationToken).ConfigureAwait(false);
+                RequireSuccess(result); xml = result.Output;
+            }
             ValidateHistoricalContext(context);
-            var document = SafeXml.Load(result.Output);
+            var document = SafeXml.Load(xml);
             if (document.Root == null || document.Root.Name != "LsResults") throw new InvalidDataException("Unexpected historical file listing.");
             var items = document.Descendants("LsItem").Where(item => String.Equals((string)item.Element("CurrentPath"), repositoryPath, StringComparison.Ordinal)).ToList();
             if (items.Count != 1) throw new ArgumentException("The file does not exist at cs:" + changeset.ToString(CultureInfo.InvariantCulture) + ": " + repositoryPath);
@@ -282,14 +289,25 @@ namespace TortoiseSCM
             if (!String.IsNullOrEmpty((string)file.Element("SymlinkTarget"))) throw new ArgumentException("Historical symbolic links are not supported.");
         }
 
-        private async Task DownloadHistoricalFileAsync(PlasticWorkspace context, string repositoryPath, long changeset, string target, CancellationToken cancellationToken)
+        private async Task DownloadHistoricalFileAsync(PlasticWorkspace context, string repositoryPath, long changeset, string target, CancellationToken cancellationToken, bool cache = false)
         {
-            await ValidateHistoricalFileAsync(context, repositoryPath, changeset, cancellationToken).ConfigureAwait(false);
+            await ValidateHistoricalFileAsync(context, repositoryPath, changeset, cancellationToken, cache).ConfigureAwait(false);
+            string key = HistoricalSpec(context.Repository, repositoryPath, changeset);
+            byte[] cached = null;
+            if (cache) lock (historicalReadGate) historicalContent.TryGetValue(key, out cached);
+            if (cached != null)
+            {
+                cancellationToken.ThrowIfCancellationRequested(); ValidateHistoricalContext(context);
+                File.WriteAllBytes(target, cached);
+                return;
+            }
             var result = await ExecuteAsync(RevisionCommand(context.RootPath,
                 new[] { "cat", HistoricalSpec(context.Repository, repositoryPath, changeset), "--file=" + target }), cancellationToken).ConfigureAwait(false);
             RequireSuccess(result);
             ValidateHistoricalContext(context);
             if (!File.Exists(target)) throw new IOException("Plastic did not produce the requested historical file.");
+            cancellationToken.ThrowIfCancellationRequested();
+            if (cache) CacheHistoricalContent(key, target);
         }
 
         private static string HistoricalSpec(string repository, string path, long changeset)

@@ -70,11 +70,31 @@ internal static class HistoryLocalStateTests
             Require(await Missing(client, state, 8), "A deletion whose old revision remains local is missing");
             Require(!await Missing(client, state, 9), "A deletion already absent locally is applied");
             Require(await Missing(client, state, 12), "An incoming rename is missing until the destination is loaded");
+            int diffCalls = File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("diff "));
+            var details = await client.GetHistoryDetailsAsync(root, new PlasticHistoryItem { Changeset = 5, Repository = Repository }, Token);
+            Require(details.Files.Count == 2 && File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("diff ")) == diffCalls,
+                "Selecting history reuses the exact diff already read for bold state");
             File.WriteAllText(Path.Combine(root, ".plastic", "updated"), "");
             state = await client.GetHistoryLocalStateAsync(root, Token);
             Require(!await Missing(client, state, 5), "Refreshing after the remaining file is pulled clears upper-directory bold");
             Require(!await Missing(client, state, 12), "A pulled rename uses the destination and unchanged revision identity");
             Require(!await Missing(client, state, 6), "Old file history remains loaded after a later rename");
+            Require(File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("diff ")) == diffCalls,
+                "Fresh local snapshot reuses immutable diffs while recomputing mixed-version state");
+            File.WriteAllText(Path.Combine(root, ".plastic", "directory"), "");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(await Missing(client, state, 11), "Loading a moved directory does not hide children still at the old path");
+            var destinationState = await client.GetHistoryLocalStateAsync(Path.Combine(root, "new-dir", "child.txt"), Token);
+            Require(await Missing(client, destinationState, 11), "History at the move destination still detects an unpulled child at the old path");
+            File.WriteAllText(Path.Combine(root, ".plastic", "directory-updated"), "");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(!await Missing(client, state, 11), "Moving the remaining children clears the directory marker");
+            int revisionCalls = File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("find revision "));
+            Require(!await Missing(client, state, 10), "Batched item identity resolution preserves ancestry semantics");
+            Require(File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("find revision ")) - revisionCalls == 2,
+                "140 unresolved revision identities require two bounded queries, not 140 processes");
+            var rows = await client.GetHistoryNotLoadedAsync(state, Enumerable.Range(5, 8).Select(cs => new PlasticHistoryItem { Changeset = cs, Repository = Repository }).ToArray(), Token);
+            Require(!rows[11] && !rows[12] && rows[8], "Batch results reflect the same fresh snapshot, including pending deletion");
             File.WriteAllText(Path.Combine(root, ".plastic", "broken"), "");
             bool failed = false;
             try { await client.GetHistoryLocalStateAsync(root, Token); } catch (InvalidDataException) { failed = true; }
@@ -107,7 +127,9 @@ internal static class HistoryLocalStateTests
         if (args[0] == "ls")
         {
             Console.WriteLine(new XElement("LsResults", new XElement("LsItems", Item(root, "", 1, 0),
-                Item(root, updated ? "renamed.txt" : "new.txt", 100, 10), Item(root, "stale.txt", updated ? 50 : 20, updated ? 5 : 2)))); return 0;
+                Item(root, updated ? "renamed.txt" : "new.txt", 100, 10), Item(root, "stale.txt", updated ? 50 : 20, updated ? 5 : 2),
+                File.Exists(Path.Combine(root, ".plastic", "directory")) ? new[] {
+                    Item(root, "new-dir", 500, 11), Item(root, File.Exists(Path.Combine(root, ".plastic", "directory-updated")) ? "new-dir/child.txt" : "old-dir/child.txt", 600, 2) } : null))); return 0;
         }
         if (args[0] == "log")
         {
@@ -122,10 +144,10 @@ internal static class HistoryLocalStateTests
         }
         if (args[0] == "find")
         {
-            long revision = Int64.Parse(args[2].Split(' ')[3]);
-            long id = revision == 20 || revision == 50 ? 2000 : revision == 99 ? 3000 : 1000;
-            Console.WriteLine(new XElement("PLASTICQUERY", new XElement("REVISION", new XElement("ID", revision),
-                new XElement("ITEMID", id), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")))); return 0;
+            var revisions = System.Text.RegularExpressions.Regex.Matches(args[2], @"id = (\d+)").Cast<System.Text.RegularExpressions.Match>().Select(match => Int64.Parse(match.Groups[1].Value));
+            Console.WriteLine(new XElement("PLASTICQUERY", revisions.Select(revision => new XElement("REVISION", new XElement("ID", revision),
+                new XElement("ITEMID", revision == 20 || revision == 50 ? 2000 : revision == 99 ? 3000 : 1000),
+                new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087"))))); return 0;
         }
         long cs = Int64.Parse(args[1].Substring(3).Split('@')[0]);
         switch (cs)
@@ -135,6 +157,8 @@ internal static class HistoryLocalStateTests
             case 7: Console.WriteLine("C|/stale.txt|F|||20"); break;
             case 8: Console.WriteLine("D|/stale.txt|F|||20"); break;
             case 9: Console.WriteLine("D|/gone.txt|F|||99"); break;
+            case 10: for (int i = 0; i < 140; i++) Console.WriteLine("C|/batch-" + i + ".txt|F|||" + (10000 + i)); break;
+            case 11: Console.WriteLine("M|/old-dir|D|/old-dir|/new-dir|500"); break;
             case 12: Console.WriteLine("M|/new.txt|F|/new.txt|/renamed.txt|100"); break;
             default: return 8;
         }
@@ -143,23 +167,41 @@ internal static class HistoryLocalStateTests
 
     private static XElement Item(string root, string name, long revision, long cs)
     { return new XElement("LsItem", new XElement("CurrentPath", Path.Combine(root, name)), new XElement("RevId", revision),
-        new XElement("Changeset", cs), new XElement("ItemId", name == "" ? 1 : name == "stale.txt" ? 2000 : 1000), new XElement("Repository", "rep:" + Repository)); }
+        new XElement("Changeset", cs), new XElement("ItemId", name == "" ? 1 : name == "stale.txt" ? 2000 : revision == 500 ? 5000 : revision == 600 ? 6000 : 1000), new XElement("Repository", "rep:" + Repository)); }
 
     private static async Task ReadOnly(string path, int expectedBold)
     {
         var client = new PlasticClient(new PlasticClientConfig());
         var watch = Stopwatch.StartNew();
+        var entries = new System.Collections.Generic.List<PlasticHistoryItem>();
         var state = await client.GetHistoryLocalStateAsync(path, Token);
         Console.WriteLine("Local snapshot ms: " + watch.ElapsedMilliseconds + "; update head: " + state.HeadChangeset);
         int rows = 0, bold = 0; long? before = null;
         do
         {
             var page = await client.GetHistoryPageAsync(path, before, 100, Token);
-            foreach (var entry in page.Items) { rows++; if (await client.IsHistoryNotLoadedAsync(state, entry, Token)) bold++; }
+            entries.AddRange(page.Items);
+            rows += page.Items.Count;
+            bold += (await client.GetHistoryNotLoadedAsync(state, page.Items, Token)).Values.Count(value => value);
             before = page.HasMore ? page.NextBeforeChangeset : null;
         } while (before.HasValue);
         Console.WriteLine("History rows: " + rows + "; bold: " + bold + "; total ms: " + watch.ElapsedMilliseconds);
         Require(bold == expectedBold, "Read-only real workspace has expected incoming history markers");
+        watch.Restart();
+        state = await client.GetHistoryLocalStateAsync(path, Token);
+        var refreshed = await client.GetHistoryNotLoadedAsync(state, entries, Token);
+        Console.WriteLine("Reactivated local snapshot + markers ms: " + watch.ElapsedMilliseconds);
+        Require(refreshed.Values.Count(value => value) == expectedBold, "Cached history facts preserve fresh local-state results");
+        var selected = entries.First(item => item.Changeset > 0);
+        for (int pass = 0; pass < 2; pass++)
+        {
+            watch.Restart();
+            var details = await client.GetHistoryDetailsAsync(path, selected, Token);
+            Console.WriteLine("Details pass " + pass + ": " + watch.ElapsedMilliseconds + " ms; files " + details.Files.Count);
+            watch.Restart();
+            await client.GetChangesetParentComparisonAsync(path, selected.Changeset, selected.Repository, Token);
+            Console.WriteLine("Parent comparison pass " + pass + ": " + watch.ElapsedMilliseconds + " ms");
+        }
     }
 
     private static async Task Live(string[] args)

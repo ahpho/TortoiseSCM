@@ -455,6 +455,34 @@ public:
                 item.fMask = MIIM_BITMAP; item.hbmpItem = menuBitmap;
                 SetMenuItemInfoW(menu, position, TRUE, &item);
             }
+            // Directory/background menus expose the three everyday actions beside
+            // the remaining TortoiseSCM submenu. Verb offsets stay unchanged.
+            if (paths.size() == 1 && std::filesystem::is_directory(paths.front()) && !WorkspaceRoot(paths.front()).empty())
+            {
+                UINT promoted = 0;
+                for (const size_t command : {size_t(2), size_t(1), size_t(7)})
+                {
+                    const auto found = std::find(visibleCommands.begin(), visibleCommands.end(), command);
+                    if (found == visibleCommands.end()) continue;
+                    MENUITEMINFOW item{sizeof(item)};
+                    item.fMask = MIIM_ID | MIIM_STRING | MIIM_BITMAP;
+                    item.wID = first + static_cast<UINT>(found - visibleCommands.begin());
+                    item.dwTypeData = const_cast<wchar_t*>(Label(commands[command]));
+                    item.hbmpItem = CommandBitmap(command);
+                    if (!InsertMenuItemW(menu, position + promoted, TRUE, &item))
+                    {
+                        for (UINT count = 0; count < promoted; ++count) DeleteMenu(menu, position, MF_BYPOSITION);
+                        DeleteMenu(menu, position, MF_BYPOSITION);
+                        visibleCommands.clear();
+                        return E_FAIL;
+                    }
+                    RemoveMenu(submenu, item.wID, MF_BYCOMMAND);
+                    ++promoted;
+                }
+                if (GetMenuItemCount(submenu) > 0 && (GetMenuState(submenu, 0, MF_BYPOSITION) & MF_SEPARATOR))
+                    DeleteMenu(submenu, 0, MF_BYPOSITION);
+                if (GetMenuItemCount(submenu) == 0) DeleteMenu(menu, position + promoted, MF_BYPOSITION);
+            }
             return MAKE_HRESULT(SEVERITY_SUCCESS, 0, static_cast<USHORT>(visibleCommands.size()));
         }
         catch (...) { return E_OUTOFMEMORY; }

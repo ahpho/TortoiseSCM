@@ -16,6 +16,7 @@ namespace TortoiseSCM
         public string Path { get; set; }
         public string OldPath { get; set; }
         public string ItemType { get; set; }
+        internal long? Revision { get; set; }
     }
 
     public sealed class PlasticChangesetDetails
@@ -98,12 +99,14 @@ namespace TortoiseSCM
             foreach (string line in output.Split(new [] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 string[] fields = line.Split('|');
-                if (fields.Length != 5 || !new [] { "A", "C", "D", "M" }.Contains(fields[0]))
+                long revision = -1;
+                if ((fields.Length != 5 && fields.Length != 6) || !new [] { "A", "C", "D", "M" }.Contains(fields[0]) ||
+                    (fields.Length == 6 && (!Int64.TryParse(fields[5], out revision) || revision < 0)))
                     throw new InvalidDataException("Unexpected changeset file output: " + line);
                 string path = fields[1].Trim('"'), oldPath = fields[3].Trim('"'), destination = fields[4].Trim('"');
                 if (fields[0] == "M" && !String.IsNullOrEmpty(destination)) path = destination;
                 result.Add(new PlasticChangesetFile { Status = fields[0], Path = path.Replace('\\', '/'),
-                    OldPath = oldPath.Replace('\\', '/'), ItemType = fields[2] });
+                    OldPath = oldPath.Replace('\\', '/'), ItemType = fields[2], Revision = revision < 0 ? (long?)null : revision });
             }
             return result;
         }

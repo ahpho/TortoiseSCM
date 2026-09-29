@@ -43,6 +43,7 @@ namespace TortoiseSCM
                 new[] { "status", workspace.RootPath, "--header", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
             RequireSuccess(result);
             var document = SafeXml.Load(result.Output);
+            string configuredName = document.Root == null ? "" : (string)document.Root.Element("WkConfigName");
             var status = document.Root == null ? null : document.Root.Element("WorkspaceStatus");
             status = status == null ? null : status.Element("Status");
             long changeset;
@@ -89,7 +90,12 @@ namespace TortoiseSCM
             // Only commits reachable from the selected update target can be
             // pending downloads. Unmerged sibling branches remain in Show Log,
             // but neither need downloading nor expensive per-item diff queries.
-            var branch = (await GetBranchesAsync(workspace.RootPath, token).ConfigureAwait(false)).SingleOrDefault(item => item.IsCurrent);
+            var configured = System.Text.RegularExpressions.Regex.Matches(workspace.Selector, @"(?m)^\s*(?:smartbranch|branch|br)\s+""([^""]+)""\s*$");
+            string configuredBranch = configured.Count == 1 ? configured[0].Groups[1].Value : "";
+            result = await ExecuteAsync(RevisionCommand(workspace.RootPath, new[] { "find", "branch", "--xml", "--encoding=utf-8", "--nototal" }), token).ConfigureAwait(false);
+            RequireSuccess(result);
+            var branch = ParseBranches(result.Output, workspace.Repository).SingleOrDefault(item =>
+                item.Name == configuredBranch && configuredName == item.Name + "@" + workspace.Repository);
             if (branch != null)
             {
                 state.HeadChangeset = branch.HeadChangeset;
@@ -108,33 +114,59 @@ namespace TortoiseSCM
 
         internal async Task<bool> IsHistoryNotLoadedAsync(PlasticHistoryLocalState state, PlasticHistoryItem entry, CancellationToken token)
         {
+            ValidateHistoryLocalContext(state);
+            bool missing = await EvaluateHistoryRowAsync(state, entry, token).ConfigureAwait(false);
+            ValidateHistoryLocalContext(state);
+            return missing;
+        }
+
+        internal async Task<Dictionary<long, bool>> GetHistoryNotLoadedAsync(PlasticHistoryLocalState state, IList<PlasticHistoryItem> entries, CancellationToken token)
+        {
+            ValidateHistoryLocalContext(state);
+            var rows = new Dictionary<long, bool>();
+            foreach (var entry in entries)
+                rows[entry.Changeset] = await EvaluateHistoryRowAsync(state, entry, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             ValidateHistoryLocalContext(state);
+            return rows;
+        }
+
+        private async Task<bool> EvaluateHistoryRowAsync(PlasticHistoryLocalState state, PlasticHistoryItem entry, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
             if (entry.Repository != state.Workspace.Repository) throw new InvalidOperationException("历史记录的仓库已改变。");
             if (!state.HeadAncestors.Contains(entry.Changeset)) return false;
             if (state.LoadedChangesets != null) return !state.LoadedChangesets.Contains(entry.Changeset);
             bool missing;
             if (state.Missing.TryGetValue(entry.Changeset, out missing)) return missing;
             if (entry.Changeset == 0) return !state.Items.ContainsKey("/");
-            var result = await ExecuteAsync(RevisionCommand(state.Workspace.RootPath, new[] { "diff",
-                "cs:" + entry.Changeset.ToString(CultureInfo.InvariantCulture) + "@" + state.Workspace.Repository,
-                "--repositorypaths", "--encoding=utf-8", "--format={status}|{path}|{type}|{srccmpath}|{dstcmpath}|{revid}" }), token).ConfigureAwait(false);
-            RequireSuccess(result);
+            var changes = (await HistoryFilesCachedAsync(state.Workspace.RootPath, state.Workspace.Repository,
+                entry.Changeset, token).ConfigureAwait(false)).Where(change => state.Scope == "/" || HistoryPathMatches(change, state.Scope)).ToList();
+            if (changes.Any(change => !change.Revision.HasValue)) throw new InvalidDataException("历史明细缺少修订标识，无法判断本地版本。");
+            // Resolve identities in bounded batches, instead of starting cm once for
+            // every moved/deleted/unloaded file in a commit.
+            await PrepareHistoryRevisionItemsAsync(state, changes, entry.Changeset, token).ConfigureAwait(false);
             missing = false;
-            foreach (string line in result.Output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            foreach (var change in changes)
             {
                 token.ThrowIfCancellationRequested();
-                var fields = line.Split('|'); long revision;
-                if (fields.Length != 6 || !Int64.TryParse(fields[5], out revision) || revision < 0)
-                    throw new InvalidDataException("无法判断历史项是否已拉取。");
-                var change = ParseChangesetFiles(String.Join("|", fields.Take(5))).Single();
-                if (state.Scope != "/" && !HistoryPathMatches(change, state.Scope)) continue;
+                long revision = change.Revision.Value;
+                // A partial update may load the directory itself before all of its
+                // children. Its revision alone cannot prove a move/delete is applied.
+                string oldDirectory = change.Status == "M" ? change.OldPath : change.Path;
+                if (change.ItemType == "D" && (change.Status == "M" || change.Status == "D"))
+                    foreach (var child in state.Items.Values.Where(local => local.Path.StartsWith(oldDirectory.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase) &&
+                        (state.Scope == "/" || InRepositoryScope(local.Path, state.Scope) ||
+                            (change.Status == "M" && InRepositoryScope(change.Path + local.Path.Substring(oldDirectory.Length), state.Scope)))))
+                        if (!(await HistoryAncestorsAsync(state, child.Changeset, token).ConfigureAwait(false)).Contains(entry.Changeset))
+                        { missing = true; break; }
+                if (missing) break;
                 HistoryLoadedItem atPath;
                 if (change.Status != "M" && change.Status != "D" && state.Items.TryGetValue(change.Path, out atPath) &&
                     (atPath.Revision == revision || (await HistoryAncestorsAsync(state, atPath.Changeset, token).ConfigureAwait(false)).Contains(entry.Changeset)))
                     continue;
                 // Follow item identity when later moves/replacements changed its path.
-                long itemId = await HistoryRevisionItemAsync(state, revision, token).ConfigureAwait(false);
+                long itemId = state.RevisionItems[revision];
                 HistoryLoadedItem identity;
                 state.ItemsById.TryGetValue(itemId, out identity);
                 if (change.Status == "D")
@@ -156,26 +188,47 @@ namespace TortoiseSCM
             return missing;
         }
 
-        private async Task<long> HistoryRevisionItemAsync(PlasticHistoryLocalState state, long revision, CancellationToken token)
+        private async Task PrepareHistoryRevisionItemsAsync(PlasticHistoryLocalState state, IList<PlasticChangesetFile> changes, long preparingChangeset, CancellationToken token)
         {
-            long id;
-            if (state.RevisionItems.TryGetValue(revision, out id)) return id;
+            var needed = new List<long>();
+            foreach (var change in changes)
+            {
+                long revision = change.Revision.Value;
+                if (state.RevisionItems.ContainsKey(revision)) continue;
+                HistoryLoadedItem local;
+                if (change.Status != "M" && change.Status != "D" && state.Items.TryGetValue(change.Path, out local) &&
+                    (await HistoryAncestorsAsync(state, local.Changeset, token).ConfigureAwait(false)).Contains(
+                        // The caller checks publication ancestry, which is not the
+                        // revision's creation changeset (rollback may reuse revisions).
+                        preparingChangeset)) continue;
+                needed.Add(revision);
+            }
+            var unknown = needed.Distinct().ToArray();
             ValidateBranchRepository(state.Workspace.Repository);
             if (state.Workspace.Repository.Contains("'")) throw new InvalidDataException("无法查询此仓库的修订标识。");
-            var result = await ExecuteAsync(RevisionCommand(state.Workspace.RootPath, new[] { "find", "revision",
-                "where id = " + revision.ToString(CultureInfo.InvariantCulture) + " on repository '" + state.Workspace.Repository + "'",
-                "--xml", "--encoding=utf-8", "--nototal" }), token).ConfigureAwait(false);
-            RequireSuccess(result);
-            var document = SafeXml.Load(result.Output);
-            var rows = document.Root == null ? new XElement[0] : document.Root.Elements("REVISION").ToArray();
-            long actual;
-            if (document.Root == null || document.Root.Name != "PLASTICQUERY" || rows.Length != 1 ||
-                !Int64.TryParse((string)rows[0].Element("ID"), out actual) || actual != revision ||
-                !Int64.TryParse((string)rows[0].Element("ITEMID"), out id) || id <= 0 ||
-                (string)rows[0].Element("REPNAME") + "@" + (string)rows[0].Element("REPSERVER") != state.Workspace.Repository)
-                throw new InvalidDataException("历史修订的项标识无效。");
-            state.RevisionItems.Add(revision, id);
-            return id;
+            for (int offset = 0; offset < unknown.Length; offset += 128)
+            {
+                var batch = new HashSet<long>(unknown.Skip(offset).Take(128));
+                string query = "where " + String.Join(" or ", batch.Select(id => "id = " + id.ToString(CultureInfo.InvariantCulture))) +
+                    " on repository '" + state.Workspace.Repository + "'";
+                string xml = await HistoricalReadAsync(state.Workspace.RootPath, state.Workspace.Repository,
+                    new[] { "find", "revision", query, "--xml", "--encoding=utf-8", "--nototal" }, token).ConfigureAwait(false);
+                var document = SafeXml.Load(xml);
+                if (document.Root == null || document.Root.Name != "PLASTICQUERY") throw new InvalidDataException("历史修订标识响应无效。");
+                var found = new Dictionary<long, long>();
+                foreach (var row in document.Root.Elements("REVISION"))
+                {
+                    long revision, id;
+                    if (!Int64.TryParse((string)row.Element("ID"), out revision) || !batch.Contains(revision) || found.ContainsKey(revision) ||
+                        !Int64.TryParse((string)row.Element("ITEMID"), out id) || id <= 0 ||
+                        (string)row.Element("REPNAME") + "@" + (string)row.Element("REPSERVER") != state.Workspace.Repository)
+                        throw new InvalidDataException("历史修订的项标识无效。");
+                    found.Add(revision, id);
+                }
+                if (found.Count != batch.Count) throw new InvalidDataException("历史修订标识响应不完整。");
+                ValidateHistoryLocalContext(state);
+                foreach (var pair in found) state.RevisionItems[pair.Key] = pair.Value;
+            }
         }
 
         private async Task<bool> HistoryItemRemovedAtHeadAsync(PlasticHistoryLocalState state, long id, long changeset, CancellationToken token)
@@ -207,11 +260,10 @@ namespace TortoiseSCM
         {
             HashSet<long> ancestors;
             if (state.Ancestors.TryGetValue(changeset, out ancestors)) return ancestors;
-            var result = await ExecuteAsync(RevisionCommand(state.Workspace.RootPath, new[] { "log",
+            string xml = await HistoricalReadAsync(state.Workspace.RootPath, state.Workspace.Repository, new[] { "log",
                 "cs:" + changeset.ToString(CultureInfo.InvariantCulture) + "@" + state.Workspace.Repository,
-                "--ancestors", "--xml", "--encoding=utf-8" }), token).ConfigureAwait(false);
-            RequireSuccess(result);
-            var document = SafeXml.Load(result.Output);
+                "--ancestors", "--xml", "--encoding=utf-8" }, token).ConfigureAwait(false);
+            var document = SafeXml.Load(xml);
             if (document.Root == null || document.Root.Name != "LogList") throw new InvalidDataException("无法读取本地版本的祖先记录。");
             ancestors = new HashSet<long>();
             foreach (var item in document.Root.Elements("Changeset"))

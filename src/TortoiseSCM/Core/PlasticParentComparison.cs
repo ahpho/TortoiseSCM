@@ -26,16 +26,25 @@ namespace TortoiseSCM
             if (!SamePath(command.WorkingDirectory, context.RootPath)) throw new InvalidOperationException("工作区已改变。");
             string query = "where changesetid = " + changeset.ToString(CultureInfo.InvariantCulture) +
                 " on repository '" + context.Repository + "'";
-            var result = await ExecuteAsync(RevisionCommand(context.RootPath,
-                new[] { "find", "changeset", query, "--xml", "--encoding=utf-8", "--nototal" }), token).ConfigureAwait(false);
-            RequireSuccess(result); token.ThrowIfCancellationRequested(); ValidateHistoricalContext(context);
-            var nodes = ParseGraphNodes(result.Output, context.Repository);
+            string output = await HistoricalReadAsync(context.RootPath, context.Repository,
+                new[] { "find", "changeset", query, "--xml", "--encoding=utf-8", "--nototal" }, token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested(); ValidateHistoricalContext(context);
+            var nodes = ParseGraphNodes(output, context.Repository);
             if (nodes.Count != 1 || nodes[0].Changeset != changeset)
                 throw new InvalidDataException("服务器未返回所选提交的唯一身份。");
             if (!nodes[0].ParentChangeset.HasValue)
                 throw new InvalidOperationException("此提交没有父版本，无法比较文件更改。");
-            var comparison = await GetChangesetComparisonAsync(context.RootPath, nodes[0].ParentChangeset.Value,
-                changeset, token).ConfigureAwait(false);
+            // A one-spec cm diff is exactly parent -> changeset. Reuse the data
+            // already read for details/bold, but retain comparison path normalization
+            // (including files changed under a moved directory).
+            string diff = await HistoryDiffAsync(context.RootPath, context.Repository, changeset, token).ConfigureAwait(false);
+            ParseChangesetFiles(diff); // Validate the complete record before removing revision IDs.
+            string comparisonOutput = String.Join("\n", diff.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => String.Join("|", line.Split('|').Take(5))));
+            var files = ParseChangesetComparisonFiles(comparisonOutput);
+            var comparison = new PlasticChangesetComparison { RootPath = context.RootPath, Repository = context.Repository,
+                FromChangeset = nodes[0].ParentChangeset.Value, ToChangeset = changeset, Files = files };
+            RememberParentComparison(context.Repository, comparison.FromChangeset, changeset, comparisonOutput);
             token.ThrowIfCancellationRequested(); ValidateHistoricalContext(context);
             if (comparison.Repository != context.Repository || !SamePath(comparison.RootPath, context.RootPath))
                 throw new InvalidOperationException("工作区或仓库已改变。");

@@ -106,7 +106,7 @@ internal static class HistoryBeyondCompareGuiSmokeTests
                 Evidence.Add("Owned PID: " + owned.Id + "; title: " + owned.MainWindowTitle);
                 Check(owned.CloseMainWindow(), "Normal close accepted only by test-owned read-only /solo window");
                 Pump(() => !Field<bool>(form, "comparingFile"), "History waiter finishes after BC closes", 30);
-                Check(Field<Label>(form, "status").Text == "Beyond Compare 已关闭。", "History reports successful close, including BC difference exit code");
+                Check(Field<Label>(form, "status").Text == "比较工具 已关闭。", "History reports successful close, including BC difference exit code");
                 Check(!Directory.Exists(temporary), "Historical contributor files are removed after BC closes");
                 Check(Field<Button>(form, "historicalFile").Enabled && Application.OpenForms.Cast<Form>().All(f => !(f is HistoricalFileForm)), "History comparison can be repeated and no intermediate dialog appeared");
                 using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(Path.Combine(output, "history-after-beyond-compare.png")); }

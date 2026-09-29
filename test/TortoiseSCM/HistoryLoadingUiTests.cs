@@ -54,7 +54,7 @@ namespace TortoiseSCM
                     Require(revisions.Items.Cast<ListViewItem>().All(row => row.Font.Bold ==
                         ((PlasticHistoryItem)row.Tag).Changeset > 110),
                         "Only incoming current-branch commits are bold; unmerged branches are regular");
-                    Require(ReadCalls(root).Count(line => line.Contains("changesetid = ")) == 2, "Intermediate batches do not reload details; completion refreshes the final selected changeset once");
+                    Require(ReadCalls(root).Count(line => line.Contains("changesetid = ")) == 0, "Selected history metadata is reused without another changeset query");
                     var filter = Field<TextBox>(form, "filter");
                     filter.Text = "oldest-only"; Pump(() => Field<Button>(form, "restore").Enabled);
                     Require(Ids(form).SequenceEqual(new long[] { 1 }), "Filtering finds a match beyond the first batch");
@@ -202,7 +202,12 @@ namespace TortoiseSCM
             string root = Environment.CurrentDirectory;
             if (!File.Exists(Meta(root, "history-loading-fixture"))) return 96;
             Console.OutputEncoding = new UTF8Encoding(false);
-            File.AppendAllText(Meta(root, "calls.log"), String.Join(" ", args) + "\n");
+            using (var mutex = new Mutex(false, "Local\\TortoiseSCM-HistoryLoading-" + Path.GetFileName(root)))
+            {
+                mutex.WaitOne();
+                try { File.AppendAllText(Meta(root, "calls.log"), String.Join(" ", args) + "\n"); }
+                finally { mutex.ReleaseMutex(); }
+            }
             if (args[0] == "history") {
                 if (!File.Exists(args[1])) return 8;
                 Console.WriteLine(new XElement("RevisionHistoriesResult", new XElement("RevisionHistories", new XElement("RevisionHistory",
@@ -234,6 +239,7 @@ namespace TortoiseSCM
                     new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("WkConfigName", "/main@test@server:8087"))); return 0;
             }
             if (args[0] == "diff") {
+                if (File.Exists(Meta(root, "slow-details"))) { Write(root, "detail-entered", ""); Thread.Sleep(30000); }
                 int cs = Int32.Parse(args[1].Substring(3).Split('@')[0]);
                 Console.WriteLine(cs == 4 || cs == 1 ? "C|/deleted 中文.txt|F||" : "C|/other.txt|F||"); return 0;
             }
@@ -247,9 +253,6 @@ namespace TortoiseSCM
             var before = Regex.Match(query, @"changesetid < (\d+)");
             var exact = Regex.Match(query, @"changesetid = (\d+)");
             var limit = Regex.Match(query, @"limit (\d+)");
-            if (exact.Success && File.Exists(Meta(root, "slow-details"))) {
-                Write(root, "detail-entered", ""); Thread.Sleep(30000);
-            }
             if (before.Success && File.Exists(Meta(root, "slow-continuation"))) {
                 Write(root, "continuation-entered", ""); Thread.Sleep(30000);
             }

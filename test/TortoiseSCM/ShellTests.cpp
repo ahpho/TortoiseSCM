@@ -143,8 +143,11 @@ constexpr const wchar_t* expectedMenuVerbs[] = {
 };
 constexpr size_t expectedMenuIdentities[] = {2,1,6,7,3,4,27,5,10,11,12,19,15,20,23,22,24,21,16,18,17,13,14,8,9,25,26};
 
-void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionKind)
+void CheckClassicOrder(IContextMenu* context, HMENU menu, unsigned selectionKind)
 {
+    const bool promoted = selectionKind == 1 || selectionKind == 2;
+    HMENU submenu = GetSubMenu(menu, promoted ? 3 : 0);
+    if (promoted) require(GetMenuItemCount(menu) == 4 && submenu, "controlled directory has update, checkin, history and TortoiseSCM at top level");
     UINT offset = 0, position = 0;
     for (size_t index = 0; index < ARRAYSIZE(expectedMenuVerbs); ++index)
     {
@@ -153,7 +156,7 @@ void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionK
         if ((selectionKind == 1 || selectionKind == 2) && (name == L"diff" || name == L"blame")) continue;
         if ((selectionKind == 1 || selectionKind == 2) && name == L"checkout") continue;
         if (selectionKind == 0 && name == L"checkout-recursive") continue;
-        if (name == L"add")
+        if (name == L"add" && !promoted)
         {
             MENUITEMINFOW separator{sizeof(separator)}; separator.fMask = MIIM_FTYPE;
             require(GetMenuItemInfoW(submenu, position++, TRUE, &separator) && (separator.fType & MFT_SEPARATOR),
@@ -162,11 +165,14 @@ void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionK
         wchar_t verb[80]{}, label[128]{};
         require(SUCCEEDED(context->GetCommandString(offset, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
             verb == L"tortoisescm." + name, "classic frequent-first visible verb order");
-        require(GetMenuStringW(submenu, position++, label, ARRAYSIZE(label), MF_BYPOSITION) > 0 &&
+        const bool topLevel = promoted && (name == L"update" || name == L"checkin" || name == L"history");
+        HMENU target = topLevel ? menu : submenu;
+        UINT itemPosition = topLevel ? offset : position++;
+        require(GetMenuStringW(target, itemPosition, label, ARRAYSIZE(label), MF_BYPOSITION) > 0 &&
             wcscmp(label, Label(commands[expectedMenuIdentities[index]])) == 0, "classic visible label matches reordered verb");
         MENUITEMINFOW icon{sizeof(icon)};
         icon.fMask = MIIM_BITMAP;
-        require(GetMenuItemInfoW(submenu, position - 1, TRUE, &icon) && icon.hbmpItem,
+        require(GetMenuItemInfoW(target, itemPosition, TRUE, &icon) && icon.hbmpItem,
             "classic child command supplies an icon bitmap");
         ++offset;
     }
@@ -399,7 +405,7 @@ void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binar
                     << " actual=" << HRESULT_CODE(queried) << " HRESULT=" << queried << '\n';
             require(SUCCEEDED(queried) && HRESULT_CODE(queried) == expectedCount, "classic handoff filtered menu populated");
             if (selectionKind == 0) CheckMenuBitmap(menu, loaded);
-            CheckClassicOrder(context.Get(), GetSubMenu(menu, 0), selectionKind);
+            CheckClassicOrder(context.Get(), menu, selectionKind);
             const auto commands = selectionKind == 0 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove", L"checkout"} :
                 selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove", L"checkout-recursive"} :
                 std::vector<const wchar_t*>{L"create-workspace"};
@@ -528,7 +534,7 @@ int wmain(int argc, wchar_t** argv) {
     require(SUCCEEDED(shell->Initialize(nullptr, &one, nullptr)), "single file init");
     auto menu = CreatePopupMenu();
     require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 25, "single file exposes all commands");
-    CheckClassicOrder(shell, GetSubMenu(menu, 0), 0);
+    CheckClassicOrder(shell, menu, 0);
     wchar_t verb[80]{};
     require(SUCCEEDED(shell->GetCommandString(2, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.diff") == 0, "diff canonical verb");
     require(SUCCEEDED(shell->GetCommandString(7, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.move") == 0, "move canonical verb");
@@ -556,18 +562,17 @@ int wmain(int argc, wchar_t** argv) {
     PIDLIST_ABSOLUTE pidl{}; SHParseDisplayName(first.c_str(),nullptr,&pidl,0,nullptr);
     shell->Initialize(pidl,nullptr,nullptr); CoTaskMemFree(pidl); menu=CreatePopupMenu();
     const auto directoryCount = HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL));
-    require(directoryCount==23, "directory background menu"); CheckClassicOrder(shell, GetSubMenu(menu, 0), 2); DestroyMenu(menu);
+    require(directoryCount==23, "directory background menu"); CheckClassicOrder(shell, menu, 2); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_DEFAULTONLY))==0, "default-only query ignored"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,102,CMF_NORMAL))==3, "command id limit respected"); DestroyMenu(menu);
     for (UINT limit : {2u, 3u})
     {
         menu = CreatePopupMenu();
         require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 100 + limit, CMF_NORMAL)) == limit + 1, "separator does not consume limited command IDs");
-        HMENU submenu = GetSubMenu(menu, 0);
-        const int count = GetMenuItemCount(submenu);
-        require(count == static_cast<int>(limit + 1 + (limit == 3 ? 1 : 0)) &&
-            !(GetMenuState(submenu, 0, MF_BYPOSITION) & MF_SEPARATOR) &&
-            !(GetMenuState(submenu, count - 1, MF_BYPOSITION) & MF_SEPARATOR), "limited menus have no leading or trailing separator");
+        require(GetMenuItemCount(menu) == (limit == 2 ? 3 : 4), "limited directory menu promotes only available verb IDs");
+        HMENU submenu = GetSubMenu(menu, 3);
+        require(limit == 2 ? !submenu : GetMenuItemCount(submenu) == 1,
+            "limited menus have neither empty submenus nor leading separators");
         DestroyMenu(menu);
     }
     for (const auto& parent : {base, base.root_path()})

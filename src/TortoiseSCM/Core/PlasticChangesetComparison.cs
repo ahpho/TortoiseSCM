@@ -30,13 +30,12 @@ namespace TortoiseSCM
             var context = DiscoverWorkspace(command.WorkingDirectory);
             if (String.IsNullOrWhiteSpace(context.Repository)) throw new InvalidDataException("Workspace selector does not identify a repository.");
             string repository = context.Repository;
-            var result = await ExecuteAsync(RevisionCommand(context.RootPath, new[] { "diff",
+            string output = await HistoricalReadAsync(context.RootPath, repository, new[] { "diff",
                 "cs:" + fromChangeset.ToString(CultureInfo.InvariantCulture) + "@" + repository,
                 "cs:" + toChangeset.ToString(CultureInfo.InvariantCulture) + "@" + repository,
-                "--repositorypaths", "--encoding=utf-8", "--format={status}|{path}|{type}|{srccmpath}|{dstcmpath}" }), cancellationToken).ConfigureAwait(false);
-            RequireSuccess(result);
+                "--repositorypaths", "--encoding=utf-8", "--format={status}|{path}|{type}|{srccmpath}|{dstcmpath}" }, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            var files = ParseChangesetComparisonFiles(result.Output);
+            var files = ParseChangesetComparisonFiles(output);
             ValidateHistoryRepository(context.RootPath, repository);
             return new PlasticChangesetComparison { Repository = repository, RootPath = context.RootPath,
                 FromChangeset = fromChangeset, ToChangeset = toChangeset, Files = files };

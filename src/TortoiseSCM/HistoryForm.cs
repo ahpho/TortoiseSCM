@@ -295,7 +295,7 @@ namespace TortoiseSCM
                 string loadError = null;
                 try
                 {
-                    await ReadLocalStateAsync(cancellation.Token);
+                    var localSnapshot = ReadLocalStateAsync(cancellation.Token);
                     if (!wholeWorkspace)
                     {
                         if (branch != null) ValidateHistoryContext();
@@ -318,7 +318,8 @@ namespace TortoiseSCM
                             entries.AddRange(previewItems.Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>())
                                 .GroupBy(item => item.Changeset).Select(group => group.First()).OrderByDescending(item => item.Changeset));
                             await ApplyFilterAsync(repositoryChanged);
-                            await UpdateLocalRowsAsync(cancellation.Token);
+                            // Show the initial history/details without waiting for
+                            // the workspace snapshot and incoming-state calculation.
                             UpdateHistorySummary();
                         }
                     }
@@ -354,6 +355,7 @@ namespace TortoiseSCM
                             .Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>());
                         entries.AddRange(visible.GroupBy(item => item.Changeset).Select(group => group.First()).OrderByDescending(item => item.Changeset));
                         await ApplyFilterAsync(repositoryChanged || !page.HasMore);
+                        await localSnapshot;
                         await UpdateLocalRowsAsync(cancellation.Token);
                         UpdateHistorySummary();
                         // Yield between bounded batches even when all backend tasks are cached.
@@ -479,19 +481,22 @@ namespace TortoiseSCM
             checkingLocalState = true;
             try
             {
-                foreach (var entry in entries.ToArray())
+                var pending = entries.Where(entry => !notLoaded.ContainsKey(entry.Changeset)).ToArray();
+                var results = await Task.Run(() => client.GetHistoryNotLoadedAsync(state, pending, token), token);
+                if (request != localStateGeneration || lifetime.IsCancellationRequested) return;
+                revisions.BeginUpdate();
+                try
                 {
-                    token.ThrowIfCancellationRequested();
-                    if (!notLoaded.ContainsKey(entry.Changeset))
+                    // Publish a complete snapshot together; failures/cancellation
+                    // must not leave a mixture of old and newly computed fonts.
+                    foreach (var result in results)
                     {
-                        bool missing = await client.IsHistoryNotLoadedAsync(state, entry, token);
-                        if (request != localStateGeneration || lifetime.IsCancellationRequested) return;
-                        notLoaded[entry.Changeset] = missing;
+                        notLoaded[result.Key] = result.Value;
+                        ListViewItem row;
+                        if (revisionRows.TryGetValue(result.Key, out row)) ApplyLocalRowStyle(row);
                     }
-                    if (request != localStateGeneration || lifetime.IsCancellationRequested) return;
-                    ListViewItem row;
-                    if (revisionRows.TryGetValue(entry.Changeset, out row)) ApplyLocalRowStyle(row);
                 }
+                finally { revisions.EndUpdate(); }
             }
             catch (OperationCanceledException)
             {
@@ -547,11 +552,16 @@ namespace TortoiseSCM
             try
             {
                 if (branch != null) ValidateHistoryContext();
-                var details = await client.GetChangesetAsync(path, entry.Changeset, cancellation.Token);
+                var details = await client.GetHistoryDetailsAsync(path, entry, cancellation.Token);
                 if (cancellation.IsCancellationRequested || request != generation) return;
                 if (branch != null) ValidateHistoryContext();
-                foreach (var file in details.Files)
-                    changedFiles.Items.Add(new ListViewItem(new[] { file.Status, file.Path, file.OldPath, file.ItemType }) { Tag = file });
+                changedFiles.BeginUpdate();
+                try
+                {
+                    foreach (var file in details.Files)
+                        changedFiles.Items.Add(new ListViewItem(new[] { file.Status, file.Path, file.OldPath, file.ItemType }) { Tag = file });
+                }
+                finally { changedFiles.EndUpdate(); }
                 status.Text = "cs:" + entry.Changeset + " · " + details.Files.Count + " 个更改项（完整提交）";
                 restore.Enabled = snapshot.Enabled = true;
             }
