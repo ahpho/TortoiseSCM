@@ -149,7 +149,7 @@ begin
   RestartCheck.SetBounds(WizardForm.FinishedLabel.Left, WizardForm.FinishedPage.ClientHeight - ScaleY(60),
     WizardForm.FinishedLabel.Width, ScaleY(36));
   RestartCheck.Caption := '现在重启资源管理器以启用新版右键菜单（将再次确认）';
-  RestartCheck.Checked := False;
+  RestartCheck.Checked := True;
   RestartCheck.Visible := False;
 end;
 
@@ -297,7 +297,7 @@ begin
       end;
       Exit;
     end;
-  if (CurPageID = wpFinished) and RestartCheck.Checked and not WizardSilent then begin
+  if (CurPageID = wpFinished) and RestartCheck.Visible and RestartCheck.Checked and not WizardSilent then begin
     if MsgBox('重启资源管理器可能中断正在进行的复制、移动、删除、解压等文件操作。' + #13#10#13#10 +
       '请确认这些操作已经全部结束。所有资源管理器文件夹窗口将关闭，桌面和任务栏会短暂消失。' + #13#10#13#10 +
       '是否现在重启？选择“否”可稍后处理，安装已完成。', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then begin
