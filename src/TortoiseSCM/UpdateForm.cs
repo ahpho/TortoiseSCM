@@ -15,7 +15,6 @@ namespace TortoiseSCM
         private readonly PlasticClient client;
         private readonly List<string> selectedPaths;
         private readonly Label scope = new Label();
-        private readonly TextBox paths = new TextBox();
         private readonly TextBox output = new TextBox();
         private readonly TableLayoutPanel layout = new TableLayoutPanel();
         private readonly Label status = new Label();
@@ -49,10 +48,9 @@ namespace TortoiseSCM
             DialogStyle.Apply(this);
             Size = new Size(800, 570);
             MinimumSize = new Size(640, 450);
-            layout.Dock = DockStyle.Fill; layout.Padding = new Padding(12); layout.ColumnCount = 1; layout.RowCount = 6;
+            layout.Dock = DockStyle.Fill; layout.Padding = new Padding(12); layout.ColumnCount = 1; layout.RowCount = 5;
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
@@ -60,11 +58,10 @@ namespace TortoiseSCM
             scope.Dock = DockStyle.Fill; scope.UseMnemonic = false;
             scope.Text = "正在识别更新范围…";
             layout.Controls.Add(scope, 0, 0);
-            ConfigureText(paths, "更新范围"); layout.Controls.Add(paths, 0, 1);
-            layout.Controls.Add(new Label { Text = "操作记录：", Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft }, 0, 2);
-            ConfigureText(output, "更新操作记录"); layout.Controls.Add(output, 0, 3);
+            layout.Controls.Add(new Label { Text = "操作记录：", Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft }, 0, 1);
+            ConfigureText(output, "更新操作记录"); layout.Controls.Add(output, 0, 2);
             status.Dock = DockStyle.Fill; status.UseMnemonic = false; status.TextAlign = ContentAlignment.MiddleLeft;
-            layout.Controls.Add(status, 0, 4);
+            layout.Controls.Add(status, 0, 3);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Margin = Padding.Empty, WrapContents = false };
             buttons.Controls.Add(close); buttons.Controls.Add(update); buttons.Controls.Add(refresh);
             conflicts.Width = 118; pending.Width = 132;
@@ -72,7 +69,7 @@ namespace TortoiseSCM
             buttons.Controls.Add(conflicts); buttons.Controls.Add(pending);
             conflicts.Click += async delegate { await OpenResolutionAsync(true); };
             pending.Click += async delegate { await OpenResolutionAsync(false); };
-            layout.Controls.Add(buttons, 0, 5); Controls.Add(layout);
+            layout.Controls.Add(buttons, 0, 4); Controls.Add(layout);
             update.Enabled = false;
             update.Click += async delegate { await UpdateAsync(); };
             refresh.Click += async delegate { await LoadScopeAsync(); };
@@ -95,27 +92,22 @@ namespace TortoiseSCM
         {
             if (busy) return;
             ready = false; SetBusy(true); status.Text = "正在识别工作区…";
-            scope.Text = "正在识别更新范围…"; paths.Clear();
+            scope.Text = "正在识别更新范围…";
             try
             {
                 var local = Program.ValidateWorkspacePaths(client, selectedPaths);
                 workspace = await getWorkspace(selectedPaths[0], CancellationToken.None);
                 if (workspace == null) throw new InvalidOperationException("工作区不存在。");
                 if (!SameIdentity(local, workspace)) throw new InvalidOperationException("工作区或分支已改变，请重新刷新范围。");
+                string range = String.Join("；", EffectivePaths().ToArray());
                 scope.Text = (workspace.IsPartial
-                    ? "Gluon / 部分工作区：仅更新以下所选范围；目录包含全部子项。"
-                    : "完整工作区：将整体更新工作区中的受控文件，包括所选路径以外的文件。") + "\r\n工作区：" + workspace.RootPath;
-                paths.Lines = EffectivePaths().ToArray();
-                // A complete workspace always updates the workspace root. The
-                // editable-looking path box would repeat the same information
-                // already present in scope; keep it only for Gluon selections.
-                bool showSelectedPaths = workspace.IsPartial;
-                paths.Visible = showSelectedPaths;
-                layout.RowStyles[1].Height = showSelectedPaths ? 82 : 0;
+                    ? "Gluon / 部分工作区：仅更新所选范围；目录包含全部子项。"
+                    : "完整工作区：将整体更新工作区中的受控文件，包括所选路径以外的文件。") +
+                    "\r\n工作区：" + workspace.RootPath + "\r\n范围：" + range;
                 conflicts.Visible = pending.Visible = workspace.IsPartial;
                 ready = true; status.Text = "请核对范围，点击“更新”后才会执行。";
             }
-            catch (Exception ex) { output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法识别更新范围；请检查工作区后刷新范围。"; }
+            catch (Exception ex) { scope.Text = "无法识别更新范围；请检查工作区后刷新范围。"; output.AppendText(ex.Message + Environment.NewLine); status.Text = "无法识别更新范围；请检查工作区后刷新范围。"; }
             finally { SetBusy(false); }
         }
 

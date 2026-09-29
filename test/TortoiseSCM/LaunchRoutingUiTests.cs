@@ -63,7 +63,7 @@ namespace TortoiseSCM
                     Inject(update, "run", new Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>>((request, token) => { writes++; captured = request; return pending.Task; }));
                     update.Show(); Pump(() => Field<Button>(update, "update").Enabled);
                     Require(update.Text == "更新 - TortoiseSCM", "Update has its own title");
-                    Require(Field<Label>(update, "scope").Text.Contains("整体更新") && !Field<TextBox>(update, "paths").Visible, "Standard update shows the workspace scope once without duplicate path box");
+                    Require(Field<Label>(update, "scope").Text.Contains("整体更新") && Field<Label>(update, "scope").Text.Contains(first), "Standard update shows the workspace scope once without duplicate path box");
                     Require(update.AcceptButton == Field<Button>(update, "close"), "Enter cannot accidentally start update");
                     Bounds(update); Save(update, Path.Combine(artifacts, "update-dialog.png"));
                     update.Size = update.MinimumSize; Application.DoEvents(); Bounds(update);
@@ -87,7 +87,7 @@ namespace TortoiseSCM
                         Inject(update, "run", new Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>>((request, token) => {
                             captured = request; calls++; return Task.FromResult(new PlasticCommandResult { ExitCode = 7, TimedOut = timeout, Error = "native failure detail" }); }));
                         update.Show(); Pump(() => Field<Button>(update, "update").Enabled);
-                        Require(Field<Label>(update, "scope").Text.Contains("仅更新") && Field<TextBox>(update, "paths").Text == file, "Partial update previews selected path");
+                        Require(Field<Label>(update, "scope").Text.Contains("仅更新") && Field<Label>(update, "scope").Text.Contains(file), "Partial update previews selected path");
                         Field<Button>(update, "update").PerformClick(); Pump(() => !Field<bool>(update, "busy"));
                         Require(captured != null && captured.Paths.Count == 1 && captured.Paths[0] == file, "Partial update preserves exact selected scope");
                         Require(Field<TextBox>(update, "output").Text.Contains("native failure detail") && Field<Label>(update, "status").Text.Contains(timeout ? "更新超时" : "更新未成功"), "Failure and timeout remain explicit with native detail");
@@ -123,7 +123,7 @@ namespace TortoiseSCM
                     Require(Field<TextBox>(update, "output").Text.Contains("native process launch failed") && !Field<Button>(update, "update").Enabled, "Launch exceptions retain diagnostics and prevent an implicit retry");
                     Inject(update, "getWorkspace", new Func<string, CancellationToken, Task<PlasticWorkspace>>((path, token) => { throw new IOException("scope failed"); }));
                     Field<Button>(update, "refresh").PerformClick(); Pump(() => !Field<bool>(update, "busy"));
-                    Require(!Field<Button>(update, "update").Enabled && Field<TextBox>(update, "paths").Text.Length == 0, "Failed scope refresh clears stale paths and blocks update");
+                    Require(!Field<Button>(update, "update").Enabled && Field<Label>(update, "scope").Text.Contains("无法识别"), "Failed scope refresh clears stale paths and blocks update");
                     update.Close();
                 }
                 Console.WriteLine("PASS: launch routing UI (" + assertions + " assertions)");

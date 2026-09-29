@@ -64,7 +64,7 @@ internal static class UpdateWorkflowGuiIntegrationTests
         using (var form = Open(Path.Combine(partial, "selected 中文 & folder", "nested")))
         {
             WaitReady(form);
-            Check(Field<Label>(form, "scope").Text.Contains("仅更新") && Field<TextBox>(form, "paths").Text == Path.Combine(partial, "selected 中文 & folder", "nested"), "Gluon preview preserves exact selected nested directory");
+            Check(Field<Label>(form, "scope").Text.Contains("仅更新") && Field<Label>(form, "scope").Text.Contains(Path.Combine(partial, "selected 中文 & folder", "nested")), "Gluon preview preserves exact selected nested directory");
             Capture(form, "partial-update-normal.png"); form.Size = form.MinimumSize; Application.DoEvents(); Capture(form, "partial-update-minimum.png");
             ClickUpdate(form);
             CheckSuccess(form);
@@ -80,7 +80,7 @@ internal static class UpdateWorkflowGuiIntegrationTests
         using (var form = Open(Path.Combine(consumer, "selected 中文 & folder", "nested")))
         {
             WaitReady(form);
-            Check(Field<Label>(form, "scope").Text.Contains("整体更新") && Field<TextBox>(form, "paths").Text == consumer, "Standard GUI explicitly previews whole-workspace update");
+            Check(Field<Label>(form, "scope").Text.Contains("整体更新") && Field<Label>(form, "scope").Text.Contains(consumer), "Standard GUI explicitly previews whole-workspace update");
             Capture(form, "standard-update-normal.png"); ClickUpdate(form); CheckSuccess(form);
             Check(Read(consumer, changed) == "incoming second\r\n" && Read(consumer, added) == "incoming addition\n" && !File.Exists(Path.Combine(consumer, deleted)) && Read(consumer, sibling) == "sibling incoming\n", "Standard GUI updates full workspace including sibling");
             form.Close();
