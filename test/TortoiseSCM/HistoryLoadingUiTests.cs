@@ -51,10 +51,14 @@ namespace TortoiseSCM
                     Require(revisions.Items.Count == 126 && Ids(form).First() == 125 && Ids(form).Last() == 0, "Opening automatically loads every repository changeset across three batches: " + revisions.Items.Count + " / " + Field<Label>(form, "status").Text);
                     Require(PageQueries(root) == 3 && !Field<bool>(form, "hasMoreHistory"), "Exhaustion is based on server continuation, not first page size");
                     Require(Ids(form).Distinct().Count() == 126, "Automatic pages contain no duplicates");
+                    Require(revisions.Items.Cast<ListViewItem>().All(row => row.Font.Bold ==
+                        (((PlasticHistoryItem)row.Tag).Changeset > 110 || new long[] { 1, 4 }.Contains(((PlasticHistoryItem)row.Tag).Changeset))),
+                        "Unpulled rows and older unrelated branch commits are bold across every column");
                     Require(ReadCalls(root).Count(line => line.Contains("changesetid = ")) == 2, "Intermediate batches do not reload details; completion refreshes the final selected changeset once");
                     var filter = Field<TextBox>(form, "filter");
                     filter.Text = "oldest-only"; Pump(() => Field<Button>(form, "restore").Enabled);
                     Require(Ids(form).SequenceEqual(new long[] { 1 }), "Filtering finds a match beyond the first two batches");
+                    Require(revisions.Items[0].Font.Bold && revisions.Items[0].UseItemStyleForSubItems, "Filtering retains the bold font on the entire row");
                     filter.Clear(); Pump(() => Field<Button>(form, "restore").Enabled);
                     Require(revisions.Items.Count == 126, "Clearing the filter restores all history");
                     Write(root, "head", "130");
@@ -63,6 +67,7 @@ namespace TortoiseSCM
                     Require(revisions.Items.Count == 131 && Ids(form).First() == 130 && Ids(form).Last() == 0 && PageQueries(root) - pagesBefore == 3,
                         "Refresh retrieves the new head and all older history again");
                     Require(Field<Button>(form, "refreshHistory").Text == "刷新全部", "Refresh label explicitly describes full refresh");
+                    revisions.TopItem = revisions.Items.Cast<ListViewItem>().Single(row => ((PlasticHistoryItem)row.Tag).Changeset == 114);
                     Save(form, Path.Combine(artifacts, "history-all.png"));
                     form.Size = form.MinimumSize; Application.DoEvents();
                     foreach (string name in new[] { "refreshHistory", "cancelHistory", "close" }) {
@@ -71,6 +76,20 @@ namespace TortoiseSCM
                     }
                     Require(Field<Label>(form, "historySummary").Text.Contains("已扫描全部历史"), "Completed history is clearly labelled as complete");
                     Save(form, Path.Combine(artifacts, "history-all-minimum.png"));
+                    Write(root, "loaded", "130");
+                    var localRefresh = (Task)typeof(HistoryForm).GetMethod("ReadLocalStateAsync", Flags).Invoke(form, new object[] { CancellationToken.None });
+                    Pump(() => localRefresh.IsCompleted); localRefresh.GetAwaiter().GetResult();
+                    localRefresh = (Task)typeof(HistoryForm).GetMethod("UpdateLocalRowsAsync", Flags).Invoke(form, new object[] { CancellationToken.None });
+                    Pump(() => localRefresh.IsCompleted); localRefresh.GetAwaiter().GetResult();
+                    Require(!revisions.Items[0].Font.Bold && revisions.Items.Cast<ListViewItem>().Count(row => row.Font.Bold) == 2,
+                        "Refreshing local state after pulling clears bold while preserving unrelated branch markers");
+                    Write(root, "invalid-local-state", "");
+                    typeof(Form).GetMethod("OnActivated", Flags).Invoke(form, new object[] { EventArgs.Empty });
+                    Pump(() => !Field<bool>(form, "checkingLocalState"));
+                    Require(revisions.Items.Count == 131 && revisions.Items.Cast<ListViewItem>().All(row => !row.Font.Bold) &&
+                        Field<Label>(form, "historySummary").Text.Contains("本地拉取状态暂不可用"),
+                        "Returning to the window rechecks local state; failure retains history and clears stale styling");
+                    File.Delete(Meta(root, "invalid-local-state"));
 
                     Write(root, "head", "145"); Write(root, "slow-continuation", "");
                     long[] retained = Ids(form);
@@ -195,6 +214,10 @@ namespace TortoiseSCM
             }
             if (args[0] == "log") {
                 int logTop = Int32.Parse(args[1].Substring(3).Split('@')[0]);
+                if (args.Contains("--ancestors")) {
+                    Console.WriteLine(new XElement("LogList", Enumerable.Range(0, logTop + 1).Where(i => i != 1 && i != 4)
+                        .Select(i => new XElement("Changeset", new XElement("ChangesetId", i))))); return 0;
+                }
                 int bottom = Int32.Parse(args.First(arg => arg.StartsWith("--from=cs:")).Substring(10).Split('@')[0]);
                 Console.WriteLine(new XElement("LogList", Enumerable.Range(bottom + 1, logTop - bottom).Reverse().Select(i =>
                     new XElement("Changeset", new XElement("ChangesetId", i), new XElement("Branch", i == 4 || i == 1 ? "/main/older" : "/main"),
@@ -204,7 +227,8 @@ namespace TortoiseSCM
                 return 0;
             }
             if (args[0] == "status") {
-                Console.WriteLine(new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", 110),
+                if (File.Exists(Meta(root, "invalid-local-state"))) { Console.WriteLine("<StatusOutput/>"); return 0; }
+                Console.WriteLine(new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status", new XElement("Changeset", File.Exists(Meta(root, "loaded")) ? File.ReadAllText(Meta(root, "loaded")) : "110"),
                     new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))), new XElement("WkConfigName", "/main@test@server:8087"))); return 0;
             }
             if (args[0] == "diff") {

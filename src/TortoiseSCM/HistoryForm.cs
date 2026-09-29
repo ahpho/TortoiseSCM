@@ -39,6 +39,13 @@ namespace TortoiseSCM
         private int scannedChangesets;
         private bool historyCompatibilityFallback;
         private string historyRepository;
+        private Font notLoadedFont;
+        private PlasticHistoryLocalState localState;
+        private readonly Dictionary<long, bool> notLoaded = new Dictionary<long, bool>();
+        private readonly Dictionary<long, ListViewItem> revisionRows = new Dictionary<long, ListViewItem>();
+        private bool checkingLocalState;
+        private int localStateGeneration;
+        private string localStateError;
         private bool writing;
         private int generation;
         private bool filtering;
@@ -226,10 +233,17 @@ namespace TortoiseSCM
             layout.Controls.Add(footer, 0, 4);
             Controls.Add(layout);
             DialogStyle.Apply(this);
+            notLoadedFont = new Font(revisions.Font, revisions.Font.Style | FontStyle.Bold);
+            revisions.ShowItemToolTips = true;
             Shown += async delegate { await LoadHistoryPageAsync(true); };
+            Activated += async delegate
+            {
+                if (!loadingHistory && !writing && !checkingLocalState && entries.Count > 0)
+                { await ReadLocalStateAsync(lifetime.Token); await UpdateLocalRowsAsync(lifetime.Token); }
+            };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (writing) e.Cancel = true; else lifetime.Cancel(); };
             FormClosed += delegate { if (detailRequest != null) detailRequest.Cancel(); };
-            Disposed += delegate { lifetime.Cancel(); if (detailRequest != null) detailRequest.Cancel(); };
+            Disposed += delegate { lifetime.Cancel(); if (detailRequest != null) detailRequest.Cancel(); notLoadedFont.Dispose(); };
         }
 
         private static void ConfigureList(ListView list, string name, string[] columns, int[] widths)
@@ -246,7 +260,7 @@ namespace TortoiseSCM
 
         private async Task LoadHistoryPageAsync(bool reset)
         {
-            if (loadingHistory || writing || lifetime.IsCancellationRequested) return;
+            if (loadingHistory || writing || checkingLocalState || lifetime.IsCancellationRequested) return;
             loadingHistory = true;
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             historyRequest = cancellation;
@@ -268,6 +282,7 @@ namespace TortoiseSCM
                 string loadError = null;
                 try
                 {
+                    await ReadLocalStateAsync(cancellation.Token);
                     if (!wholeWorkspace)
                     {
                         if (branch != null) ValidateHistoryContext();
@@ -290,6 +305,7 @@ namespace TortoiseSCM
                             entries.AddRange(previewItems.Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>())
                                 .GroupBy(item => item.Changeset).Select(group => group.First()).OrderByDescending(item => item.Changeset));
                             await ApplyFilterAsync(repositoryChanged);
+                            await UpdateLocalRowsAsync(cancellation.Token);
                             UpdateHistorySummary();
                         }
                     }
@@ -326,6 +342,7 @@ namespace TortoiseSCM
                             .Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>());
                         entries.AddRange(visible.GroupBy(item => item.Changeset).Select(group => group.First()).OrderByDescending(item => item.Changeset));
                         await ApplyFilterAsync(repositoryChanged || !page.HasMore);
+                        await UpdateLocalRowsAsync(cancellation.Token);
                         UpdateHistorySummary();
                         // Yield between bounded batches even when all backend tasks are cached.
                         if (page.HasMore) await Task.Yield();
@@ -369,7 +386,8 @@ namespace TortoiseSCM
 
         private void UpdateHistorySummary()
         {
-            historySummary.Text = revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
+            historySummary.Text = (localStateError == null ? "粗体：未拉取到本地；" : "本地拉取状态暂不可用；") +
+                revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
                 " 个提交；" + (hasMoreHistory ? (loadingHistory ? "正在读取全部历史，可取消" : "加载未完成，请刷新全部重试") : "已扫描全部历史") +
                 (branch != null ? "（仅本分支提交，不含祖先）" :
                     (wholeWorkspace ? "" : "（路径历史，不追溯重命名前的其他路径）")) +
@@ -386,11 +404,14 @@ namespace TortoiseSCM
             try
             {
                 revisions.Items.Clear();
+                revisionRows.Clear();
                 foreach (var entry in entries.Where(e => MatchesFilter(e, query)))
                 {
                     var row = new ListViewItem(new[] { entry.Changeset.ToString(), entry.CreationDate, entry.Owner, entry.Branch,
                         (entry.Comment ?? "").Replace("\r", " ").Replace("\n", " ") }) { Tag = entry };
+                    ApplyLocalRowStyle(row);
                     revisions.Items.Add(row);
+                    revisionRows[entry.Changeset] = row;
                     if (selected.HasValue && entry.Changeset == selected.Value) row.Selected = true;
                 }
                 if (revisions.SelectedItems.Count == 0 && revisions.Items.Count > 0) revisions.Items[0].Selected = true;
@@ -408,6 +429,90 @@ namespace TortoiseSCM
         {
             return query.Length == 0 || new[] { entry.Changeset.ToString(), entry.CreationDate, entry.Owner, entry.Branch, entry.Comment }
                 .Any(value => (value ?? "").IndexOf(query, StringComparison.CurrentCultureIgnoreCase) >= 0);
+        }
+
+        private async Task ReadLocalStateAsync(CancellationToken token)
+        {
+            int request = ++localStateGeneration;
+            checkingLocalState = true;
+            localState = null; localStateError = null; notLoaded.Clear();
+            foreach (ListViewItem row in revisions.Items) ApplyLocalRowStyle(row);
+            try
+            {
+                var state = await client.GetHistoryLocalStateAsync(path, token);
+                if (request == localStateGeneration && !lifetime.IsCancellationRequested) localState = state;
+            }
+            catch (OperationCanceledException) { if (request == localStateGeneration) localStateError = "检查已取消，请刷新重试。"; }
+            catch (Exception ex) { if (request == localStateGeneration) localStateError = ex.Message; }
+            finally
+            {
+                if (request == localStateGeneration)
+                {
+                    checkingLocalState = false;
+                    if (!lifetime.IsCancellationRequested)
+                    {
+                        foreach (ListViewItem row in revisions.Items) ApplyLocalRowStyle(row);
+                        UpdateHistorySummary();
+                    }
+                }
+            }
+        }
+
+        private async Task UpdateLocalRowsAsync(CancellationToken token)
+        {
+            if (localState == null || checkingLocalState || lifetime.IsCancellationRequested) return;
+            int request = localStateGeneration;
+            var state = localState;
+            checkingLocalState = true;
+            try
+            {
+                foreach (var entry in entries.ToArray())
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!notLoaded.ContainsKey(entry.Changeset))
+                    {
+                        bool missing = await client.IsHistoryNotLoadedAsync(state, entry, token);
+                        if (request != localStateGeneration || lifetime.IsCancellationRequested) return;
+                        notLoaded[entry.Changeset] = missing;
+                    }
+                    if (request != localStateGeneration || lifetime.IsCancellationRequested) return;
+                    ListViewItem row;
+                    if (revisionRows.TryGetValue(entry.Changeset, out row)) ApplyLocalRowStyle(row);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (request == localStateGeneration && !lifetime.IsCancellationRequested)
+                {
+                    localStateError = "检查已取消，请刷新重试。";
+                    foreach (ListViewItem row in revisions.Items) ApplyLocalRowStyle(row);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (request != localStateGeneration || lifetime.IsCancellationRequested) return;
+                localStateError = ex.Message;
+                // Unknown is distinct from loaded: do not retain stale bold rows.
+                localState = null; notLoaded.Clear();
+                foreach (ListViewItem row in revisions.Items) ApplyLocalRowStyle(row);
+            }
+            finally
+            {
+                if (request == localStateGeneration)
+                {
+                    checkingLocalState = false;
+                    if (!lifetime.IsCancellationRequested) UpdateHistorySummary();
+                }
+            }
+        }
+
+        private void ApplyLocalRowStyle(ListViewItem row)
+        {
+            bool missing;
+            bool known = notLoaded.TryGetValue(((PlasticHistoryItem)row.Tag).Changeset, out missing);
+            row.Font = known && missing ? notLoadedFont : revisions.Font;
+            row.ToolTipText = known ? (missing ? "尚未拉取到本地（当前范围）" : "已包含在本地加载版本中（当前范围）") :
+                (localStateError == null ? "正在检查本地拉取状态…" : "无法判断本地拉取状态：" + localStateError);
         }
 
         private async Task LoadDetailsAsync()
@@ -669,6 +774,8 @@ namespace TortoiseSCM
                 writing = false; revisions.Enabled = restore.Enabled = snapshot.Enabled = filter.Enabled = close.Enabled = true;
                 refreshHistory.Enabled = !loadingHistory; UpdateFileAction();
             }
+            await ReadLocalStateAsync(lifetime.Token);
+            await UpdateLocalRowsAsync(lifetime.Token);
         }
     }
 }
