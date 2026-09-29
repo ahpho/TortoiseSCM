@@ -96,8 +96,9 @@ constexpr Command commands[] = {
 
 // Shared presentation order for classic and modern Explorer menus. The values
 // refer to stable command identities above, not visible menu offsets.
+// Status (identity 0) shares the check-in window and has no separate menu entry.
 constexpr size_t menuOrder[] = {
-    2, 1, 0, 6, 7,          // Update, check in, pending changes, diff, history.
+    2, 1, 6, 7,             // Update, check in, diff, history.
     3, 4, 5, 10, 11, 12,    // Add, checkout, undo, move, remove, ignore.
     19, 15, 20, 23,         // Branches, merge, shelvesets, labels.
     22, 24, 21, 16, 18, 17, // Repository, graph, blame, export, recover, rollback.
@@ -106,8 +107,9 @@ constexpr size_t menuOrder[] = {
 };
 constexpr bool ValidMenuOrder()
 {
-    if constexpr (ARRAYSIZE(menuOrder) != ARRAYSIZE(commands)) return false;
+    if constexpr (ARRAYSIZE(menuOrder) != ARRAYSIZE(commands) - 1) return false;
     bool seen[ARRAYSIZE(commands)]{};
+    seen[0] = true; // Reserved status identity must not appear in either menu.
     for (const size_t index : menuOrder)
     {
         if (index >= ARRAYSIZE(commands) || seen[index]) return false;
@@ -115,7 +117,7 @@ constexpr bool ValidMenuOrder()
     }
     return true;
 }
-static_assert(ValidMenuOrder(), "Menu order must contain each command exactly once");
+static_assert(ValidMenuOrder(), "Menu order must contain each command except status exactly once");
 
 const wchar_t* Label(const Command& command)
 {

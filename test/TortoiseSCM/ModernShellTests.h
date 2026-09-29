@@ -124,7 +124,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     unsigned fileCount = 0, directoryCount = 0, multiCount = 0;
     std::vector<GUID> names;
     ComPtr<IExplorerCommand> diff;
-    for (size_t index = 0; index < ARRAYSIZE(commands); ++index)
+    for (size_t index = 0; index < ARRAYSIZE(expectedMenuVerbs); ++index)
     {
         ComPtr<IExplorerCommand> child;
         ULONG fetched = 0;
@@ -138,11 +138,11 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
         child->GetState(file.Get(), TRUE, &state); fileCount += state == ECS_ENABLED;
         child->GetState(directory.Get(), TRUE, &state); directoryCount += state == ECS_ENABLED;
         child->GetState(multiple.Get(), TRUE, &state); multiCount += state == ECS_ENABLED;
-        require(SUCCEEDED(child->GetState(outside.Get(), TRUE, &state)) && state == (index == 26 ? ECS_ENABLED : ECS_HIDDEN), "modern only checkout enabled outside workspace");
+        require(SUCCEEDED(child->GetState(outside.Get(), TRUE, &state)) && state == (expectedMenuIdentities[index] == 26 ? ECS_ENABLED : ECS_HIDDEN), "modern only checkout enabled outside workspace");
         require(FAILED(child->Invoke(cross.Get(), nullptr)), "modern cross-workspace invocation rejected");
         if (wcscmp(expectedMenuVerbs[index], L"diff") == 0) diff = child;
     }
-    require(fileCount == 26 && directoryCount == 24 && multiCount == 8, "modern selection counts match classic filtering");
+    require(fileCount == 25 && directoryCount == 23 && multiCount == 7, "modern selection counts match classic filtering");
     require(FAILED(diff->Invoke(directory.Get(), nullptr)) && FAILED(diff->Invoke(nullptr, nullptr)), "modern invoke validates fresh selection");
     ComPtr<IExplorerCommand> exhausted;
     ULONG fetched = 99;
@@ -152,7 +152,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     require(SUCCEEDED(enumerator->Clone(&clone)), "modern enumeration clone");
     require(clone->Next(1, &exhausted, &fetched) == S_OK, "modern clone retains cursor");
     exhausted->GetCanonicalName(&identity); require(identity == names[6], "modern cloned cursor identity"); exhausted.Reset();
-    require(enumerator->Skip(static_cast<ULONG>(ARRAYSIZE(commands) - 6)) == S_OK && enumerator->Skip(1) == S_FALSE, "modern skip exactly to end");
+    require(enumerator->Skip(static_cast<ULONG>(ARRAYSIZE(expectedMenuVerbs) - 6)) == S_OK && enumerator->Skip(1) == S_FALSE, "modern skip exactly to end");
     require(clone->Skip(MAXDWORD) == S_FALSE && clone->Next(1, &exhausted, &fetched) == S_FALSE, "modern oversized skip reaches end without overflow");
     ComPtr<IObjectWithSite> withSite;
     require(SUCCEEDED(root.As(&withSite)), "modern IObjectWithSite supported");
@@ -168,7 +168,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     {
         exhausted->GetState(nullptr, TRUE, &state); backgroundCount += state == ECS_ENABLED; exhausted.Reset();
     }
-    require(backgroundCount == 24, "modern children inherit background site");
+    require(backgroundCount == 23, "modern children inherit background site");
     ComPtr<BackgroundSite> checkoutBackground; checkoutBackground.Attach(new BackgroundSite(first.parent_path().native()));
     withSite->SetSite(static_cast<IServiceProvider*>(checkoutBackground.Get()));
     require(SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_ENABLED, "modern ordinary background checkout root visible");
@@ -246,22 +246,22 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
         ComPtr<IExplorerCommand> root;
         require(SUCCEEDED(factory->CreateInstance(nullptr, IID_PPV_ARGS(&root))), "modern handoff production root");
         ComPtr<IEnumExplorerCommand> enumerator; root->EnumSubCommands(&enumerator);
-        ComPtr<IExplorerCommand> status;
+        ComPtr<IExplorerCommand> checkin;
         ULONG fetched = 0;
-        require(enumerator->Skip(2) == S_OK && enumerator->Next(1, &status, &fetched) == S_OK, "modern handoff status command follows update and checkin");
+        require(enumerator->Skip(1) == S_OK && enumerator->Next(1, &checkin, &fetched) == S_OK, "modern handoff checkin command follows update");
         const auto selectedPath = (first / L"child/selected 中文 & item.txt").make_preferred();
         std::ofstream(selectedPath) << "fixture";
         auto previous = ModernSelection({(first / L"child/file.txt").native()});
         auto selected = ModernSelection({selectedPath.native()});
         EXPCMDSTATE state;
-        require(SUCCEEDED(status->GetState(previous.Get(), TRUE, &state)) && state == ECS_ENABLED, "modern handoff prior selection state");
+        require(SUCCEEDED(checkin->GetState(previous.Get(), TRUE, &state)) && state == ECS_ENABLED, "modern handoff prior selection state");
         const auto capturePath = stage / L"capture.txt";
         wchar_t oldCapture[32768]{};
         const DWORD oldLength = GetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", oldCapture, ARRAYSIZE(oldCapture));
         require(SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", capturePath.c_str()) != FALSE, "modern handoff capture environment");
-        require(SUCCEEDED(status->Invoke(selected.Get(), nullptr)), "modern handoff invokes actual process launcher");
+        require(SUCCEEDED(checkin->Invoke(selected.Get(), nullptr)), "modern handoff invokes actual process launcher");
         SetEnvironmentVariableW(L"TORTOISESCM_SHELL_TEST_CAPTURE", oldLength && oldLength < ARRAYSIZE(oldCapture) ? oldCapture : nullptr);
-        const std::wstring wideExpected = L"status\n" + selectedPath.native() + L"\n";
+        const std::wstring wideExpected = L"checkin\n" + selectedPath.native() + L"\n";
         const int length = WideCharToMultiByte(CP_UTF8, 0, wideExpected.c_str(), static_cast<int>(wideExpected.size()), nullptr, 0, nullptr, nullptr);
         std::string expected(length, '\0');
         WideCharToMultiByte(CP_UTF8, 0, wideExpected.c_str(), static_cast<int>(wideExpected.size()), expected.data(), length, nullptr, nullptr);
@@ -281,7 +281,7 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
         {
             ULONG index = 0;
             while (index < ARRAYSIZE(expectedMenuVerbs) && wcscmp(expectedMenuVerbs[index], command) != 0) ++index;
-            require(index < ARRAYSIZE(commands), "modern basic operation command exists");
+            require(index < ARRAYSIZE(expectedMenuVerbs), "modern basic operation command exists");
             enumerator->Reset(); enumerator->Skip(index);
             ComPtr<IExplorerCommand> operation;
             require(enumerator->Next(1, &operation, &fetched) == S_OK, "modern basic operation enumerated");
@@ -313,7 +313,7 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
                 require(std::filesystem::exists(operationPath), "modern recorder never removes selected fixture");
             }
         }
-        enumerator->Reset(); enumerator->Skip(26);
+        enumerator->Reset(); enumerator->Skip(25);
         ComPtr<IExplorerCommand> checkout; require(enumerator->Next(1, &checkout, &fetched) == S_OK, "modern handoff checkout command");
         const auto unicodeParent = first.parent_path() / L"checkout \u4e2d\u6587 & parent";
         std::filesystem::create_directory(unicodeParent);

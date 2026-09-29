@@ -135,13 +135,13 @@ void CheckMenuBitmap(HMENU menu, HMODULE resourceModule)
 // UX contract, independent of the production presentation array. Identities
 // retain their pre-reorder values even though visible offsets have changed.
 constexpr const wchar_t* expectedMenuVerbs[] = {
-    L"update", L"checkin", L"status", L"diff", L"history",
+    L"update", L"checkin", L"diff", L"history",
     L"add", L"checkout", L"undo", L"move", L"remove", L"ignore",
     L"branches", L"merge", L"shelves", L"labels", L"repository-browser",
     L"revision-graph", L"blame", L"export", L"recover", L"rollback",
     L"locks", L"unlock", L"gluon", L"settings", L"version", L"create-workspace"
 };
-constexpr size_t expectedMenuIdentities[] = {2,1,0,6,7,3,4,5,10,11,12,19,15,20,23,22,24,21,16,18,17,13,14,8,9,25,26};
+constexpr size_t expectedMenuIdentities[] = {2,1,6,7,3,4,5,10,11,12,19,15,20,23,22,24,21,16,18,17,13,14,8,9,25,26};
 
 void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionKind)
 {
@@ -284,36 +284,36 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     Selection file({(first / L"child/file.txt").native()});
     require(SUCCEEDED(initialize->Initialize(nullptr, &file, nullptr)), "registered file initialization");
     HMENU menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 26, "registered file menu exposes all single-item commands");
-    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 26, "registered submenu structure");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 25, "registered file menu exposes all single-item commands");
+    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 25, "registered submenu structure");
     require(GetMenuItemID(GetSubMenu(menu, 0), 0) == 400 && GetMenuItemID(GetSubMenu(menu, 0), 9) == 409, "registered menu command IDs");
     wchar_t verb[80]{};
-    require(SUCCEEDED(context->GetCommandString(3, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+    require(SUCCEEDED(context->GetCommandString(2, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.diff") == 0, "registered Unicode canonical verb");
-    require(SUCCEEDED(context->GetCommandString(11, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+    require(SUCCEEDED(context->GetCommandString(10, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.branches") == 0, "registered branches canonical verb");
-    require(SUCCEEDED(context->GetCommandString(13, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+    require(SUCCEEDED(context->GetCommandString(12, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.shelves") == 0, "registered shelves canonical verb");
-    require(SUCCEEDED(context->GetCommandString(17, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
-        wcscmp(verb, L"tortoisescm.blame") == 0, "registered blame canonical verb");
-    require(SUCCEEDED(context->GetCommandString(15, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) &&
-        wcscmp(verb, L"tortoisescm.repository-browser") == 0, "registered repository browser canonical verb");
-    require(SUCCEEDED(context->GetCommandString(14, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
-        wcscmp(verb, L"tortoisescm.labels") == 0, "registered labels canonical verb");
     require(SUCCEEDED(context->GetCommandString(16, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+        wcscmp(verb, L"tortoisescm.blame") == 0, "registered blame canonical verb");
+    require(SUCCEEDED(context->GetCommandString(14, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) &&
+        wcscmp(verb, L"tortoisescm.repository-browser") == 0, "registered repository browser canonical verb");
+    require(SUCCEEDED(context->GetCommandString(13, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+        wcscmp(verb, L"tortoisescm.labels") == 0, "registered labels canonical verb");
+    require(SUCCEEDED(context->GetCommandString(15, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.revision-graph") == 0, "registered revision graph canonical verb");
-    require(SUCCEEDED(context->GetCommandString(25, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+    require(SUCCEEDED(context->GetCommandString(24, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.version") == 0, "registered version information canonical verb");
     char ansiVerb[80]{};
-    require(SUCCEEDED(context->GetCommandString(4, GCS_VERBA, nullptr, ansiVerb, ARRAYSIZE(ansiVerb))) &&
+    require(SUCCEEDED(context->GetCommandString(3, GCS_VERBA, nullptr, ansiVerb, ARRAYSIZE(ansiVerb))) &&
         strcmp(ansiVerb, "tortoisescm.history") == 0, "registered ANSI canonical verb");
     DestroyMenu(menu);
 
     Selection directory({first.native()});
     require(SUCCEEDED(initialize->Initialize(nullptr, &directory, nullptr)), "registered directory initialization");
     menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 24, "registered directory menu excludes diff");
-    require(SUCCEEDED(context->GetCommandString(3, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 23, "registered directory menu excludes diff");
+    require(SUCCEEDED(context->GetCommandString(2, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.history") == 0, "registered directory command mapping");
     DestroyMenu(menu);
 
@@ -323,13 +323,13 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     CoTaskMemFree(pidl);
     require(SUCCEEDED(background), "registered directory background initialization");
     menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 24, "registered background menu");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 23, "registered background menu");
     DestroyMenu(menu);
 
     Selection multiple({(first / L"child/file.txt").native(), (first / L"child/second.txt").native()});
     require(SUCCEEDED(initialize->Initialize(nullptr, &multiple, nullptr)), "registered multi-selection initialization");
     menu = CreatePopupMenu();
-    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 8, "registered multi-selection menu");
+    require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 7, "registered multi-selection menu");
     DestroyMenu(menu);
 
     Selection cross({first.native(), second.native()});
@@ -381,7 +381,7 @@ void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binar
             require(SUCCEEDED(initialized), "classic handoff file directory or background initialized");
             HMENU menu = CreatePopupMenu();
             const HRESULT queried = context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL);
-            const unsigned expectedCount = selectionKind == 0 ? 26 : selectionKind < 3 ? 24 : 1;
+            const unsigned expectedCount = selectionKind == 0 ? 25 : selectionKind < 3 ? 23 : 1;
             if (FAILED(queried) || HRESULT_CODE(queried) != expectedCount)
                 std::cerr << "Classic menu selection=" << selectionKind << " expected=" << expectedCount
                     << " actual=" << HRESULT_CODE(queried) << " HRESULT=" << queried << '\n';
@@ -511,24 +511,24 @@ int wmain(int argc, wchar_t** argv) {
     Selection one({(first / L"child/file.txt").native()});
     require(SUCCEEDED(shell->Initialize(nullptr, &one, nullptr)), "single file init");
     auto menu = CreatePopupMenu();
-    require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 26, "single file exposes all commands");
+    require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 200, CMF_NORMAL)) == 25, "single file exposes all commands");
     CheckClassicOrder(shell, GetSubMenu(menu, 0), 0);
     wchar_t verb[80]{};
-    require(SUCCEEDED(shell->GetCommandString(3, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.diff") == 0, "diff canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(8, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.move") == 0, "move canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(19, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.recover") == 0, "recover canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(11, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.branches") == 0, "branches canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(13, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.shelves") == 0, "shelves canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(17, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.blame") == 0, "blame canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(15, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.repository-browser") == 0, "repository browser canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(14, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.labels") == 0, "labels canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(16, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.revision-graph") == 0, "revision graph canonical verb");
-    require(SUCCEEDED(shell->GetCommandString(25, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.version") == 0, "version information canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(2, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.diff") == 0, "diff canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(7, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.move") == 0, "move canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(18, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.recover") == 0, "recover canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(10, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.branches") == 0, "branches canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(12, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.shelves") == 0, "shelves canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(16, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.blame") == 0, "blame canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(14, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.repository-browser") == 0, "repository browser canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(13, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.labels") == 0, "labels canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(15, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.revision-graph") == 0, "revision graph canonical verb");
+    require(SUCCEEDED(shell->GetCommandString(24, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), 80)) && wcscmp(verb,L"tortoisescm.version") == 0, "version information canonical verb");
     DestroyMenu(menu);
     Selection multi({(first / L"child/file.txt").native(), (first / L"child/second.txt").native()});
     shell->Initialize(nullptr, &multi, nullptr); menu = CreatePopupMenu();
-    require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL)) == 8, "multi selection excludes diff and history");
-    const wchar_t* multiVerbs[] = {L"update", L"checkin", L"status", L"add", L"checkout", L"undo", L"gluon", L"settings"};
+    require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL)) == 7, "multi selection excludes diff and history");
+    const wchar_t* multiVerbs[] = {L"update", L"checkin", L"add", L"checkout", L"undo", L"gluon", L"settings"};
     for (UINT offset = 0; offset < ARRAYSIZE(multiVerbs); ++offset)
         require(SUCCEEDED(shell->GetCommandString(offset, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
             verb == L"tortoisescm." + std::wstring(multiVerbs[offset]), "multi selection retains frequent-first filtered order");
@@ -538,7 +538,7 @@ int wmain(int argc, wchar_t** argv) {
     PIDLIST_ABSOLUTE pidl{}; SHParseDisplayName(first.c_str(),nullptr,&pidl,0,nullptr);
     shell->Initialize(pidl,nullptr,nullptr); CoTaskMemFree(pidl); menu=CreatePopupMenu();
     const auto directoryCount = HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL));
-    require(directoryCount==24, "directory background menu"); CheckClassicOrder(shell, GetSubMenu(menu, 0), 2); DestroyMenu(menu);
+    require(directoryCount==23, "directory background menu"); CheckClassicOrder(shell, GetSubMenu(menu, 0), 2); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_DEFAULTONLY))==0, "default-only query ignored"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,102,CMF_NORMAL))==3, "command id limit respected"); DestroyMenu(menu);
     for (const auto& parent : {base, base.root_path()})

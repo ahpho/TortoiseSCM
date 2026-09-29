@@ -224,7 +224,7 @@ public:
         for (; copied < count; ++copied)
         {
             output[copied] = nullptr;
-            if (position == ARRAYSIZE(commands)) break;
+            if (position == ARRAYSIZE(menuOrder)) break;
             auto command = new (std::nothrow) PlasticExplorerCommand(menuOrder[position], site.Get());
             if (!command)
             {
@@ -240,7 +240,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Skip(ULONG count) override
     {
-        const size_t remaining = ARRAYSIZE(commands) - position;
+        const size_t remaining = ARRAYSIZE(menuOrder) - position;
         const size_t skipped = count < remaining ? count : remaining;
         position += skipped;
         return skipped == count ? S_OK : S_FALSE;
