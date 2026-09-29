@@ -80,8 +80,10 @@ namespace TortoiseSCM
                     (selectedPaths.Any(Directory.Exists) ? "目录操作会包含全部子项。" : "");
 
                 var all = await client.GetStatusAsync(workspace.RootPath, CancellationToken.None);
-                var candidates = BuildCandidates(all);
-                if (IsCheckout()) candidates = SelectedFallback(all, "受控路径");
+                var candidates = IsRecursiveCheckout()
+                    ? await BuildRecursiveCheckoutCandidates(workspace, all)
+                    : BuildCandidates(all);
+                if (IsCheckout() && !IsRecursiveCheckout()) candidates = SelectedFallback(all, "受控路径");
                 else if (candidates.Count == 0 && commandName == "undo") candidates = SelectedFallback(all, "所选路径");
                 checkoutCancellation = IsCheckout() && candidates.Count > 0 && candidates.All(item => item.StatusCode == "CO");
                 execute.Text = EffectiveLabel();
@@ -126,6 +128,7 @@ namespace TortoiseSCM
         {
             if (busy || !ready) return;
             var paths = files.CheckedItems.Cast<ListViewItem>().Select(item => ((PlasticStatusItem)item.Tag).Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (IsRecursiveCheckout()) paths = CollapseRecursivePaths(paths);
             if (paths.Count == 0) { status.Text = "请先勾选要操作的文件。"; return; }
             string label = EffectiveLabel();
             bool undo = commandName == "undo" || checkoutCancellation;
@@ -176,6 +179,7 @@ namespace TortoiseSCM
         }
 
         private bool IsCheckout() { return commandName == "checkout" || commandName == "checkout-recursive"; }
+        private bool IsRecursiveCheckout() { return commandName == "checkout-recursive"; }
         private string EffectiveLabel() { return checkoutCancellation ? "撤销签出" : CommandLabel(commandName); }
         private static bool IsPrivate(string code) { return code == "PR" || code == "IG"; }
         private static PlasticCommand Parse(string command, bool checkoutCancellation)
@@ -187,6 +191,39 @@ namespace TortoiseSCM
         {
             return command == "add" ? "添加" : command == "checkout" ? "签出" :
                 command == "checkout-recursive" ? "递归签出" : "撤销更改";
+        }
+
+        private async Task<List<PlasticStatusItem>> BuildRecursiveCheckoutCandidates(PlasticWorkspace workspace, IList<PlasticStatusItem> pending)
+        {
+            var byPath = pending.Where(item => !IsPrivate(item.StatusCode))
+                .ToDictionary(item => item.Path, StringComparer.OrdinalIgnoreCase);
+            var inventory = await client.GetControlledItemsAsync(workspace.RootPath, CancellationToken.None);
+            var result = new List<PlasticStatusItem>();
+            foreach (var item in inventory)
+            {
+                if (!selectedPaths.Any(path => InScope(item.Path, path))) continue;
+                PlasticStatusItem current;
+                if (byPath.TryGetValue(item.Path, out current)) result.Add(current);
+                else result.Add(item);
+            }
+            foreach (var item in pending.Where(item => !IsPrivate(item.StatusCode) && selectedPaths.Any(path => InScope(item.Path, path))))
+                if (!result.Any(existing => String.Equals(existing.Path, item.Path, StringComparison.OrdinalIgnoreCase))) result.Add(item);
+            foreach (var path in selectedPaths)
+                if (!result.Any(item => String.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)))
+                    result.Add(new PlasticStatusItem { Path = path, StatusCode = "", StatusDescription = "受控路径", IsDirectory = Directory.Exists(path) });
+            return result;
+        }
+
+        private static List<string> CollapseRecursivePaths(IEnumerable<string> values)
+        {
+            var result = new List<string>();
+            foreach (string path in values.OrderBy(value => value.Length).ThenBy(value => value, StringComparer.OrdinalIgnoreCase))
+            {
+                if (result.Any(parent => String.Equals(parent, path, StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith(parent.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase))) continue;
+                result.Add(path);
+            }
+            return result;
         }
 
         private sealed class PlasticStatusPathComparer : IComparer<PlasticStatusItem>

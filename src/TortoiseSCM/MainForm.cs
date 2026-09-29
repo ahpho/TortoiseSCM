@@ -38,6 +38,7 @@ namespace TortoiseSCM
         private Func<string, CancellationToken, Task<IList<PlasticStatusItem>>> getPending;
         private Func<string, IList<string>, string, string, CancellationToken, Task<PlasticCheckinPreview>> prepareCheckin;
         private Func<PlasticCheckinPreview, string, CancellationToken, Task<PlasticCommandResult>> submitCheckin;
+        private Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>> runCommand;
         private Func<PlasticCheckinPreview, string, bool, DialogResult> reviewCheckin;
         private Action<string> reportError;
         private CommitMessageStore messageStore = CommitMessageStore.CreateDefault();
@@ -52,6 +53,7 @@ namespace TortoiseSCM
             getPending = (path, token) => client.GetStatusAsync(path, token);
             prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinAsync(root, paths, repository, selector, token);
             submitCheckin = (preview, message, token) => client.CheckinPreparedAsync(preview, message, token);
+            runCommand = (commandRequest, token) => client.RunAsync(commandRequest, token);
             reviewCheckin = (preview, message, uncertain) => {
                 using (var dialog = new CheckinReviewForm(preview, message, uncertain)) return dialog.ShowDialog(this);
             };
@@ -644,19 +646,31 @@ namespace TortoiseSCM
                 selectedRows.Any(parent => parent.IsDirectory && !IsPrivate(parent.StatusCode) &&
                     item.Path.StartsWith(parent.Path.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase)))
                 .Select(item => item.Path), StringComparer.OrdinalIgnoreCase);
+            var privatePaths = explicitPaths == null
+                ? selectedRows.Where(item => IsPrivate(item.StatusCode) && !coveredPrivate.Contains(item.Path))
+                    .Select(item => item.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                : new List<string>();
             var paths = (explicitPaths ?? SelectedPaths(false, false).Where(path => !coveredPrivate.Contains(path)).ToList()).ToArray();
             if (paths.Length == 0) { reportError("请先勾选要提交的项。"); return; }
             string message = comment.Text;
             string messageRepository = workspace.Repository;
             if (String.IsNullOrWhiteSpace(message)) { reportError("请填写签入说明。"); comment.Focus(); return; }
-            if (explicitPaths == null && selectedRows.Any(row => IsPrivate(row.StatusCode) && !coveredPrivate.Contains(row.Path)))
-            { reportError("请先将私有项加入版本控制，再提交。"); return; }
             bool dispatched = false, succeeded = false;
             string historyWarning = null;
             SetBusy(true, "正在准备提交范围与内容预览…");
             try
             {
                 ValidatePendingContext();
+                if (privatePaths.Count > 0)
+                {
+                    status.Text = "正在添加私有文件，准备同时提交…";
+                    var add = await runCommand(new PlasticCommandRequest {
+                        Command = PlasticCommand.Add, WorkingDirectory = workspace.RootPath,
+                        Paths = privatePaths, Recursive = true }, CancellationToken.None);
+                    AppendOutput("[Add private] " + String.Join("\r\n", privatePaths.ToArray()));
+                    AppendOutput(add.Output); AppendOutput(add.Error);
+                    if (!add.Succeeded) throw new InvalidOperationException("私有文件添加失败，未执行提交。\r\n" + add.Error);
+                }
                 var preview = await prepareCheckin(workspace.RootPath, paths, workspace.Repository, workspace.Selector, CancellationToken.None);
                 if (reviewCheckin(preview, message, submissionUncertain) != DialogResult.OK) return;
                 ValidatePendingContext();

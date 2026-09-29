@@ -282,12 +282,23 @@ namespace TortoiseSCM
                 list.Items.Add(new ListViewItem("private child") { Tag = new PlasticStatusItem { Path = Path.Combine(rows[0].Path, "private.txt"), StatusCode = "PR" }, Checked = true });
                 Set(form, "changingChecks", false);
                 Field<TextBox>(form, "comment").Text = "检查递归目录";
-                int prepares = 0, submits = 0; string error = "";
+                int prepares = 0, submits = 0, adds = 0; string error = "";
                 Set(form, "reportError", new Action<string>(text => error = text));
+                Set(form, "runCommand", new Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>>((request, token) =>
+                {
+                    adds++;
+                    Require(request.Command == PlasticCommand.Add && request.Paths.Count == 1 &&
+                        request.Paths[0].EndsWith("private.txt", StringComparison.OrdinalIgnoreCase), "Checked private file is added before check-in");
+                    return Task.FromResult(new PlasticCommandResult());
+                }));
                 Set(form, "prepareCheckin", new Func<string, IList<string>, string, string, CancellationToken, Task<PlasticCheckinPreview>>((path, paths, repo, selector, token) =>
                 {
                     prepares++;
-                    Require(paths.SequenceEqual(new[] { rows[0].Path, rows[1].Path }), "Checked private descendants are excluded from explicit check-in while controlled directory scope is retained");
+                    Require(prepares == 1
+                        ? paths.SequenceEqual(new[] { rows[0].Path, rows[1].Path })
+                        : paths.Count == 1 && paths[0].EndsWith("private.txt", StringComparison.OrdinalIgnoreCase),
+                        prepares == 1 ? "Checked private descendants are excluded from explicit check-in while controlled directory scope is retained" :
+                        "The added private file is passed to check-in preparation");
                     return Task.FromResult(preview);
                 }));
                 Set(form, "submitCheckin", new Func<PlasticCheckinPreview, string, CancellationToken, Task<PlasticCommandResult>>((item, message, token) => { submits++; return Task.FromResult(new PlasticCommandResult()); }));
@@ -299,7 +310,8 @@ namespace TortoiseSCM
                 list.Items[0].Checked = list.Items[1].Checked = false;
                 Set(form, "changingChecks", false);
                 Await(form, "CheckinSelectionAsync", new object[] { null });
-                Require(prepares == 1 && submits == 0 && error.Contains("私有"), "Standalone checked private file is rejected before preparation");
+                Require(prepares == 2 && adds == 1 && submits == 0 && error.Length == 0,
+                    "Standalone checked private file is added and then reviewed for check-in");
             }
         }
 
