@@ -17,6 +17,7 @@ internal static class ComparisonToolTests
         if (args.Length > 0 && args[0].StartsWith("/base:"))
         {
             File.WriteAllLines(Path.Combine(Environment.CurrentDirectory, "native-args.txt"), args);
+            File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "native-command-line.txt"), Environment.CommandLine);
             Thread.Sleep(350);
             return Int32.Parse(File.ReadAllText(Path.Combine(Environment.CurrentDirectory, "exit.txt")));
         }
@@ -45,6 +46,10 @@ internal static class ComparisonToolTests
             translated = ComparisonTool.NativeArguments(merge, true);
             Check(translated.Contains("/base:" + before) && translated.Contains("/mine:" + local) && translated.Contains("/theirs:" + remote) && translated.Contains("/merged:" + output), "Three-way roles and independent result map exactly");
             Check(translated.Contains("/saverequired") && !translated.Contains("/readonly"), "Merge result is editable and asks to save");
+            Check(ComparisonTool.QuoteNativeArgument("/base:" + before) == "/base:\"" + before + "\"", "Raw native syntax quotes the value after the colon");
+            Check(ComparisonTool.QuoteNativeArgument("/basename:Old \"quoted\" title") == "/basename:\"Old \"\"quoted\"\" title\"", "Native title escaping follows CCmdLineParser doubled quotes");
+            rejected = false; try { ComparisonTool.QuoteNativeArgument("/base:bad\0path"); } catch (ArgumentException) { rejected = true; }
+            Check(rejected, "Native quoting rejects NUL instead of truncating a path");
             string exe = Path.Combine(root, "TortoiseGitMerge.exe");
             File.Copy(Assembly.GetExecutingAssembly().Location, exe);
             File.WriteAllText(Path.Combine(root, "exit.txt"), "0");
@@ -54,6 +59,7 @@ internal static class ComparisonToolTests
                 Check(!task.IsCompleted, "Tool session retains its inputs while child is alive");
                 Check(task.GetAwaiter().GetResult().Succeeded, "Native zero exit succeeds");
                 Check(File.ReadAllLines(Path.Combine(root, "native-args.txt")).SequenceEqual(ComparisonTool.NativeArguments(diff, false)), "CreateProcess preserves Unicode and spaces without shell expansion");
+                Check(File.ReadAllText(Path.Combine(root, "native-command-line.txt")).Contains(" /base:\"" + before + "\""), "Actual child receives raw /base:value quoting supported by TortoiseGitMerge");
             }
             File.WriteAllText(Path.Combine(root, "exit.txt"), "11");
             Check(!ComparisonTool.RunDiffAsync(exe, diff, root, CancellationToken.None).GetAwaiter().GetResult().Succeeded, "Native failure 11 is not mistaken for BC differences");

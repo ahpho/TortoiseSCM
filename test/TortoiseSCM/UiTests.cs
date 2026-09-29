@@ -228,7 +228,10 @@ namespace TortoiseSCM
                             Require(output.TextLength == 0, "Status load did not report an error");
                             var list = (ListView)typeof(MainForm).GetField("files", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
                             Require(list.Items.Cast<ListViewItem>().Any(i => ((PlasticStatusItem)i.Tag).Path.Equals(sample, StringComparison.OrdinalIgnoreCase)), "Live private UTF-8 file is displayed");
-                            Require(list.CheckedItems.Count == 0, "No unreviewed changes selected automatically");
+                            Require(!list.Items.Cast<ListViewItem>().Single(i => ((PlasticStatusItem)i.Tag).Path.Equals(sample, StringComparison.OrdinalIgnoreCase)).Checked,
+                                "Live untracked file remains unchecked until explicitly selected");
+                            Require(list.Items.Cast<ListViewItem>().Where(i => !new[] { "PR", "IG" }.Contains(((PlasticStatusItem)i.Tag).StatusCode)).All(i => i.Checked),
+                                "Live controlled pending changes are checked by default");
                             Require(list.ContextMenuStrip != null && list.ContextMenuStrip.Items.Cast<ToolStripItem>().Count(item => item is ToolStripMenuItem) == 7 &&
                                 list.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text.Contains("Blame")),
                                 "Pending context menu provides history, blame, diff, discard, move, remove and ignore");

@@ -24,6 +24,18 @@ namespace TortoiseSCM
         internal static bool IsTortoise(string executable)
         { return String.Equals(Path.GetFileName(executable), "TortoiseGitMerge.exe", StringComparison.OrdinalIgnoreCase); }
 
+        internal static string QuoteNativeArgument(string argument)
+        {
+            if (argument == null) throw new ArgumentNullException("argument");
+            if (argument.IndexOf('\0') >= 0) throw new ArgumentException("NUL is not valid in an argument.");
+            // TortoiseGit's CCmdLineParser reads the raw command line, not CRT
+            // argv: /key:"value", with doubled quotes inside the value. Quoting
+            // the whole /key:value token leaves a literal quote in the filename.
+            int separator = argument.IndexOf(':');
+            return separator < 0 ? argument : argument.Substring(0, separator + 1) + "\"" +
+                argument.Substring(separator + 1).Replace("\"", "\"\"") + "\"";
+        }
+
         // Existing callers supply fixed BC-profile roles; translate once at the native boundary.
         // No user templates or shell interpolation are involved.
         internal static IList<string> NativeArguments(IList<string> arguments, bool merge)

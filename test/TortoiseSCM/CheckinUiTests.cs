@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -40,9 +41,68 @@ namespace TortoiseSCM
                 TestSubmissionRetention(root, client, initialRows, preview, executable, artifacts);
                 TestFailuresRefreshAndPendingClose(root, client, initialRows, preview);
                 TestPrivateScopeAndReviewCancel(root, client, initialRows, preview);
+                TestDefaultChecksAndDoubleClick(root, client, initialRows, artifacts);
                 Console.WriteLine("PASS: check-in UI (" + assertions + " assertions)");
             }
             finally { Directory.Delete(root, true); }
+        }
+
+        [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr handle, uint message, IntPtr wparam, IntPtr lparam);
+        private static void ClickAt(ListView list, Point point, bool twice)
+        {
+            var position = (IntPtr)((point.Y << 16) | (point.X & 0xffff));
+            PostMessage(list.Handle, 0x0201, (IntPtr)1, position);
+            PostMessage(list.Handle, 0x0202, IntPtr.Zero, position);
+            if (twice)
+            {
+                PostMessage(list.Handle, 0x0203, (IntPtr)1, position);
+                PostMessage(list.Handle, 0x0202, IntPtr.Zero, position);
+            }
+            Application.DoEvents();
+        }
+
+        private static void TestDefaultChecksAndDoubleClick(string root, PlasticClient client, IList<PlasticStatusItem> rows, string artifacts)
+        {
+            using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root }), false))
+            {
+                Set(form, "client", client); Set(form, "workspace", client.DiscoverWorkspace(root)); Set(form, "loaded", true);
+                var pending = rows.ToList();
+                pending.Add(new PlasticStatusItem { Path = Path.Combine(root, "untracked.txt"), StatusCode = "PR" });
+                Set(form, "getPending", new Func<string, CancellationToken, Task<IList<PlasticStatusItem>>>((path, token) => Task.FromResult<IList<PlasticStatusItem>>(pending)));
+                Set(form, "reportError", new Action<string>(message => { throw new Exception(message); }));
+                form.Show(); Application.DoEvents();
+                Await(form, "RefreshAsync", new object[0]);
+                var list = Field<ListView>(form, "files");
+                Require(list.CheckedItems.Count == rows.Count && !list.Items[3].Checked, "All controlled pending changes start checked; untracked files require explicit selection");
+                Save(form, Path.Combine(artifacts, "pending-default-checks.png"));
+                list.Items[1].Checked = false;
+                pending.Add(new PlasticStatusItem { Path = Path.Combine(root, "new-change.txt"), StatusCode = "CH" });
+                Await(form, "RefreshAsync", new object[0]);
+                Require(!list.Items[0].Checked && !list.Items[1].Checked && list.Items[2].Checked && list.Items[4].Checked,
+                    "Refresh preserves explicit exclusions and checks newly discovered controlled changes");
+                int activations = 0;
+                list.DoubleClick += delegate { activations++; };
+                Set(form, "loaded", false); // Exercise actual mouse messages without invoking SCM.
+                foreach (int index in new[] { 0, 1, 2 })
+                {
+                    var before = list.Items.Cast<ListViewItem>().Select(item => item.Checked).ToArray();
+                    Rectangle bounds = list.Items[index].GetBounds(ItemBoundsPortion.Label);
+                    ClickAt(list, new Point(bounds.Left + 12, bounds.Top + bounds.Height / 2), true);
+                    Require(list.Items.Cast<ListViewItem>().Select(item => item.Checked).SequenceEqual(before),
+                        "Native row double-click preserves all checks, including parent/child selection: " + index);
+                    Require(list.Items[index].Selected, "Double-click still highlights the comparison target: " + index);
+                }
+                Require(activations == 3, "Each row double-click activates comparison exactly once");
+                Rectangle row = list.Items[1].Bounds;
+                var checkbox = new Point(row.Left + 6, row.Top + row.Height / 2);
+                Require((list.HitTest(checkbox).Location & ListViewHitTestLocations.StateImage) != 0, "Checkbox test targets the native state image");
+                ClickAt(list, checkbox, false);
+                Require(list.Items[1].Checked && activations == 3, "Single checkbox click still toggles selection without opening diff");
+                Save(form, Path.Combine(artifacts, "pending-checks.png"));
+                form.Size = form.MinimumSize; Application.DoEvents(); CheckBounds(form);
+                Save(form, Path.Combine(artifacts, "pending-checks-minimum.png"));
+                form.Close();
+            }
         }
 
         private static void TestReviewDialog(PlasticCheckinPreview preview, string artifacts)

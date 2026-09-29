@@ -43,7 +43,7 @@ namespace TortoiseSCM
         {
             token.ThrowIfCancellationRequested();
             var start = new ProcessStartInfo { FileName = executable,
-                Arguments = String.Join(" ", arguments.Select(PlasticClient.QuoteArgument)),
+                Arguments = String.Join(" ", arguments.Select(native ? (Func<string, string>)ComparisonTool.QuoteNativeArgument : PlasticClient.QuoteArgument)),
                 WorkingDirectory = workingDirectory, UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
             if (start.Arguments.Length > 30000) throw new ArgumentException("比较/合并工具参数过长。");

@@ -17,7 +17,7 @@ namespace TortoiseSCM
         private readonly LaunchRequest launch;
         private PlasticClient client;
         private PlasticWorkspace workspace;
-        private readonly ListView files = new ListView();
+        private readonly ListView files = new PendingChangesListView();
         private readonly TextBox comment = new TextBox();
         private readonly Button messageLibrary = DialogStyle.Button("说明历史 / 模板…");
         private readonly TextBox output = new TextBox();
@@ -506,6 +506,7 @@ namespace TortoiseSCM
             {
                 ValidatePendingContext();
                 var checkedPaths = new HashSet<string>(files.CheckedItems.Cast<ListViewItem>().Select(i => ((PlasticStatusItem)i.Tag).Path), StringComparer.OrdinalIgnoreCase);
+                var previousPaths = new HashSet<string>(files.Items.Cast<ListViewItem>().Select(i => ((PlasticStatusItem)i.Tag).Path), StringComparer.OrdinalIgnoreCase);
                 var items = await getPending(workspace.RootPath, CancellationToken.None);
                 ValidatePendingContext();
                 if (items == null || items.Any(item => item == null)) throw new InvalidOperationException("待定状态返回无效，请重新刷新。");
@@ -520,7 +521,8 @@ namespace TortoiseSCM
                         string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
                             ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
                         if (!string.IsNullOrEmpty(item.OldPath)) relative = item.OldPath + " → " + relative;
-                        var row = new ListViewItem(relative) { Tag = item, Checked = checkedPaths.Contains(item.Path) };
+                        var row = new ListViewItem(relative) { Tag = item, Checked = checkedPaths.Contains(item.Path) ||
+                            (!previousPaths.Contains(item.Path) && !IsPrivate(item.StatusCode)) };
                         row.SubItems.Add(item.IsDirectory ? "" : Path.GetExtension(item.Path));
                         row.SubItems.Add(item.StatusDescription);
                         files.Items.Add(row);
