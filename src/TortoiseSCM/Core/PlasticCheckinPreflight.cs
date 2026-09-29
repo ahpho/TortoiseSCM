@@ -93,7 +93,8 @@ namespace TortoiseSCM
             cancellationToken.ThrowIfCancellationRequested();
             var workspace = new PlasticWorkspace { RootPath = preview.RootPath, Repository = preview.Repository, Selector = preview.Selector, Name = preview.ExpectedName, IsPartial = preview.IsPartial };
             ValidateCheckinContext(workspace);
-            var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath, Paths = preview.Paths.ToList(), Comment = comment, Recursive = true };
+            var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
+                Paths = preview.Paths.ToList(), Comment = comment, Recursive = HasDirectoryScope(preview) };
             var command = Build(request, cancellationToken);
             ApplyWorkspaceMode(command, preview.IsPartial);
             bool actualPartial = command.Arguments.Count > 0 && command.Arguments[0] == "partial";
@@ -118,7 +119,7 @@ namespace TortoiseSCM
                 workspace.Name != preview.ExpectedName || workspace.Selector != preview.Selector || workspace.IsPartial != preview.IsPartial)
                 throw new InvalidOperationException("宸ヤ綔鍖哄凡鏀瑰彉锛岃鍒锋柊鐘舵€佸悗閲嶆柊棰勬绛惧叆鑼冨洿銆?");
             var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
-                Paths = preview.Paths.ToList(), Comment = comment, Recursive = true };
+                Paths = preview.Paths.ToList(), Comment = comment, Recursive = HasDirectoryScope(preview) };
             var command = Build(request, cancellationToken);
             ApplyWorkspaceMode(command, preview.IsPartial);
             using (var gate = StructureGate(preview.RootPath))
@@ -139,6 +140,12 @@ namespace TortoiseSCM
             if (await Task.Run(() => CheckinFingerprint(preview.RootPath, selected), token).ConfigureAwait(false) != preview.Fingerprint)
                 throw new InvalidOperationException("待签入文件的状态、路径或内容已改变，请重新预检签入范围。");
             ValidateCheckinContext(expected);
+        }
+
+        private static bool HasDirectoryScope(PlasticCheckinPreview preview)
+        {
+            return preview.Paths.Any(path => Directory.Exists(path) ||
+                preview.Files.Any(file => file.IsDirectory && SamePath(file.Path, path)));
         }
 
         private IList<string> NormalizeCheckinPaths(PlasticWorkspace workspace, IList<string> paths)

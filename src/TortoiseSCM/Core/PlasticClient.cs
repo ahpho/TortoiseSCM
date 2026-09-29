@@ -14,6 +14,7 @@ namespace TortoiseSCM
 {
     public sealed partial class PlasticClient
     {
+        private static readonly object StandardInputEncodingLock = new object();
         private readonly PlasticClientConfig config;
         public PlasticClient(PlasticClientConfig config) { if (config == null) throw new ArgumentNullException("config"); this.config = config; }
 
@@ -94,7 +95,7 @@ namespace TortoiseSCM
                     args.Add("checkout"); args.AddRange(paths); if (request.Recursive) args.Add("--recursive"); break;
                 case PlasticCommand.Checkin:
                     if (String.IsNullOrWhiteSpace(request.Comment)) throw new ArgumentException("A checkin comment is required.");
-                    args.Add("checkin"); args.AddRange(paths); args.Add("--all"); args.Add("-c=" + request.Comment);
+                    args.Add("checkin"); args.AddRange(paths); if (request.Recursive) args.Add("--all"); args.Add("-c=" + request.Comment);
                     if (request.IncludePrivate) { if (partial) throw new ArgumentException("Add private files before checking in a partial workspace."); args.Add("--private"); } break;
                 case PlasticCommand.Undo:
                     args.Add("undo"); args.AddRange(paths); if (request.Recursive) args.Add("--recursive"); break;
@@ -109,6 +110,19 @@ namespace TortoiseSCM
                     args.Add("diff"); args.Add(request.DiffSpec); args.Add(paths[0]); result.Interactive = true; break;
                 case PlasticCommand.Gluon:
                     result.FileName = config.GluonPath; args.Clear(); args.Add("--wk=" + workspace.RootPath); result.Interactive = true; break;
+            }
+            if (request.Command == PlasticCommand.Checkin && String.Join(" ", args.Select(QuoteArgument)).Length > 24000)
+            {
+                // Both standard and partial checkin accept one path per line from
+                // stdin when '-' is supplied. This avoids the Windows command-line
+                // limit without splitting one atomic changeset into several writes.
+                args.Clear();
+                if (partial) args.Add("partial");
+                args.Add("checkin"); if (request.Recursive) args.Add("--all"); args.Add("-"); args.Add("-c=" + request.Comment);
+                string root = workspace.RootPath.TrimEnd('\\', '/');
+                result.StandardInput = String.Join(Environment.NewLine, paths.Select(path =>
+                    path.Equals(root, StringComparison.OrdinalIgnoreCase) ? "." : path.Substring(root.Length).TrimStart('\\', '/'))) +
+                    Environment.NewLine + Environment.NewLine;
             }
             return result;
         }
@@ -262,10 +276,36 @@ namespace TortoiseSCM
             }
             using (var process = new Process { StartInfo = start })
             {
-                process.Start();
-                process.StandardInput.Close();
+                StreamWriter standardInput;
+                if (String.IsNullOrEmpty(command.StandardInput))
+                {
+                    process.Start(); standardInput = process.StandardInput;
+                }
+                else
+                {
+                    // .NET Framework creates Process.StandardInput with
+                    // Console.InputEncoding. Its default UTF-8 instance emits a
+                    // BOM, which cm treats as part of the first path. Capture a
+                    // BOM-less writer while holding the process-wide encoding lock.
+                    lock (StandardInputEncodingLock)
+                    {
+                        Encoding previous = Console.InputEncoding;
+                        try
+                        {
+                            Console.InputEncoding = new UTF8Encoding(false);
+                            process.Start(); standardInput = process.StandardInput;
+                        }
+                        finally { Console.InputEncoding = previous; }
+                    }
+                }
                 Task<string> output = process.StandardOutput.ReadToEndAsync();
                 Task<string> error = process.StandardError.ReadToEndAsync();
+                try
+                {
+                    if (!String.IsNullOrEmpty(command.StandardInput))
+                        await standardInput.WriteAsync(command.StandardInput).ConfigureAwait(false);
+                }
+                finally { standardInput.Close(); }
                 var timer = Stopwatch.StartNew();
                 bool timedOut = false;
                 while (!process.HasExited)

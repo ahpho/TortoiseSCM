@@ -43,6 +43,12 @@ internal static class BackendTests
             Console.OutputEncoding = Encoding.UTF8;
             if (args[1] == "wait") Thread.Sleep(30000);
             else if (args[1] == "output") { for (int i = 0; i < 20000; i++) { Console.Out.WriteLine("stdout 中文 " + i); Console.Error.WriteLine("stderr 中文 " + i); } }
+            else if (args[1] == "stdin")
+            {
+                using (var input = Console.OpenStandardInput())
+                using (var memory = new MemoryStream())
+                { input.CopyTo(memory); Console.Write(Convert.ToBase64String(memory.ToArray())); }
+            }
             else foreach (string value in args.Skip(2)) Console.WriteLine(value);
             return 0;
         }
@@ -62,6 +68,17 @@ internal static class BackendTests
             var built = client.Build(request);
             Assert(built.Arguments.Contains("-c=" + request.Comment), "Checkin comment remains one argument");
             Assert(built.Arguments.Contains(request.Paths[0]), "Selected path retained");
+            Assert(!built.Arguments.Contains("--all"), "Explicit file checkin does not request recursive discovery");
+            request.Paths.Clear();
+            for (int i = 0; i < 300; i++) request.Paths.Add(Path.Combine(temporary,
+                "bulk-" + i.ToString("D4") + "-" + new String('x', 80) + " 中文.txt"));
+            built = client.Build(request);
+            Assert(built.Arguments.SequenceEqual(new[] { "checkin", "-", "-c=" + request.Comment }),
+                "Large standard checkin switches to stdin without splitting the changeset");
+            Assert(built.StandardInput.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries)
+                .SequenceEqual(request.Paths.Select(path => path.Substring(temporary.TrimEnd('\\').Length).TrimStart('\\'))),
+                "Large standard checkin writes every exact workspace-relative path to stdin");
+            request.Paths.Clear(); request.Paths.Add(Path.Combine(temporary, "中文 space.txt"));
             request.Paths[0] = Path.GetTempPath(); Reject(delegate { client.Build(request); }, "Outside workspace rejected");
             request.Paths[0] = Path.Combine(temporary, ".plastic", "plastic.workspace"); Reject(delegate { client.Build(request); }, "Metadata rejected");
             request.Paths[0] = Path.Combine(temporary, "*.txt"); Reject(delegate { client.Build(request); }, "Wildcard rejected");
@@ -69,6 +86,14 @@ internal static class BackendTests
             File.WriteAllText(Path.Combine(temporary, ".plastic", "plastic.workspace"), "Test\r\nguid\r\nPartial\r\n");
             Assert(client.DiscoverWorkspace(temporary).IsPartial, "Partial workspace detection");
             built = client.Build(request); Assert(built.Arguments[0] == "partial" && built.Arguments[1] == "checkin", "Partial command routing");
+            request.Paths.Clear();
+            for (int i = 0; i < 300; i++) request.Paths.Add(Path.Combine(temporary,
+                "partial-bulk-" + i.ToString("D4") + "-" + new String('y', 80) + " 中文.txt"));
+            built = client.Build(request);
+            Assert(built.Arguments.SequenceEqual(new[] { "partial", "checkin", "-", "-c=" + request.Comment }) &&
+                built.StandardInput.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries)
+                    .SequenceEqual(request.Paths.Select(path => path.Substring(temporary.TrimEnd('\\').Length).TrimStart('\\'))),
+                "Large partial checkin uses the same complete stdin path transport");
             string xml = "<StatusOutput><Changes><Change><Type>MV</Type><TypeVerbose>Moved</TypeVerbose><Path>new.txt</Path><OldPath>old.txt</OldPath><RevisionType>enTextFile</RevisionType></Change><Change><Type>DE</Type><Path>gone</Path><RevisionType>enDirectory</RevisionType></Change></Changes></StatusOutput>";
             var parsed = PlasticClient.ParseStatus(xml, temporary);
             Assert(parsed[0].Status == "MV" && parsed[0].OldPath == Path.Combine(temporary, "old.txt"), "Moved status preserves source and destination");
@@ -84,6 +109,11 @@ internal static class BackendTests
             var helperArgs = new List<string> { "--helper", "args" }; helperArgs.AddRange(difficult);
             var result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = helperArgs }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.Succeeded && result.Output.TrimStart('\uFEFF') == String.Join(Environment.NewLine, difficult) + Environment.NewLine, "Windows argument quoting round trip");
+            string stdin = "first path\r\n中文 path\r\n\r\n";
+            result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary,
+                Arguments = new[] { "--helper", "stdin" }, StandardInput = stdin }, CancellationToken.None).GetAwaiter().GetResult();
+            Assert(result.Succeeded && result.Output.TrimStart('\uFEFF') == Convert.ToBase64String(new UTF8Encoding(false).GetBytes(stdin)),
+                "UTF-8 standard input round trip has no BOM before the first path");
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "output" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.Output.Contains("stdout 中文 19999") && result.Error.Contains("stderr 中文 19999"), "Both redirected streams drain without deadlock");
             config.Timeout = TimeSpan.FromMilliseconds(200);

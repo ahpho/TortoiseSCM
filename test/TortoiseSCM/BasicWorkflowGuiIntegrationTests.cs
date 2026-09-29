@@ -60,8 +60,10 @@ namespace TortoiseSCM
                 }
                 CheckOperationDirectorySelection();
                 RunMode(producer, consumer, false);
+                RunLargeCheckin(producer, consumer, false);
                 Update(partial);
                 RunMode(partial, consumer, true);
+                RunLargeCheckin(partial, consumer, true);
                 Console.WriteLine("PASS: basic workflow GUI integration (" + assertions + " assertions; actual WinForms dialogs and cm; no Explorer mouse automation)");
                 return 0;
             }
@@ -159,7 +161,8 @@ namespace TortoiseSCM
             using (var form = OpenOperation("add", directory))
             {
                 var ordered = Field<ListView>(form, "files").Items.Cast<ListViewItem>().Select(item => ((PlasticStatusItem)item.Tag).Path).ToArray();
-                Require(ordered.Length >= 3 && Same(ordered[0], directory) && Same(ordered[1], first) && Same(ordered[2], second),
+                Require(ordered.Length >= 3 && Same(ordered[0], directory) &&
+                    new HashSet<string>(ordered.Skip(1).Take(2), StringComparer.OrdinalIgnoreCase).SetEquals(new[] { first, second }),
                     "Add list keeps directory immediately before its descendants");
                 using (var guard = new DialogGuard(form, true, "继续添加", directory))
                 {
@@ -190,6 +193,43 @@ namespace TortoiseSCM
             Update(consumer);
             Require(!Directory.Exists(Path.Combine(consumer, Path.GetFileName(directory))), "Consumer sees committed recursive deletion");
             Console.WriteLine("Completed " + prefix);
+        }
+
+        private static void RunLargeCheckin(string root, string consumer, bool partial)
+        {
+            const int fileCount = 320;
+            string prefix = (partial ? "partial" : "standard") + "-bulk-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            var paths = Enumerable.Range(0, fileCount).Select(index => Path.Combine(root,
+                prefix + "-" + index.ToString("D4") + "-中文-long-file-name.txt")).ToArray();
+            foreach (string path in paths) File.WriteAllText(path, prefix + "\r\n" + Path.GetFileName(path), new UTF8Encoding(false));
+            foreach (var batch in paths.Select((path, index) => new { path, index }).GroupBy(item => item.index / 40))
+            {
+                var result = Wait(client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Add,
+                    WorkingDirectory = root, Paths = batch.Select(item => item.path).ToList() }, CancellationToken.None));
+                Require(result.Succeeded, prefix + " batch Add succeeds: " + result.Error);
+            }
+            Require(Wait(client.GetStatusAsync(root, CancellationToken.None)).Count(item => paths.Contains(item.Path, StringComparer.OrdinalIgnoreCase) && item.StatusCode == "AD") == fileCount,
+                prefix + " stages all " + fileCount + " files before GUI checkin");
+            using (var form = Launch("checkin", root, true, null, null))
+            {
+                var rows = Field<ListView>(form, "files");
+                foreach (ListViewItem row in rows.Items) row.Checked = paths.Contains(((PlasticStatusItem)row.Tag).Path, StringComparer.OrdinalIgnoreCase);
+                Require(rows.CheckedItems.Count == fileCount, prefix + " GUI selects every bulk file as an explicit path");
+                Field<TextBox>(form, "comment").Text = prefix + " GUI bulk checkin " + fileCount + " files";
+                TimeSpan elapsed = ReviewAndSubmit(form, paths, true, prefix + "-submit");
+                File.AppendAllText(Path.Combine(artifacts, "bulk-checkin-timings.csv"),
+                    (partial ? "partial" : "standard") + "," + fileCount + "," + elapsed.TotalMilliseconds.ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine,
+                    new UTF8Encoding(false));
+                Require(!Field<bool>(form, "submissionNeedsRefresh"), prefix + " bulk submission completes without uncertain state");
+            }
+            var pending = Wait(client.GetStatusAsync(root, CancellationToken.None));
+            Require(!pending.Any(item => paths.Contains(item.Path, StringComparer.OrdinalIgnoreCase)),
+                prefix + " leaves no pending bulk file after one atomic checkin");
+            Update(consumer);
+            Require(Directory.GetFiles(consumer, prefix + "-*.txt", SearchOption.TopDirectoryOnly).Length == fileCount &&
+                File.ReadAllText(Path.Combine(consumer, Path.GetFileName(paths[fileCount - 1]))).StartsWith(prefix, StringComparison.Ordinal),
+                prefix + " consumer receives all " + fileCount + " committed files");
+            Console.WriteLine("Completed " + prefix + " (" + fileCount + " files)");
         }
 
         private static void RunFileActions(string root, string mode)
@@ -349,36 +389,34 @@ namespace TortoiseSCM
             return form;
         }
 
-        private static void ReviewAndSubmit(MainForm form, string[] expectedPaths, bool confirm, string capture)
+        private static TimeSpan ReviewAndSubmit(MainForm form, string[] expectedPaths, bool confirm, string capture)
         {
             bool handled = false; string error = "";
-            using (var timer = new System.Windows.Forms.Timer { Interval = 40 })
+            Set(form, "reviewCheckin", new Func<PlasticCheckinPreview, string, bool, DialogResult>((preview, message, uncertain) =>
+            {
+                try
+                {
+                    handled = true;
+                    Require(preview.Files.Count == expectedPaths.Length, "Preflight includes complete exact effective scope: " + capture);
+                    var rendered = new HashSet<string>(preview.Files.Select(file => file.Path), StringComparer.OrdinalIgnoreCase);
+                    foreach (string path in expectedPaths) Require(rendered.Contains(path), "Preflight includes " + Path.GetFileName(path));
+                    Require(!rendered.Any(path => Path.GetFileName(path) == "excluded.txt") && message == Field<TextBox>(form, "comment").Text,
+                        "Preflight preserves comment and excludes sibling");
+                    return confirm ? DialogResult.OK : DialogResult.Cancel;
+                }
+                catch (Exception ex) { error = ex.ToString(); return DialogResult.Cancel; }
+            }));
+            var timer = System.Diagnostics.Stopwatch.StartNew();
             using (var guard = new DialogGuard(form, false, null, null))
             {
-                timer.Tick += delegate {
-                    var dialog = Application.OpenForms.Cast<Form>().OfType<CheckinReviewForm>().FirstOrDefault();
-                    if (dialog == null || handled) return;
-                    handled = true;
-                    try
-                    {
-                        var rows = Field<ListView>(dialog, "files");
-                        Require(rows.Items.Count == expectedPaths.Length, "Review includes complete exact effective scope: " + capture);
-                        string rendered = String.Join("\n", rows.Items.Cast<ListViewItem>().Select(row => row.Text).ToArray());
-                        foreach (string path in expectedPaths) Require(rendered.Contains(Path.GetFileName(path)), "Review includes " + Path.GetFileName(path));
-                        Require(!rendered.Contains("excluded.txt") && Field<TextBox>(dialog, "comment").Text == Field<TextBox>(form, "comment").Text, "Review preserves comment and excludes sibling");
-                        Save(dialog, Path.Combine(artifacts, capture + ".png")); dialog.Size = dialog.MinimumSize; Application.DoEvents();
-                        Require(dialog.RectangleToScreen(dialog.ClientRectangle).Contains(Field<Button>(dialog, "confirm").RectangleToScreen(Field<Button>(dialog, "confirm").ClientRectangle)), "Review confirmation visible at minimum size");
-                        Save(dialog, Path.Combine(artifacts, capture + "-minimum.png"));
-                        Field<Button>(dialog, confirm ? "confirm" : "cancel").PerformClick();
-                    }
-                    catch (Exception ex) { error = ex.ToString(); dialog.DialogResult = DialogResult.Cancel; dialog.Close(); }
-                };
-                timer.Start(); Field<Button>(form, "checkin").PerformClick();
-                Pump(() => !Field<bool>(form, "busy"), "Checkin returns from review/server write");
-                Require(handled && error == "" && guard.Error == "", "Actual review dialog handled: " + error + guard.Error);
+                Field<Button>(form, "checkin").PerformClick();
+                Pump(() => handled && !Field<bool>(form, "busy"), "Checkin returns from preflight/server write");
+                Require(error == "" && guard.Error == "", "Direct checkin preflight handled: " + error + guard.Error);
                 Require(!Field<bool>(form, "submissionNeedsRefresh"), "Checkin has no uncertain failure gate: " + Field<TextBox>(form, "output").Text);
             }
+            timer.Stop();
             Save(form, Path.Combine(artifacts, capture + "-main.png"));
+            return timer.Elapsed;
         }
 
         private sealed class DialogGuard : IDisposable

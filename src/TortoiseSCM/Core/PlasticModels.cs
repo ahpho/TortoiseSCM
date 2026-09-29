@@ -56,6 +56,7 @@ namespace TortoiseSCM
         public string FileName { get; set; }
         public IList<string> Arguments { get; set; }
         public string WorkingDirectory { get; set; }
+        public string StandardInput { get; set; }
         public bool Interactive { get; set; }
     }
 
