@@ -45,6 +45,17 @@ namespace TortoiseSCM
     {
         public async Task<PlasticCheckinPreview> PrepareCheckinAsync(string root, IList<string> paths,
             string expectedRepository, string expectedSelector, CancellationToken cancellationToken)
+        { return await PrepareCheckinAsync(root, paths, expectedRepository, expectedSelector, cancellationToken, true).ConfigureAwait(false); }
+
+        // The check-in dialog already presents the exact status snapshot to the
+        // user. Gluon follows that snapshot with one native check-in command;
+        // do not make the interactive path hash every file or query locks again.
+        public async Task<PlasticCheckinPreview> PrepareCheckinFastAsync(string root, IList<string> paths,
+            string expectedRepository, string expectedSelector, CancellationToken cancellationToken)
+        { return await PrepareCheckinAsync(root, paths, expectedRepository, expectedSelector, cancellationToken, false).ConfigureAwait(false); }
+
+        private async Task<PlasticCheckinPreview> PrepareCheckinAsync(string root, IList<string> paths,
+            string expectedRepository, string expectedSelector, CancellationToken cancellationToken, bool includeExpensiveChecks)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (expectedSelector == null) throw new ArgumentNullException("expectedSelector");
@@ -61,9 +72,10 @@ namespace TortoiseSCM
                 Paths = normalized, Comment = "preflight", Recursive = true }, cancellationToken), cancellationToken).ConfigureAwait(false);
             var status = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
             var selected = SelectCheckinStatus(status, workspace.RootPath, normalized);
-            string fingerprint = await Task.Run(() => CheckinFingerprint(workspace.RootPath, selected), cancellationToken).ConfigureAwait(false);
+            string fingerprint = includeExpensiveChecks ?
+                await Task.Run(() => CheckinFingerprint(workspace.RootPath, selected), cancellationToken).ConfigureAwait(false) : "";
             IList<PlasticLockItem> locks = new List<PlasticLockItem>(); string lockWarning = "";
-            try { locks = (await GetLocksAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false)).Where(item =>
+            if (includeExpensiveChecks) try { locks = (await GetLocksAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false)).Where(item =>
                 (item.Repository == workspace.Repository || item.Repository == workspace.Repository.Split('@')[0]) &&
                 selected.Any(file => IsWithinScope(file.Path, MergeLocalPath(workspace.RootPath, item.Path)) || IsWithinScope(MergeLocalPath(workspace.RootPath, item.Path), file.Path)))
                 .Select(PlasticCheckinPreview.Clone).ToList(); }
@@ -91,6 +103,29 @@ namespace TortoiseSCM
             if (actual.IsPartial != preview.IsPartial) throw new InvalidOperationException("工作区模式已改变，请重新预检签入范围。");
             return await ExecuteWithPartialConflictGuardAsync(command, request, cancellationToken,
                 null, (current, status) => ValidatePreparedCheckinAsync(preview, current, status, cancellationToken)).ConfigureAwait(false);
+        }
+
+        // This is the interactive equivalent of Gluon's check-in action. Build
+        // the same native command, then execute it once without repeating the
+        // already-displayed snapshot and content/lock scans.
+        public async Task<PlasticCommandResult> CheckinPreparedFastAsync(PlasticCheckinPreview preview, string comment, CancellationToken cancellationToken)
+        {
+            if (preview == null) throw new ArgumentNullException("preview");
+            if (String.IsNullOrWhiteSpace(comment)) throw new ArgumentException("A checkin comment is required.", "comment");
+            cancellationToken.ThrowIfCancellationRequested();
+            var workspace = DiscoverWorkspace(preview.RootPath);
+            if (workspace == null || !SamePath(workspace.RootPath, preview.RootPath) || workspace.Repository != preview.Repository ||
+                workspace.Name != preview.ExpectedName || workspace.Selector != preview.Selector || workspace.IsPartial != preview.IsPartial)
+                throw new InvalidOperationException("宸ヤ綔鍖哄凡鏀瑰彉锛岃鍒锋柊鐘舵€佸悗閲嶆柊棰勬绛惧叆鑼冨洿銆?");
+            var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
+                Paths = preview.Paths.ToList(), Comment = comment, Recursive = true };
+            var command = Build(request, cancellationToken);
+            ApplyWorkspaceMode(command, preview.IsPartial);
+            using (var gate = StructureGate(preview.RootPath))
+            {
+                ThrowIfPartialStructureActive(preview.RootPath);
+                return await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         private async Task ValidatePreparedCheckinAsync(PlasticCheckinPreview preview, PlasticWorkspace actual, IList<PlasticStatusItem> status, CancellationToken token)

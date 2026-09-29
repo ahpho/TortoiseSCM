@@ -51,8 +51,11 @@ namespace TortoiseSCM
         {
             launch = request;
             getPending = (path, token) => client.GetStatusAsync(path, token);
-            prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinAsync(root, paths, repository, selector, token);
-            submitCheckin = (preview, message, token) => client.CheckinPreparedAsync(preview, message, token);
+            // The dialog has already shown and reviewed the pending list. Use
+            // the same single native command as Gluon instead of re-hashing all
+            // files and re-querying locks/status before dispatch.
+            prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinFastAsync(root, paths, repository, selector, token);
+            submitCheckin = (preview, message, token) => client.CheckinPreparedFastAsync(preview, message, token);
             runCommand = (commandRequest, token) => client.RunAsync(commandRequest, token);
             // The preview is already shown in the main check-in window. Submit
             // immediately after preflight; keep this delegate as a test seam so
