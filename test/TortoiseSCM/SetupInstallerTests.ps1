@@ -108,6 +108,12 @@ try {
     Assert (Test-Path -LiteralPath $uninstaller) 'Failed uninstall preserves its executable.'
     Assert (Test-Path -LiteralPath (Join-Path $root 'setup/SetupBridge.ps1')) 'Failed uninstall preserves support scripts.'
     Assert (Test-Path -LiteralPath $oldDll) 'Failed uninstall preserves the locked file.'
+    Assert (([IO.File]::ReadAllText((Join-Path $root 'current-install.json')) | ConvertFrom-Json).versionDirectory -eq $third.versionDirectory) 'Blocked uninstall preserves the active pointer.'
+    foreach ($installedVersion in @($first, $second, $third)) {
+        Read-TscmManifest $installedVersion.versionDirectory -VerifyFiles | Out-Null
+    }
+    Assert ($true) 'Blocked uninstall preserves all files of every installed version.'
+    Assert (-not ([IO.File]::ReadAllText((Join-Path $fixture 'uninstall-locked.log')).Contains('Runtime error'))) 'Expected file contention does not produce a Pascal runtime error.'
     $lock.Dispose(); $lock = $null
     Assert ((Run-Installer $uninstaller 'uninstall-retry' $false) -eq 0) 'The same Windows Apps uninstaller completes on retry after releasing the file.'
     Assert (-not (Test-Path $testArp)) 'Successful uninstall removes only the test Apps entry.'
@@ -117,6 +123,8 @@ try {
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Drawing.dll "/out:$uiTest" (Join-Path $PSScriptRoot 'SetupWizardUiTests.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Setup wizard UI test compilation failed.' }
+    & $compiler /nologo /target:winexe /platform:x64 /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$(Join-Path $fixture 'SetupLockHost.exe')" (Join-Path $PSScriptRoot 'SetupLockHost.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Setup lock host compilation failed.' }
     & $uiTest $setups[1] (Join-Path $fixture 'wizard-ui')
     Assert ($LASTEXITCODE -eq 0) 'Real wizard supports destination selection, repair and confirmed/cancelled maintenance uninstall.'
     $afterPointerHash = if (Test-Path -LiteralPath $productionPointer) { (Get-FileHash -LiteralPath $productionPointer -Algorithm SHA256).Hash } else { '' }

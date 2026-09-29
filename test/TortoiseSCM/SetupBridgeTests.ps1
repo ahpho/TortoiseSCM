@@ -65,10 +65,32 @@ try {
     Run-Bridge 'Install' $traversal 1 | Out-Null
     Assert ([IO.File]::ReadAllText($pointerPath) -eq $before) 'ZIP traversal is rejected before changing the active installation'
     Run-Bridge 'RestartExplorer' '' 1 | Out-Null
-    Run-Bridge 'Uninstall' '' 2 | Out-Null
+    $blockedResult = Run-Bridge 'Uninstall' '' 2
+    Assert ($blockedResult.Contains('TortoiseSCMShell.dll')) 'Blocked uninstall identifies the file to release'
+    Assert ([IO.File]::ReadAllText($pointerPath) -eq $before) 'Blocked uninstall preserves the active pointer'
+    Read-TscmManifest $first.versionDirectory -VerifyFiles | Out-Null
+    Read-TscmManifest $second.versionDirectory -VerifyFiles | Out-Null
+    Assert ($true) 'Preflight preserves all files in both current and older versions'
     Assert ([IO.File]::Exists((Join-Path $first.versionDirectory '.tortoisescm-install.json'))) 'Locked old version retains ownership metadata for a retry'
     Assert ([IO.File]::ReadAllText($note) -eq 'Keep user files') 'Partial uninstall preserves user-added files'
     $lock.Dispose(); $lock = $null
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SetupMappedImageTest {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll")] public static extern bool FreeLibrary(IntPtr module);
+}
+'@
+    $module = [SetupMappedImageTest]::LoadLibraryEx((Join-Path $first.versionDirectory 'TortoiseSCMShell.dll'), [IntPtr]::Zero, 1)
+    Assert ($module -ne [IntPtr]::Zero) 'Test maps an actual shell DLL image like a third-party shell host'
+    try {
+        $mappedResult = Run-Bridge 'Uninstall' '' 2
+        Assert ($mappedResult.Contains('(PID ' + $PID + ')')) 'Preflight identifies the process holding the mapped shell DLL'
+        Read-TscmManifest $second.versionDirectory -VerifyFiles | Out-Null
+        Assert ([IO.File]::ReadAllText($pointerPath) -eq $before) 'Mapped image contention leaves the active installation intact'
+    } finally { [SetupMappedImageTest]::FreeLibrary($module) | Out-Null }
     Run-Bridge 'Uninstall' '' 0 | Out-Null
     Assert (-not [IO.File]::Exists($pointerPath)) 'Successful uninstall removes the active pointer'
     Assert (-not [IO.File]::Exists((Join-Path $first.versionDirectory '.tortoisescm-install.json'))) 'Retry cleans the formerly locked version'

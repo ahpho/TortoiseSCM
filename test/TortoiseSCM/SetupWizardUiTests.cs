@@ -14,18 +14,21 @@ using Microsoft.Win32;
 internal static class SetupWizardUiTests
 {
     private const string Arp = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{D7305D7A-348E-4E30-88D3-6BCE9CE856BA}_is1";
-    private static string artifacts, executable, root;
+    private static string artifacts, executable, root, priorInstaller;
     private static int assertions;
     private static IntPtr wizard;
+    private static Process lockHost;
 
     [STAThread]
     private static int Main(string[] args)
     {
         try
         {
-            if (args.Length != 2 || !args[0].EndsWith("-Setup-Test.exe", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("SetupWizardUiTests <TestSetup.exe> <new artifact directory>");
+            if ((args.Length != 2 && args.Length != 3) || !args[0].EndsWith("-Setup-Test.exe", StringComparison.OrdinalIgnoreCase) ||
+                (args.Length == 3 && !args[2].EndsWith("-Setup-Test.exe", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("SetupWizardUiTests <TestSetup.exe> <new artifact directory> [older TestSetup.exe]");
             executable = Path.GetFullPath(args[0]); artifacts = Path.GetFullPath(args[1]);
+            priorInstaller = args.Length == 3 ? Path.GetFullPath(args[2]) : null;
             if (Directory.Exists(artifacts) || Installed()) throw new InvalidOperationException("Use a fresh fixture and no existing TestSetup installation.");
             Directory.CreateDirectory(artifacts); root = Path.Combine(artifacts, "自选安装目录 with spaces &");
             Launch(true); Click(wizard, "下一步");
@@ -43,6 +46,24 @@ internal static class SetupWizardUiTests
                 Require(((string)key.GetValue("InstallLocation")).TrimEnd('\\') == root, "Apps entry records chosen path");
             Require(File.Exists(Path.Combine(root, "current-install.json")), "Payload is installed under the chosen directory");
             string pointer = File.ReadAllText(Path.Combine(root, "current-install.json"));
+
+            string dll = Directory.GetFiles(Path.Combine(root, "versions"), "TortoiseSCMShell.dll", SearchOption.AllDirectories).Single();
+            string marker = Path.Combine(artifacts, "lock-host-ready.txt");
+            lockHost = Process.Start(new ProcessStartInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SetupLockHost.exe"),
+                "\"" + dll + "\" \"" + marker + "\" close") { UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+            Wait(() => File.Exists(marker));
+            if (priorInstaller == null)
+            using (var uninstall = Process.Start(new ProcessStartInfo(Path.Combine(root, "setup", "unins000.exe"), "/VERYSILENT /NORESTART")
+                { UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden }))
+            {
+                IntPtr closePrompt = WaitClosePrompt();
+                Save(closePrompt, "close-applications-declined.png");
+                Require(!Children(closePrompt).Any(h => Text(h).Contains("Runtime error")), "File contention displays a normal confirmation, not a runtime error");
+                Click(closePrompt, "否");
+                Wait(() => uninstall.HasExited && !IsWindow(closePrompt));
+                Require(!lockHost.HasExited && Installed() && File.ReadAllText(Path.Combine(root, "current-install.json")) == pointer,
+                    "Declining application shutdown preserves the process and installation");
+            }
 
             Launch(); Click(wizard, "下一步");
             Wait(() => Children(wizard).Any(h => Text(h) == "维护已有安装"));
@@ -62,7 +83,9 @@ internal static class SetupWizardUiTests
             Save(confirmation, "uninstall-confirmation.png"); Click(confirmation, "否"); Wait(() => !IsWindow(confirmation));
             Require(Installed() && File.ReadAllText(Path.Combine(root, "current-install.json")) == pointer, "Cancelling uninstall preserves the installation");
             Click(wizard, "下一步"); confirmation = WaitDialog("是否卸载 TortoiseSCM？"); Click(confirmation, "是");
+            IntPtr approvedClose = WaitClosePrompt(); Save(approvedClose, "close-applications-confirmed.png"); Click(approvedClose, "是");
             IntPtr success = WaitDialog("卸载成功。工作区和用户设置已保留。", 180);
+            Require(lockHost.WaitForExit(10000), "Confirmed application shutdown releases the DLL and uninstall continues automatically");
             Require(!Installed() && !File.Exists(Path.Combine(root, "current-install.json")), "Uninstall from the setup removes the payload and Apps entry");
             Save(success, "uninstalled.png"); Click(success, "确定"); Wait(() => !IsWindow(wizard));
             Wait(() => !File.Exists(Path.Combine(root, "setup", "unins000.exe")));
@@ -79,13 +102,27 @@ internal static class SetupWizardUiTests
             }
             return 1;
         }
+        finally
+        {
+            if (lockHost != null) { if (!lockHost.HasExited) lockHost.Kill(); lockHost.Dispose(); }
+        }
     }
 
     private static bool Installed() { using (var key = Registry.CurrentUser.OpenSubKey(Arp)) return key != null; }
+    private static IntPtr WaitClosePrompt()
+    {
+        IntPtr prompt = IntPtr.Zero;
+        Wait(() => {
+            prompt = Windows().FirstOrDefault(h => Children(h).Any(c => Text(c).Contains("是否关闭以下占用程序并重试卸载") &&
+                Text(c).Contains("PID " + lockHost.Id)));
+            return prompt != IntPtr.Zero;
+        }, 90);
+        return prompt;
+    }
     private static void Launch(bool customPath = false)
     {
         Require(!Windows().Any(h => Text(h) == "安装 - TortoiseSCM Installer Test"), "No other test wizard is running");
-        Process.Start(new ProcessStartInfo(executable, "/NORESTART /LOG=\"" + Path.Combine(artifacts, "wizard-" + assertions + ".log") + "\"" +
+        Process.Start(new ProcessStartInfo(customPath && priorInstaller != null ? priorInstaller : executable, "/NORESTART /LOG=\"" + Path.Combine(artifacts, "wizard-" + assertions + ".log") + "\"" +
             (customPath ? " /DIR=\"" + root + "\"" : ""))
             { UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
         Wait(() => Windows().Any(h => Text(h) == "安装 - TortoiseSCM Installer Test"));

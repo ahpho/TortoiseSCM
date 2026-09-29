@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Install', 'Uninstall', 'RestartExplorer')][string]$Action,
+    [Parameter(Mandatory = $true)][ValidateSet('Install', 'Uninstall', 'CheckUninstall', 'CloseUninstallApplications', 'RestartExplorer')][string]$Action,
     [string]$PackageArchive,
     [Parameter(Mandatory = $true)][string]$InstallRoot,
     [Parameter(Mandatory = $true)][string]$ResultPath,
@@ -10,11 +10,12 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Package.Common.ps1')
 . (Join-Path $PSScriptRoot 'PackageExplorer.ps1')
 
-function Write-SetupResult([bool]$Success, [string]$Message, [string]$Directory, [string]$ExplorerState) {
+function Write-SetupResult([bool]$Success, [string]$Message, [string]$Directory, [string]$ExplorerState, [string]$ClosePrompt = '') {
     # Windows INI readers consume UTF-16 without depending on the system codepage.
-    $lines = @('[Result]', ('Success=' + [int]$Success))
-    foreach ($entry in @(@('Message', $Message), @('VersionDirectory', $Directory), @('ExplorerState', $ExplorerState))) {
+    $lines = @('[Result]', ('Success=' + [int]$Success), ('CanClose=' + [int](-not [string]::IsNullOrWhiteSpace($ClosePrompt))))
+    foreach ($entry in @(@('Message', $Message), @('VersionDirectory', $Directory), @('ExplorerState', $ExplorerState), @('ClosePrompt', $ClosePrompt))) {
         $value = ([string]$entry[1]).Replace("`r", ' ').Replace("`n", ' ')
+        if ($entry[0] -eq 'ClosePrompt') { $value = ([string]$entry[1]).Replace("`r", '').Replace("`n", '\n') }
         $lines += ([string]$entry[0] + '=' + $value)
     }
     [IO.File]::WriteAllText($ResultPath, ($lines -join "`r`n"), [Text.Encoding]::Unicode)
@@ -35,6 +36,35 @@ function Expand-SetupPackage([string]$ArchivePath, [string]$Destination) {
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $false)
         }
     } finally { $archive.Dispose() }
+}
+
+function Get-SetupUninstallBlockers($Records) {
+    # Probe every owned version before unregistering or deleting anything. Opening
+    # for write (without writing) also detects mapped EXEs/DLLs in Explorer or
+    # third-party shell hosts; a read-only handle would miss these image locks.
+    $blocked = @()
+    foreach ($record in $Records) {
+        $manifest = Read-TscmManifest $record.versionDirectory
+        foreach ($entry in $manifest.files) {
+            $file = Join-TscmOwnedPath $record.versionDirectory $entry.path
+            if (-not (Test-Path -LiteralPath $file)) { continue }
+            $handle = $null
+            try {
+                $handle = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite,
+                    ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            } catch { $blocked += $file }
+            finally { if ($handle) { $handle.Dispose() } }
+        }
+    }
+    if (-not $blocked.Count) { return }
+    if (-not ('TortoiseSCM.Setup.Applications' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'SetupApplications.cs') }
+    $applications = @([TortoiseSCM.Setup.Applications]::Find([string[]]$blocked))
+    $owners = @($applications | ForEach-Object { $_.Name + ' (PID ' + $_.Id + ')' })
+    $names = ($blocked | ForEach-Object { [IO.Path]::GetFileName($_) } | Sort-Object -Unique) -join '、'
+    $message = '尚未删除文件或注销菜单。以下文件被占用或无法访问：' + $names + '。'
+    if ($owners.Count) { $message += ' 检测到占用进程：' + ($owners -join '、') + '。' }
+    $message += ' 请保存工作并关闭相关程序后重试。若涉及 explorer，请等待复制、移动等文件操作结束后再重启资源管理器；仍失败时请检查文件权限。'
+    return [pscustomobject]@{ Message = $message; Files = $blocked; Applications = $applications }
 }
 
 function Read-SetupOwnedRecord([string]$Root, [string]$Target) {
@@ -100,7 +130,7 @@ try {
         $state = if ($NoRegister) { 'NotLoaded' } else { (Get-TscmExplorerMenuStatus $installed.versionDirectory).State }
         Write-SetupResult $true $message $installed.versionDirectory $state
         $exitCode = 0
-    } elseif ($Action -eq 'Uninstall') {
+    } elseif ($Action -in @('Uninstall', 'CheckUninstall', 'CloseUninstallApplications')) {
         $targets = @()
         if (Test-Path -LiteralPath $pointerPath -PathType Leaf) {
             $pointer = [IO.File]::ReadAllText($pointerPath) | ConvertFrom-Json
@@ -120,6 +150,33 @@ try {
         foreach ($record in $records) {
             if ($NoRegister -and $record.registered) { throw '隔离测试卸载不能注销活动菜单。' }
             if ($record.machineOverlays -and -not (Test-TscmAdministrator)) { throw '此安装启用了系统级状态图标，请以管理员身份运行卸载程序。' }
+        }
+        $blockers = Get-SetupUninstallBlockers $records
+        $closeRequest = $ResultPath + '.close.json'
+        if ($Action -eq 'CloseUninstallApplications') {
+            if (-not (Test-Path -LiteralPath $closeRequest -PathType Leaf)) { throw '没有已经确认的关闭列表，请重新运行卸载。' }
+            $approved = @([IO.File]::ReadAllText($closeRequest) | ConvertFrom-Json)
+            Remove-Item -LiteralPath $closeRequest -Force
+            if ($blockers) {
+                [TortoiseSCM.Setup.Applications]::Close([TortoiseSCM.Setup.BlockingApplication[]]$approved, [string[]]$blockers.Files)
+            }
+            Write-SetupResult $true '已请求关闭确认列表中的程序，将重新检查占用。' '' 'Unknown'
+            exit 0
+        }
+        if ($blockers) {
+            $closeable = @($blockers.Applications | Where-Object CanClose)
+            $prompt = ''
+            if ($closeable.Count) {
+                Write-TscmJson $closeRequest $closeable
+                $prompt = '是否关闭以下占用程序并重试卸载？' + "`n`n" + (($closeable | ForEach-Object { $_.Name + ' (PID ' + $_.Id + ')' }) -join "`n") +
+                    "`n`n" + '请先保存这些程序中的工作。将请求正常退出，不会强制结束进程。选择“否”会停止本次卸载。资源管理器或无法自动关闭的程序仍需手动处理。'
+            } elseif (Test-Path -LiteralPath $closeRequest) { Remove-Item -LiteralPath $closeRequest -Force }
+            Write-SetupResult $false $blockers.Message '' 'Unknown' $prompt
+            exit 2
+        }
+        if ($Action -eq 'CheckUninstall') {
+            Write-SetupResult $true '卸载前检查通过。' '' 'NotLoaded'
+            exit 0
         }
         $retained = @()
         foreach ($record in $records) {

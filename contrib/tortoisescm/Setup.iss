@@ -65,6 +65,7 @@ FinishedLabel=安装成功。%n%n请通过文件或目录的右键菜单使用 T
 [Files]
 Source: "{#PackageArchive}"; DestName: "payload.zip"; Flags: dontcopy
 Source: "SetupBridge.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
+Source: "SetupApplications.cs"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "Package.Common.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "PackageExplorer.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "ModernMenu.Common.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
@@ -96,12 +97,16 @@ end;
 
 function RunBridge(const Helper, Action, Archive, ResultFile: String; var Error: String): Boolean;
 var
-  Arguments: String;
+  Arguments, Root: String;
   ExitCode: Integer;
 begin
   DeleteFile(ResultFile);
+  if (InstalledRoot <> '') and ((Action = 'CheckUninstall') or (Action = 'CloseUninstallApplications')) then
+    Root := InstalledRoot
+  else
+    Root := ExpandConstant('{app}');
   Arguments := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + Quote(Helper) +
-    ' -Action ' + Action + ' -InstallRoot ' + Quote(ExpandConstant('{app}')) + ' -ResultPath ' + Quote(ResultFile);
+    ' -Action ' + Action + ' -InstallRoot ' + Quote(Root) + ' -ResultPath ' + Quote(ResultFile);
   if Archive <> '' then Arguments := Arguments + ' -PackageArchive ' + Quote(Archive);
 #ifdef TestSetup
   Arguments := Arguments + ' -NoRegister';
@@ -226,6 +231,23 @@ begin
   end;
 end;
 
+function TryUninstallAction(const Helper, Action, ResultFile: String): Boolean;
+var
+  Error, Prompt: String;
+begin
+  Result := RunBridge(Helper, Action, '', ResultFile, Error);
+  if not Result and (GetIniString('Result', 'CanClose', '0', ResultFile) = '1') then begin
+    Prompt := GetIniString('Result', 'ClosePrompt', '', ResultFile);
+    StringChangeEx(Prompt, '\n', #13#10, True);
+    if SuppressibleMsgBox(Prompt,
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) <> IDYES then Exit;
+    if RunBridge(Helper, 'CloseUninstallApplications', '', ResultFile, Error) then
+      Result := RunBridge(Helper, Action, '', ResultFile, Error);
+  end;
+  if not Result then
+    SuppressibleMsgBox('卸载尚未完成，卸载入口已保留。' + #13#10#13#10 + Error, mbError, MB_OK, IDOK);
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Error: String;
@@ -245,12 +267,19 @@ begin
         MsgBox('原卸载程序缺失或安装记录无效。请先选择“升级 / 修复”，再重试卸载。', mbError, MB_OK);
         Exit;
       end;
+      { Use the new preflight even when maintaining an older installed uninstaller. }
+      ExtractTemporaryFile('SetupBridge.ps1');
+      ExtractTemporaryFile('SetupApplications.cs');
+      ExtractTemporaryFile('Package.Common.ps1');
+      ExtractTemporaryFile('PackageExplorer.ps1');
       BackendRunning := True;
       WizardForm.NextButton.Enabled := False;
       WizardForm.BackButton.Enabled := False;
       WizardForm.CancelButton.Enabled := False;
       try
-        Started := Exec(InstalledUninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+        if not TryUninstallAction(ExpandConstant('{tmp}\SetupBridge.ps1'), 'CheckUninstall',
+          ExpandConstant('{tmp}\maintenance-result.ini')) then Exit;
+        Started := Exec(InstalledUninstaller, '/VERYSILENT /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
       finally
         BackendRunning := False;
         WizardForm.NextButton.Enabled := True;
@@ -263,7 +292,8 @@ begin
         WizardForm.Close;
       end else begin
         Log('Maintenance uninstall did not complete. Exit code: ' + IntToStr(ExitCode));
-        MsgBox('卸载未完成，卸载入口已保留。请关闭 TortoiseSCM 和比较工具；如文件仍被占用，请在文件操作结束后重启资源管理器，再重试。启用了系统级菜单的安装可能需要以管理员身份运行。', mbError, MB_OK);
+        if not Started then
+          MsgBox('无法启动卸载程序，卸载入口已保留。请检查文件权限后重试。', mbError, MB_OK);
       end;
       Exit;
     end;
@@ -286,14 +316,13 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  Error: String;
 begin
   { Inno 6.7.3 calls this after its confirmation and BEFORE PerformUninstall.
-    An exception propagates (AllowException=False), preserving support and ARP. }
+    Abort exits before file removal, preserving support and ARP without a
+    misleading Pascal runtime-error dialog for expected file contention. }
   if CurUninstallStep = usUninstall then begin
-    if not RunBridge(ExpandConstant('{app}\setup\SetupBridge.ps1'), 'Uninstall', '',
-      ExpandConstant('{tmp}\uninstall-result.ini'), Error) then
-      RaiseException('卸载尚未完成，卸载入口已保留。请处理以下问题后重试：' + #13#10 + Error);
+    if not TryUninstallAction(ExpandConstant('{app}\setup\SetupBridge.ps1'), 'Uninstall',
+      ExpandConstant('{tmp}\uninstall-result.ini')) then
+      Abort;
   end;
 end;
