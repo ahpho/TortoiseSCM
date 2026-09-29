@@ -28,9 +28,9 @@ $productionArp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B30
 $beforeArp = Test-Path $productionArp
 $uninstaller = Join-Path $root 'setup/unins000.exe'
 $versions = @(('setup-native-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '-a'), ('setup-native-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '-b'))
-function Run-Installer([string]$Executable, [string]$LogName, [bool]$Install) {
+function Run-Installer([string]$Executable, [string]$LogName, [bool]$Install, [string]$Directory = $root) {
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG="' + (Join-Path $fixture ($LogName + '.log')) + '"'))
-    if ($Install) { $arguments += ('/DIR="' + $root + '"') }
+    if ($Install -and $Directory) { $arguments += ('/DIR="' + $Directory + '"') }
     $process = Start-Process -FilePath $Executable -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
     return $process.ExitCode
 }
@@ -50,6 +50,11 @@ try {
     Assert (Test-Path $testArp) 'Installer registers the independent test Apps entry.'
     Assert ((Get-ItemProperty $testArp).DisplayName -like 'TortoiseSCM Installer Test *') 'Test Apps entry is visibly distinguished from production.'
     Assert (Test-Path -LiteralPath $uninstaller) 'Windows Apps uninstaller is present.'
+    $otherRoot = Join-Path $fixture 'unreviewed-relocation'
+    $pointerBefore = [IO.File]::ReadAllText((Join-Path $root 'current-install.json'))
+    Assert ((Run-Installer $setups[1] 'reject-relocation' $true $otherRoot) -ne 0) 'An upgrade cannot silently strand the existing installation by changing /DIR.'
+    Assert (-not (Test-Path -LiteralPath $otherRoot)) 'Rejected relocation creates no second install root.'
+    Assert ([IO.File]::ReadAllText((Join-Path $root 'current-install.json')) -eq $pointerBefore) 'Rejected relocation preserves the active installation.'
     Assert (Test-Path -LiteralPath (Join-Path $first.versionDirectory 'Tools/BeyondCompare/BComp.exe')) 'Beyond Compare is installed with the payload.'
     if ($TortoiseToolsDirectory) {
         foreach ($file in @('TortoiseGitMerge.exe', 'TortoiseGitUDiff.exe', 'LICENSE.txt', 'TortoiseGit-source.zip', 'mfc140u.dll')) {
@@ -89,7 +94,7 @@ try {
     }
     $oldDll = Join-Path $first.versionDirectory 'TortoiseSCMShell.dll'
     $lock = [IO.File]::Open($oldDll, 'Open', 'Read', 'Read')
-    Assert ((Run-Installer $setups[1] 'upgrade-b' $true) -eq 0) 'A newer installer upgrades while the old shell DLL is locked.'
+    Assert ((Run-Installer $setups[1] 'upgrade-b' $true '') -eq 0) 'A newer installer remembers the custom path without /DIR and upgrades while the old shell DLL is locked.'
     $second = [IO.File]::ReadAllText((Join-Path $root 'current-install.json')) | ConvertFrom-Json
     Assert ($first.versionDirectory -ne $second.versionDirectory) 'Upgrade publishes a fresh version directory.'
     Assert ((Read-TscmManifest $second.versionDirectory -VerifyFiles).version -eq $versions[1]) 'Upgrade selects the newer package version with verified files.'
@@ -108,6 +113,12 @@ try {
     Assert (-not (Test-Path $testArp)) 'Successful uninstall removes only the test Apps entry.'
     Assert (-not (Test-Path -LiteralPath (Join-Path $root 'current-install.json'))) 'Successful uninstall removes the active version pointer.'
     Assert (-not (Test-Path -LiteralPath $oldDll)) 'Successful retry removes the formerly locked old DLL.'
+    $uiTest = Join-Path $fixture 'SetupWizardUiTests.exe'
+    $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+    & $compiler /nologo /codepage:65001 /target:exe /platform:x64 /r:System.Drawing.dll "/out:$uiTest" (Join-Path $PSScriptRoot 'SetupWizardUiTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Setup wizard UI test compilation failed.' }
+    & $uiTest $setups[1] (Join-Path $fixture 'wizard-ui')
+    Assert ($LASTEXITCODE -eq 0) 'Real wizard supports destination selection, repair and confirmed/cancelled maintenance uninstall.'
     $afterPointerHash = if (Test-Path -LiteralPath $productionPointer) { (Get-FileHash -LiteralPath $productionPointer -Algorithm SHA256).Hash } else { '' }
     Assert ($beforePointerHash -eq $afterPointerHash) 'Existing production installation pointer is unchanged.'
     Assert ($beforeArp -eq (Test-Path $productionArp)) 'Production Windows Apps entry presence is unchanged.'

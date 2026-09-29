@@ -35,9 +35,9 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
-DisableDirPage=yes
+DisableDirPage=no
 DisableProgramGroupPage=yes
-UsePreviousAppDir=no
+UsePreviousAppDir=yes
 UsePreviousLanguage=no
 DisableWelcomePage=no
 WizardStyle=modern
@@ -76,6 +76,18 @@ var
   BackendInstalled, BackendRunning, WrapperInstalled: Boolean;
   ExplorerState, InstallMessage: String;
   RestartCheck: TNewCheckBox;
+  MaintenancePage: TInputOptionWizardPage;
+  InstalledRoot, InstalledUninstaller: String;
+  MaintenanceFinished: Boolean;
+
+function UninstallRegistryKey: String;
+begin
+#ifdef TestSetup
+  Result := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{D7305D7A-348E-4E30-88D3-6BCE9CE856BA}_is1';
+#else
+  Result := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B30D80DC-C4F3-4CD7-8175-86D48C0896A4}_is1';
+#endif
+end;
 
 function Quote(const Value: String): String;
 begin
@@ -111,6 +123,22 @@ end;
 
 procedure InitializeWizard;
 begin
+  if RegQueryStringValue(HKCU64, UninstallRegistryKey, 'InstallLocation', InstalledRoot) and (InstalledRoot <> '') then begin
+    InstalledRoot := RemoveBackslashUnlessRoot(InstalledRoot);
+    RegQueryStringValue(HKCU64, UninstallRegistryKey, 'UninstallString', InstalledUninstaller);
+    if (Length(InstalledUninstaller) > 1) and (InstalledUninstaller[1] = '"') and
+      (InstalledUninstaller[Length(InstalledUninstaller)] = '"') then
+      InstalledUninstaller := Copy(InstalledUninstaller, 2, Length(InstalledUninstaller) - 2);
+    MaintenancePage := CreateInputOptionPage(wpWelcome, '维护已有安装', '请选择要执行的操作',
+      '已安装到：' + InstalledRoot + #13#10#13#10 +
+      '升级或修复会沿用此目录。如需更换安装路径，请先卸载，再重新运行安装包。卸载会保留工作区和用户设置。', True, False);
+    MaintenancePage.Add('升级 / 修复 TortoiseSCM');
+    MaintenancePage.Add('卸载 TortoiseSCM');
+    MaintenancePage.SelectedValueIndex := 0;
+    MaintenancePage.SubCaptionLabel.ShowAccelChar := False;
+    WizardForm.DirEdit.ReadOnly := True;
+    WizardForm.DirBrowseButton.Enabled := False;
+  end;
   RestartCheck := TNewCheckBox.Create(WizardForm);
   RestartCheck.Parent := WizardForm.FinishedPage;
   RestartCheck.SetBounds(WizardForm.FinishedLabel.Left, WizardForm.FinishedPage.ClientHeight - ScaleY(60),
@@ -131,12 +159,11 @@ begin
     Result := '测试安装器不能使用正式安装目录。';
     Exit;
   end;
-#else
-  if CompareText(ExpandConstant('{app}'), ExpandConstant('{localappdata}\Programs\TortoiseSCM')) <> 0 then begin
-    Result := '请使用默认的当前用户安装目录；不支持 /DIR 覆盖安装位置。';
+#endif
+  if (InstalledRoot <> '') and (CompareText(RemoveBackslashUnlessRoot(ExpandConstant('{app}')), InstalledRoot) <> 0) then begin
+    Result := '升级或修复必须沿用已有安装目录。如需更换路径，请先卸载，再重新运行安装包。';
     Exit;
   end;
-#endif
   ExtractTemporaryFile('payload.zip');
   ExtractTemporaryFile('SetupBridge.ps1');
   ExtractTemporaryFile('Package.Common.ps1');
@@ -162,6 +189,11 @@ end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
+  if MaintenanceFinished then begin
+    Cancel := True;
+    Confirm := False;
+    Exit;
+  end;
   if BackendInstalled or BackendRunning then begin
     Cancel := False;
     Confirm := False;
@@ -175,6 +207,10 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  if (CurPageID = wpSelectDir) and (InstalledRoot <> '') then begin
+    WizardForm.SelectDirLabel.Caption := '升级或修复将沿用此目录。若要更换路径，请先卸载再安装。';
+    WizardForm.SelectDirBrowseLabel.Caption := '现有目录不可直接修改；可返回上一步选择卸载。';
+  end;
   if CurPageID = wpFinished then begin
     WizardForm.FinishedLabel.Caption := InstallMessage + #13#10#13#10 +
       '请通过文件或目录的右键菜单使用 TortoiseSCM。“版本信息”可以核对当前程序版本。';
@@ -193,8 +229,44 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Error: String;
+  ExitCode: Integer;
+  Started: Boolean;
 begin
   Result := True;
+  if MaintenancePage <> nil then
+    if (CurPageID = MaintenancePage.ID) and (MaintenancePage.SelectedValueIndex = 1) then begin
+      Result := False;
+      if MsgBox('是否卸载 TortoiseSCM？' + #13#10#13#10 + InstalledRoot + #13#10#13#10 +
+        '工作区和用户设置会保留。', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then Exit;
+      { Use only this installation's registered Inno uninstaller, never a shell command. }
+      if (CompareText(ExtractFileDir(InstalledUninstaller), AddBackslash(InstalledRoot) + 'setup') <> 0) or
+        (CompareText(Copy(ExtractFileName(InstalledUninstaller), 1, 5), 'unins') <> 0) or
+        (CompareText(ExtractFileExt(InstalledUninstaller), '.exe') <> 0) or not FileExists(InstalledUninstaller) then begin
+        MsgBox('原卸载程序缺失或安装记录无效。请先选择“升级 / 修复”，再重试卸载。', mbError, MB_OK);
+        Exit;
+      end;
+      BackendRunning := True;
+      WizardForm.NextButton.Enabled := False;
+      WizardForm.BackButton.Enabled := False;
+      WizardForm.CancelButton.Enabled := False;
+      try
+        Started := Exec(InstalledUninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+      finally
+        BackendRunning := False;
+        WizardForm.NextButton.Enabled := True;
+        WizardForm.BackButton.Enabled := True;
+        WizardForm.CancelButton.Enabled := True;
+      end;
+      if Started and (ExitCode = 0) and not RegKeyExists(HKCU64, UninstallRegistryKey) then begin
+        MaintenanceFinished := True;
+        MsgBox('卸载成功。工作区和用户设置已保留。', mbInformation, MB_OK);
+        WizardForm.Close;
+      end else begin
+        Log('Maintenance uninstall did not complete. Exit code: ' + IntToStr(ExitCode));
+        MsgBox('卸载未完成，卸载入口已保留。请关闭 TortoiseSCM 和比较工具；如文件仍被占用，请在文件操作结束后重启资源管理器，再重试。启用了系统级菜单的安装可能需要以管理员身份运行。', mbError, MB_OK);
+      end;
+      Exit;
+    end;
   if (CurPageID = wpFinished) and RestartCheck.Checked and not WizardSilent then begin
     if MsgBox('重启资源管理器可能中断正在进行的复制、移动、删除、解压等文件操作。' + #13#10#13#10 +
       '请确认这些操作已经全部结束。所有资源管理器文件夹窗口将关闭，桌面和任务栏会短暂消失。' + #13#10#13#10 +
