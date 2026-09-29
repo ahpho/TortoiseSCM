@@ -73,12 +73,12 @@ namespace TortoiseSCM
             const string contents = "真实 GUI 添加签入\r\nUnicode 中文 & spaces\r\n";
             File.WriteAllText(path, contents, new UTF8Encoding(false)); File.WriteAllText(sibling, "private sibling", new UTF8Encoding(false));
             string before = Status(root);
-            using (var form = Launch("add", path, false, "继续添加", path))
+            using (var form = LaunchOperation("add", path, false, "继续添加", path))
                 Require(Status(root) == before && Pending(root, path, "PR"), prefix + " cancelled Add preserves private status");
-            using (var form = Launch("add", path, true, "继续添加", path))
+            using (var form = LaunchOperation("add", path, true, "继续添加", path))
             {
                 Require(Pending(root, path, "AD") && Pending(root, sibling, "PR"), prefix + " shell Add adds exact file, excludes private sibling");
-                Require(!Field<bool>(form, "busy"), "Add returns an interactive main window");
+                Require(!Field<bool>(form, "busy"), "Add returns an interactive operation window");
             }
             using (var form = Launch("checkin", path, true, null, null))
             {
@@ -118,7 +118,7 @@ namespace TortoiseSCM
             string directory = Path.Combine(root, prefix + " 递归目录"); Directory.CreateDirectory(directory);
             string first = Path.Combine(directory, "甲.txt"), second = Path.Combine(directory, "乙.txt");
             File.WriteAllText(first, "alpha"); File.WriteAllText(second, "beta");
-            using (var form = Launch("add", directory, true, "目录操作会包含其全部子项", directory))
+            using (var form = LaunchOperation("add", directory, true, "目录操作会包含其全部子项", directory))
                 Require(Pending(root, first, "AD") && Pending(root, second, "AD"), "Directory Add recursively includes both children after explicit warning");
             using (var form = Launch("checkin", directory, true, null, null))
             {
@@ -154,14 +154,13 @@ namespace TortoiseSCM
                 Require(Wait(client.RunAsync(new PlasticCommandRequest { Command = command, WorkingDirectory = root,
                     Paths = new[] { path }, Comment = "GUI audit file action fixture" }, CancellationToken.None)).Succeeded, "Seed isolated " + mode + " file");
             string clean = Status(root);
-            using (var form = Launch("checkout", path, false, null, null))
+            using (var form = OpenOperation("checkout", path))
             {
-                Require(Status(root) == clean && Field<Label>(form, "status").Text.Contains("签出"), "Shell checkout opens pending window without checking out automatically");
+                Require(Status(root) == clean && Field<Label>(form, "status").Text.Contains("签出"), "Shell checkout opens operation window without checking out automatically");
                 using (var guard = new DialogGuard(form, true, "继续签出", path))
                 {
-                    var task = (Task)typeof(MainForm).GetMethod("ExecuteAsync", Flags, null,
-                        new[] { typeof(PlasticCommand), typeof(List<string>) }, null).Invoke(form, new object[] { PlasticCommand.Checkout, new List<string> { path } });
-                    Pump(() => task.IsCompleted, "Checkout GUI handler completes"); task.GetAwaiter().GetResult();
+                    Field<Button>(form, "execute").PerformClick();
+                    Pump(() => !Field<bool>(form, "busy") && guard.Count == 1, "Checkout GUI handler completes");
                     Require(guard.Count == 1 && guard.Error == "", "Checkout requires exact-path confirmation");
                 }
                 Require(Pending(root, path, "CO"), "Confirmed checkout creates native checkout state");
@@ -233,6 +232,29 @@ namespace TortoiseSCM
                 form.Show(); Pump(() => Field<bool>(form, "loaded") && !Field<bool>(form, "busy") && (expectedNote == null || guard.Count > 0), "Shell " + command + " initializes and completes");
                 Require(guard.Error == "", "No unexpected startup dialog: " + guard.Error);
                 Require(expectedNote == null ? guard.Count == 0 : guard.Count == 1, "Expected exact confirmation count for " + command);
+            }
+            return form;
+        }
+
+        private static OperationForm OpenOperation(string command, string path)
+        {
+            var form = Program.CreateLaunchForm(LaunchRequest.Parse(new[] { "--command", command, "--path", path })) as OperationForm;
+            Require(form != null, "Shell route " + command + " creates OperationForm");
+            form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-25000, -25000);
+            form.Show();
+            Pump(() => Field<bool>(form, "ready") && !Field<bool>(form, "busy"), "Shell " + command + " initializes and completes");
+            return form;
+        }
+
+        private static OperationForm LaunchOperation(string command, string path, bool accept, string expectedNote, string expectedPath)
+        {
+            var form = OpenOperation(command, path);
+            using (var guard = new DialogGuard(form, accept, expectedNote, expectedPath))
+            {
+                Field<Button>(form, "execute").PerformClick();
+                Pump(() => !Field<bool>(form, "busy") && guard.Count == 1, "Shell " + command + " operation finishes");
+                Require(guard.Error == "", "No unexpected operation dialog: " + guard.Error);
+                Require(guard.Count == 1, "Expected exact confirmation count for " + command);
             }
             return form;
         }

@@ -45,6 +45,7 @@ namespace TortoiseSCM
                 Reject(() => Program.CreateLaunchForm(Request("history", root)), "History refuses a non-workspace path");
                 using (var checkin = Program.CreateLaunchForm(Request("checkin", first)))
                     Require(checkin is MainForm, "Checkin retains the pending-change form");
+                CheckAllContextMenuRoutes(first, file);
 
                 int writes = 0;
                 using (var canceled = CreateUpdate(file, first, false))
@@ -62,7 +63,7 @@ namespace TortoiseSCM
                     Inject(update, "run", new Func<PlasticCommandRequest, CancellationToken, Task<PlasticCommandResult>>((request, token) => { writes++; captured = request; return pending.Task; }));
                     update.Show(); Pump(() => Field<Button>(update, "update").Enabled);
                     Require(update.Text == "更新 - TortoiseSCM", "Update has its own title");
-                    Require(Field<Label>(update, "scope").Text.Contains("整体更新") && Field<TextBox>(update, "paths").Text == first, "Standard update explicitly previews entire workspace scope");
+                    Require(Field<Label>(update, "scope").Text.Contains("整体更新") && !Field<TextBox>(update, "paths").Visible, "Standard update shows the workspace scope once without duplicate path box");
                     Require(update.AcceptButton == Field<Button>(update, "close"), "Enter cannot accidentally start update");
                     Bounds(update); Save(update, Path.Combine(artifacts, "update-dialog.png"));
                     update.Size = update.MinimumSize; Application.DoEvents(); Bounds(update);
@@ -128,6 +129,49 @@ namespace TortoiseSCM
                 Console.WriteLine("PASS: launch routing UI (" + assertions + " assertions)");
             }
             finally { Directory.Delete(root, true); }
+        }
+
+        private static void CheckAllContextMenuRoutes(string workspace, string file)
+        {
+            // Keep this list in lockstep with PlasticShell's expected menu verbs.
+            // The native ShellTests exercise COM visibility and dispatch; this
+            // matrix verifies that every dispatched verb reaches the intended
+            // WinForms surface instead of silently opening the check-in editor.
+            string[] commands = {
+                "update", "checkin", "diff", "history", "add", "checkout", "undo",
+                "move", "remove", "ignore", "branches", "merge", "shelves", "labels",
+                "repository-browser", "revision-graph", "blame", "export", "recover", "rollback",
+                "locks", "unlock", "gluon", "settings", "version", "create-workspace"
+            };
+            foreach (string command in commands)
+                Require(LaunchRequest.Parse(new[] { "--command", command, "--path", file }).Command == command,
+                    "Context menu verb is accepted: " + command);
+
+            foreach (string command in new[] { "update" })
+                using (var form = Program.CreateLaunchForm(Request(command, file)))
+                    Require(form is UpdateForm, command + " opens UpdateForm");
+            using (var history = Program.CreateLaunchForm(Request("history", file)))
+                Require(history is HistoryForm, "history opens HistoryForm");
+            foreach (string command in new[] { "add", "checkout", "undo" })
+                using (var form = Program.CreateLaunchForm(Request(command, file)))
+                {
+                    Require(form is OperationForm, command + " opens OperationForm");
+                    Require(!(form is MainForm), command + " never opens the check-in editor");
+                }
+            foreach (string command in new[] { "locks", "unlock" })
+                using (var form = Program.CreateLaunchForm(Request(command, workspace)))
+                    Require(form is LocksForm && !(form is MainForm), command + " opens LocksForm");
+
+            foreach (string command in new[] {
+                "checkin", "diff", "move", "remove", "ignore", "branches", "merge", "shelves", "labels",
+                "repository-browser", "revision-graph", "blame", "export", "recover", "rollback", "gluon"
+            })
+                using (var form = Program.CreateLaunchForm(Request(command, file)))
+                    Require(form is MainForm, command + " retains MainForm compatibility route");
+
+            // Settings, version information and checkout-repository are handled
+            // by Program.Main before a workspace form is created. Their parser
+            // coverage above ensures the native verbs cannot drift or disappear.
         }
 
         private static UpdateForm CreateUpdate(string selected, string root, bool partial)

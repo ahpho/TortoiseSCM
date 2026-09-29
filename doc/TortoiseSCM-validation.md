@@ -624,3 +624,9 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 经典和现代菜单的共享显示定义在更新、签入、比较差异、历史记录组之后加入分隔线。经典菜单只在两组均有可见项时插入 `MF_SEPARATOR`，不占用命令编号；现代菜单使用独立的 `ECF_ISSEPARATOR` 项，隐藏于工作区外，不提供图标或执行动作。现有命令身份、GUID 和派发保持不变。
 - Release 解决方案与 ShellTests 构建通过，ShellTests 502 项、实际 DLL 的经典/现代菜单及进程派发测试 710 项断言通过。覆盖单文件、目录、目录背景、多选、工作区外入口、枚举克隆/跳过，以及命令编号上限恰好落在分组边界时不显示末尾横线。
 - 证据：`bin/TortoiseSCM/qa/menu-separator-20260929/` 中的构建与测试日志。`MenuPreview.exe` 加载实际 Release DLL 并渲染原生弹出菜单，`directory-menu.bmp` 已目视确认横线位于“历史记录”与“添加”之间；未执行菜单命令、修改安装注册或重启 Explorer。现代分隔项通过 COM 合同测试验证，本轮未在 Windows 11 Explorer 内直接截图。
+
+## 右键菜单自动化覆盖（2026-09-29）
+
+`test/TortoiseSCM/ShellTests.cpp` 已覆盖经典菜单和 Windows 11 现代菜单的全部命令可见性、排序、分隔线、Unicode/序号调用以及生产 DLL 的实际进程派发。`test/TortoiseSCM/LaunchRoutingUiTests.cs` 进一步对全部 26 个右键命令做了解析和 WinForms 路由矩阵检查：更新、历史、添加/签出/撤销、锁管理分别进入对应专用窗体，其余命令保持兼容主窗体路径；添加和签出还由 `BasicWorkflowGuiIntegrationTests` 在隔离 Plastic 工作区中执行真实确认和 native 操作。
+
+本轮验证：`build-tortoisescm.ps1 -Configuration Release -Test` 全部通过；文件操作 GUI 集成测试通过 106 项断言。更新窗口在 Standard 工作区隐藏重复路径控件，Partial/Gluon 仍保留精确选中范围。

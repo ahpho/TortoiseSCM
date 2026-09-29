@@ -17,6 +17,7 @@ namespace TortoiseSCM
         private readonly Label scope = new Label();
         private readonly TextBox paths = new TextBox();
         private readonly TextBox output = new TextBox();
+        private readonly TableLayoutPanel layout = new TableLayoutPanel();
         private readonly Label status = new Label();
         private readonly Button update = DialogStyle.Button("更新(&U)");
         private readonly Button refresh = DialogStyle.Button("刷新范围(&R)");
@@ -48,7 +49,7 @@ namespace TortoiseSCM
             DialogStyle.Apply(this);
             Size = new Size(800, 570);
             MinimumSize = new Size(640, 450);
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 6 };
+            layout.Dock = DockStyle.Fill; layout.Padding = new Padding(12); layout.ColumnCount = 1; layout.RowCount = 6;
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
@@ -105,6 +106,12 @@ namespace TortoiseSCM
                     ? "Gluon / 部分工作区：仅更新以下所选范围；目录包含全部子项。"
                     : "完整工作区：将整体更新工作区中的受控文件，包括所选路径以外的文件。") + "\r\n工作区：" + workspace.RootPath;
                 paths.Lines = EffectivePaths().ToArray();
+                // A complete workspace always updates the workspace root. The
+                // editable-looking path box would repeat the same information
+                // already present in scope; keep it only for Gluon selections.
+                bool showSelectedPaths = workspace.IsPartial;
+                paths.Visible = showSelectedPaths;
+                layout.RowStyles[1].Height = showSelectedPaths ? 82 : 0;
                 conflicts.Visible = pending.Visible = workspace.IsPartial;
                 ready = true; status.Text = "请核对范围，点击“更新”后才会执行。";
             }

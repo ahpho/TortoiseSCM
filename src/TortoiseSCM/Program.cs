@@ -72,16 +72,24 @@ namespace TortoiseSCM
         // Keep shell dispatch independent of the pending-change/checkin surface.
         internal static Form CreateLaunchForm(LaunchRequest request)
         {
-            if (request.Command != "history" && request.Command != "update") return new MainForm(request);
             var client = new PlasticClient(PlasticClientConfig.Load());
             Form form;
             if (request.Command == "update") form = new UpdateForm(client, request.Paths);
-            else
+            else if (request.Command == "history")
             {
                 var workspace = ValidateWorkspacePaths(client, request.Paths);
                 if (request.Paths.Count != 1) throw new ArgumentException("历史记录需要一个文件或目录范围，请仅选择一项。");
                 form = new HistoryForm(client, request.Paths[0], workspace.RootPath);
             }
+            else if (request.Command == "checkin") form = new MainForm(request);
+            else if (request.Command == "add" || request.Command == "checkout" || request.Command == "undo")
+                form = new OperationForm(client, request.Command, request.Paths);
+            else if (request.Command == "locks" || request.Command == "unlock")
+            {
+                var workspace = ValidateWorkspacePaths(client, request.Paths);
+                form = new LocksForm(client, workspace.RootPath);
+            }
+            else return new MainForm(request);
             client.ToolHost = new WinFormsPlasticToolHost(form);
             return form;
         }
