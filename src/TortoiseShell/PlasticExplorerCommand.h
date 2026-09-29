@@ -120,11 +120,12 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
     ULONG STDMETHODCALLTYPE Release() override { const ULONG count = --references; if (!count) delete this; return count; }
     HRESULT STDMETHODCALLTYPE GetTitle(IShellItemArray*, LPWSTR* output) override
-    { return CopyCommandText(commandIndex == ARRAYSIZE(commands) ? L"TortoiseSCM" : Label(commands[commandIndex]), output); }
+    { return CopyCommandText(commandIndex == MenuSeparator ? L"" : commandIndex == ARRAYSIZE(commands) ? L"TortoiseSCM" : Label(commands[commandIndex]), output); }
     HRESULT STDMETHODCALLTYPE GetIcon(IShellItemArray*, LPWSTR* output) override
     {
         if (!output) return E_POINTER;
         *output = nullptr;
+        if (commandIndex == MenuSeparator) return S_FALSE;
         try
         {
             wchar_t path[32768]{};
@@ -141,7 +142,8 @@ public:
         if (!output) return E_POINTER;
         *output = ExplorerCommandClsid;
         // Appended command ordinals never change, and use a separate GUID family.
-        if (commandIndex != ARRAYSIZE(commands)) output->Data1 = 0xb1da4600 + static_cast<unsigned long>(commandIndex);
+        if (commandIndex == MenuSeparator) output->Data1 = 0xb1da46ff;
+        else if (commandIndex != ARRAYSIZE(commands)) output->Data1 = 0xb1da4600 + static_cast<unsigned long>(commandIndex);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetState(IShellItemArray* items, BOOL slow, EXPCMDSTATE* output) override
@@ -166,14 +168,15 @@ public:
         {
             std::vector<std::wstring> paths;
             if (SUCCEEDED(ExplorerPaths(items, site.Get(), paths)) &&
-                (commandIndex == ARRAYSIZE(commands) || CommandVisible(commandIndex, paths))) *output = ECS_ENABLED;
+                (commandIndex == MenuSeparator ? !WorkspaceRoot(paths.front()).empty() :
+                    commandIndex == ARRAYSIZE(commands) || CommandVisible(commandIndex, paths))) *output = ECS_ENABLED;
             return S_OK;
         }
         catch (...) { return E_FAIL; }
     }
     HRESULT STDMETHODCALLTYPE Invoke(IShellItemArray* items, IBindCtx*) override
     {
-        if (commandIndex == ARRAYSIZE(commands)) return E_NOTIMPL;
+        if (commandIndex == ARRAYSIZE(commands) || commandIndex == MenuSeparator) return E_NOTIMPL;
         try
         {
             std::vector<std::wstring> paths;
@@ -188,7 +191,7 @@ public:
         catch (...) { return E_FAIL; }
     }
     HRESULT STDMETHODCALLTYPE GetFlags(EXPCMDFLAGS* output) override
-    { if (!output) return E_POINTER; *output = commandIndex == ARRAYSIZE(commands) ? ECF_HASSUBCOMMANDS : ECF_DEFAULT; return S_OK; }
+    { if (!output) return E_POINTER; *output = commandIndex == MenuSeparator ? ECF_ISSEPARATOR : commandIndex == ARRAYSIZE(commands) ? ECF_HASSUBCOMMANDS : ECF_DEFAULT; return S_OK; }
     HRESULT STDMETHODCALLTYPE EnumSubCommands(IEnumExplorerCommand** output) override;
     HRESULT STDMETHODCALLTYPE SetSite(IUnknown* value) override { site = value; return S_OK; }
     HRESULT STDMETHODCALLTYPE GetSite(REFIID iid, void** output) override

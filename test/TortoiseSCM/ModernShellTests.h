@@ -126,6 +126,18 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     ComPtr<IExplorerCommand> diff;
     for (size_t index = 0; index < ARRAYSIZE(expectedMenuVerbs); ++index)
     {
+        if (index == 4)
+        {
+            ComPtr<IExplorerCommand> separator; ULONG copied = 0;
+            require(enumerator->Next(1, &separator, &copied) == S_OK && copied == 1, "modern separator follows frequent commands");
+            require(SUCCEEDED(separator->GetFlags(&flags)) && flags == ECF_ISSEPARATOR, "modern separator uses native separator flag");
+            require(SUCCEEDED(separator->GetTitle(nullptr, &title)) && title && !*title, "modern separator has no label"); CoTaskMemFree(title);
+            require(separator->GetIcon(nullptr, &title) == S_FALSE && !title, "modern separator has no icon");
+            for (auto items : {file.Get(), directory.Get(), multiple.Get()})
+                require(SUCCEEDED(separator->GetState(items, TRUE, &state)) && state == ECS_ENABLED, "modern separator visible for workspace selections");
+            require(SUCCEEDED(separator->GetState(outside.Get(), TRUE, &state)) && state == ECS_HIDDEN, "modern checkout-only menu hides separator");
+            require(separator->Invoke(file.Get(), nullptr) == E_NOTIMPL, "modern separator cannot launch a command");
+        }
         ComPtr<IExplorerCommand> child;
         ULONG fetched = 0;
         require(enumerator->Next(1, &child, &fetched) == S_OK && fetched == 1, "modern next command");
@@ -147,7 +159,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     ComPtr<IExplorerCommand> exhausted;
     ULONG fetched = 99;
     require(enumerator->Next(1, &exhausted, &fetched) == S_FALSE && fetched == 0 && !exhausted, "modern enumeration exhaustion");
-    require(enumerator->Reset() == S_OK && enumerator->Skip(6) == S_OK, "modern enumeration reset and skip");
+    require(enumerator->Reset() == S_OK && enumerator->Skip(7) == S_OK, "modern enumeration reset and skip includes separator");
     ComPtr<IEnumExplorerCommand> clone;
     require(SUCCEEDED(enumerator->Clone(&clone)), "modern enumeration clone");
     require(clone->Next(1, &exhausted, &fetched) == S_OK, "modern clone retains cursor");
@@ -168,7 +180,7 @@ void ModernShellTests(const std::filesystem::path& first, const std::filesystem:
     {
         exhausted->GetState(nullptr, TRUE, &state); backgroundCount += state == ECS_ENABLED; exhausted.Reset();
     }
-    require(backgroundCount == 23, "modern children inherit background site");
+    require(backgroundCount == 24, "modern children and separator inherit background site");
     ComPtr<BackgroundSite> checkoutBackground; checkoutBackground.Attach(new BackgroundSite(first.parent_path().native()));
     withSite->SetSite(static_cast<IServiceProvider*>(checkoutBackground.Get()));
     require(SUCCEEDED(root->GetState(nullptr, TRUE, &state)) && state == ECS_ENABLED, "modern ordinary background checkout root visible");
@@ -282,7 +294,7 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
             ULONG index = 0;
             while (index < ARRAYSIZE(expectedMenuVerbs) && wcscmp(expectedMenuVerbs[index], command) != 0) ++index;
             require(index < ARRAYSIZE(expectedMenuVerbs), "modern basic operation command exists");
-            enumerator->Reset(); enumerator->Skip(index);
+            enumerator->Reset(); enumerator->Skip(index + (index >= 4 ? 1 : 0));
             ComPtr<IExplorerCommand> operation;
             require(enumerator->Next(1, &operation, &fetched) == S_OK, "modern basic operation enumerated");
             unsigned selectionCase = 0;
@@ -313,7 +325,7 @@ void ModernHandoffTest(const std::filesystem::path& first, const wchar_t* binary
                 require(std::filesystem::exists(operationPath), "modern recorder never removes selected fixture");
             }
         }
-        enumerator->Reset(); enumerator->Skip(25);
+        enumerator->Reset(); enumerator->Skip(26);
         ComPtr<IExplorerCommand> checkout; require(enumerator->Next(1, &checkout, &fetched) == S_OK, "modern handoff checkout command");
         const auto unicodeParent = first.parent_path() / L"checkout \u4e2d\u6587 & parent";
         std::filesystem::create_directory(unicodeParent);

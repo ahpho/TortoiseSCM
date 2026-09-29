@@ -97,8 +97,10 @@ constexpr Command commands[] = {
 // Shared presentation order for classic and modern Explorer menus. The values
 // refer to stable command identities above, not visible menu offsets.
 // Status (identity 0) shares the check-in window and has no separate menu entry.
+constexpr size_t MenuSeparator = static_cast<size_t>(-1);
 constexpr size_t menuOrder[] = {
     2, 1, 6, 7,             // Update, check in, diff, history.
+    MenuSeparator,
     3, 4, 5, 10, 11, 12,    // Add, checkout, undo, move, remove, ignore.
     19, 15, 20, 23,         // Branches, merge, shelvesets, labels.
     22, 24, 21, 16, 18, 17, // Repository, graph, blame, export, recover, rollback.
@@ -107,15 +109,17 @@ constexpr size_t menuOrder[] = {
 };
 constexpr bool ValidMenuOrder()
 {
-    if constexpr (ARRAYSIZE(menuOrder) != ARRAYSIZE(commands) - 1) return false;
+    if constexpr (ARRAYSIZE(menuOrder) != ARRAYSIZE(commands)) return false;
     bool seen[ARRAYSIZE(commands)]{};
     seen[0] = true; // Reserved status identity must not appear in either menu.
+    size_t separators = 0;
     for (const size_t index : menuOrder)
     {
+        if (index == MenuSeparator) { ++separators; continue; }
         if (index >= ARRAYSIZE(commands) || seen[index]) return false;
         seen[index] = true;
     }
-    return true;
+    return separators == 1;
 }
 static_assert(ValidMenuOrder(), "Menu order must contain each command except status exactly once");
 
@@ -357,13 +361,19 @@ public:
             if (paths.empty() || (flags & CMF_DEFAULTONLY) || last < first) return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
             HMENU submenu = CreatePopupMenu();
             if (!submenu) return E_OUTOFMEMORY;
+            bool separatorPending = false;
             for (const size_t index : menuOrder)
             {
+                if (index == MenuSeparator) { separatorPending = true; continue; }
                 // Path-specific dialogs are intentionally limited to one item.
                 // This keeps move/remove/ignore and history actions safe for
                 // Explorer multi-selection while retaining the full GUI flow.
                 if (!CommandVisible(index, paths)) continue;
                 if (visibleCommands.size() > last - first) break;
+                // Add only between two visible groups, without consuming a verb ID.
+                if (separatorPending && !visibleCommands.empty() && !AppendMenuW(submenu, MF_SEPARATOR, 0, nullptr))
+                { DestroyMenu(submenu); return E_FAIL; }
+                separatorPending = false;
                 if (!AppendMenuW(submenu, MF_STRING, first + visibleCommands.size(), Label(commands[index]))) { DestroyMenu(submenu); return E_FAIL; }
                 visibleCommands.push_back(index);
             }

@@ -618,3 +618,9 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 真实 Gluon 独立分支测试 10 项通过，覆盖逐文件拉取、未加载项、重命名、删除及历史项后续删除；fixture 为 `qa/integration-20260929-113033-58eabb7d/manifest.json`。写入仅发生在该 autotest 分支及其独立工作区，参考 `TestSCM2` selector 和待定状态保持不变。
 - 用户 `TestSCM2` 只读验证：`fileinfo` 返回目录自身 `cs:995`，约 315 ms；本地状态快照约 1,967 ms；当时 996 条历史全量扫描及判定约 11,115 ms，粗体为 0。独立测试分支新增三条记录后，真实 HistoryForm 加载 999 条约 14,238 ms，粗体仍为 0。完整历史扫描不是即时返回，以上为本机测量，不是普遍性能保证。
 - 证据：`bin/TortoiseSCM/qa/history-incoming-20260929/` 的核心、分页、预览、UI、live 及只读日志；真实界面截图 `TestSCM2-history-normal.png`、`TestSCM2-history-minimum.png` 已目视检查。未更新安装注册或重启 Explorer。
+
+## 2026-09-29：右键菜单常用操作分隔线
+
+- 经典和现代菜单的共享显示定义在更新、签入、比较差异、历史记录组之后加入分隔线。经典菜单只在两组均有可见项时插入 `MF_SEPARATOR`，不占用命令编号；现代菜单使用独立的 `ECF_ISSEPARATOR` 项，隐藏于工作区外，不提供图标或执行动作。现有命令身份、GUID 和派发保持不变。
+- Release 解决方案与 ShellTests 构建通过，ShellTests 502 项、实际 DLL 的经典/现代菜单及进程派发测试 710 项断言通过。覆盖单文件、目录、目录背景、多选、工作区外入口、枚举克隆/跳过，以及命令编号上限恰好落在分组边界时不显示末尾横线。
+- 证据：`bin/TortoiseSCM/qa/menu-separator-20260929/` 中的构建与测试日志。`MenuPreview.exe` 加载实际 Release DLL 并渲染原生弹出菜单，`directory-menu.bmp` 已目视确认横线位于“历史记录”与“添加”之间；未执行菜单命令、修改安装注册或重启 Explorer。现代分隔项通过 COM 合同测试验证，本轮未在 Windows 11 Explorer 内直接截图。

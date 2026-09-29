@@ -145,20 +145,26 @@ constexpr size_t expectedMenuIdentities[] = {2,1,6,7,3,4,5,10,11,12,19,15,20,23,
 
 void CheckClassicOrder(IContextMenu* context, HMENU submenu, unsigned selectionKind)
 {
-    UINT offset = 0;
+    UINT offset = 0, position = 0;
     for (size_t index = 0; index < ARRAYSIZE(expectedMenuVerbs); ++index)
     {
         const std::wstring name = expectedMenuVerbs[index];
         if (selectionKind >= 3 ? name != L"create-workspace" : name == L"create-workspace") continue;
         if ((selectionKind == 1 || selectionKind == 2) && (name == L"diff" || name == L"blame")) continue;
+        if (name == L"add")
+        {
+            MENUITEMINFOW separator{sizeof(separator)}; separator.fMask = MIIM_FTYPE;
+            require(GetMenuItemInfoW(submenu, position++, TRUE, &separator) && (separator.fType & MFT_SEPARATOR),
+                "classic separator follows frequent commands");
+        }
         wchar_t verb[80]{}, label[128]{};
         require(SUCCEEDED(context->GetCommandString(offset, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
             verb == L"tortoisescm." + name, "classic frequent-first visible verb order");
-        require(GetMenuStringW(submenu, offset, label, ARRAYSIZE(label), MF_BYPOSITION) > 0 &&
+        require(GetMenuStringW(submenu, position++, label, ARRAYSIZE(label), MF_BYPOSITION) > 0 &&
             wcscmp(label, Label(commands[expectedMenuIdentities[index]])) == 0, "classic visible label matches reordered verb");
         ++offset;
     }
-    require(GetMenuItemCount(submenu) == static_cast<int>(offset), "classic menu has no missing or duplicate commands");
+    require(GetMenuItemCount(submenu) == static_cast<int>(position), "classic menu has exactly the expected commands and separator");
 }
 
 std::vector<unsigned char> Snapshot(const std::vector<std::pair<std::wstring, uint32_t>>& values, uint64_t now)
@@ -285,8 +291,8 @@ void RegisteredSmoke(const std::filesystem::path& first, const std::filesystem::
     require(SUCCEEDED(initialize->Initialize(nullptr, &file, nullptr)), "registered file initialization");
     HMENU menu = CreatePopupMenu();
     require(HRESULT_CODE(context->QueryContextMenu(menu, 0, 400, 499, CMF_NORMAL)) == 25, "registered file menu exposes all single-item commands");
-    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 25, "registered submenu structure");
-    require(GetMenuItemID(GetSubMenu(menu, 0), 0) == 400 && GetMenuItemID(GetSubMenu(menu, 0), 9) == 409, "registered menu command IDs");
+    require(GetMenuItemCount(menu) == 1 && GetSubMenu(menu, 0) && GetMenuItemCount(GetSubMenu(menu, 0)) == 26, "registered submenu structure");
+    require(GetMenuItemID(GetSubMenu(menu, 0), 0) == 400 && GetMenuItemID(GetSubMenu(menu, 0), 10) == 409, "registered menu command IDs ignore separator");
     wchar_t verb[80]{};
     require(SUCCEEDED(context->GetCommandString(2, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
         wcscmp(verb, L"tortoisescm.diff") == 0, "registered Unicode canonical verb");
@@ -528,6 +534,8 @@ int wmain(int argc, wchar_t** argv) {
     Selection multi({(first / L"child/file.txt").native(), (first / L"child/second.txt").native()});
     shell->Initialize(nullptr, &multi, nullptr); menu = CreatePopupMenu();
     require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_NORMAL)) == 7, "multi selection excludes diff and history");
+    require(GetMenuItemCount(GetSubMenu(menu, 0)) == 8 && (GetMenuState(GetSubMenu(menu, 0), 2, MF_BYPOSITION) & MF_SEPARATOR),
+        "multi selection has one separator after checkin");
     const wchar_t* multiVerbs[] = {L"update", L"checkin", L"add", L"checkout", L"undo", L"gluon", L"settings"};
     for (UINT offset = 0; offset < ARRAYSIZE(multiVerbs); ++offset)
         require(SUCCEEDED(shell->GetCommandString(offset, GCS_VERBW, nullptr, reinterpret_cast<char*>(verb), ARRAYSIZE(verb))) &&
@@ -541,6 +549,17 @@ int wmain(int argc, wchar_t** argv) {
     require(directoryCount==23, "directory background menu"); CheckClassicOrder(shell, GetSubMenu(menu, 0), 2); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,200,CMF_DEFAULTONLY))==0, "default-only query ignored"); DestroyMenu(menu);
     menu=CreatePopupMenu(); require(HRESULT_CODE(shell->QueryContextMenu(menu,0,100,102,CMF_NORMAL))==3, "command id limit respected"); DestroyMenu(menu);
+    for (UINT limit : {2u, 3u})
+    {
+        menu = CreatePopupMenu();
+        require(HRESULT_CODE(shell->QueryContextMenu(menu, 0, 100, 100 + limit, CMF_NORMAL)) == limit + 1, "separator does not consume limited command IDs");
+        HMENU submenu = GetSubMenu(menu, 0);
+        const int count = GetMenuItemCount(submenu);
+        require(count == static_cast<int>(limit + 1 + (limit == 3 ? 1 : 0)) &&
+            !(GetMenuState(submenu, 0, MF_BYPOSITION) & MF_SEPARATOR) &&
+            !(GetMenuState(submenu, count - 1, MF_BYPOSITION) & MF_SEPARATOR), "limited menus have no leading or trailing separator");
+        DestroyMenu(menu);
+    }
     for (const auto& parent : {base, base.root_path()})
     {
         Selection ordinary({parent.native()}); shell->Initialize(nullptr, &ordinary, nullptr); menu = CreatePopupMenu();
