@@ -38,6 +38,100 @@ void require(bool condition, const char* label) {
     std::cout << "PASS " << label << '\n';
 }
 
+#pragma comment(lib, "msimg32.lib")
+
+void CheckMenuBitmap(HMENU menu, HMODULE resourceModule)
+{
+    MENUITEMINFOW item{sizeof(item)};
+    item.fMask = MIIM_BITMAP;
+    require(GetMenuItemInfoW(menu, 0, TRUE, &item) && item.hbmpItem, "production menu supplies an icon bitmap");
+    DIBSECTION dib{};
+    require(GetObjectW(item.hbmpItem, sizeof(dib), &dib) == sizeof(dib) &&
+        dib.dsBm.bmBitsPixel == 32 && dib.dsBm.bmWidth == 16 && dib.dsBm.bmHeight == 16,
+        "menu icon is a 16x16 32-bit DIB");
+    const auto pixels = static_cast<const RGBQUAD*>(dib.dsBm.bmBits);
+    unsigned transparent = 0, partial = 0, opaque = 0;
+    bool premultiplied = true;
+    for (int i = 0; i < 256; ++i)
+    {
+        const auto p = pixels[i];
+        transparent += p.rgbReserved == 0;
+        partial += p.rgbReserved > 0 && p.rgbReserved < 255;
+        opaque += p.rgbReserved == 255;
+        premultiplied &= p.rgbRed <= p.rgbReserved && p.rgbGreen <= p.rgbReserved && p.rgbBlue <= p.rgbReserved;
+    }
+    require(transparent && partial && opaque, "menu icon retains transparent antialiased and opaque pixels");
+    require(premultiplied, "menu bitmap has premultiplied channels and zero transparent RGB");
+
+    // Compare the actual MIIM_BITMAP using Windows AlphaBlend against drawing
+    // the resource icon directly, on both light and dark menu backgrounds.
+    HICON icon = static_cast<HICON>(LoadImageW(resourceModule, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, 0));
+    require(icon != nullptr, "load production icon for independent native rendering");
+    ICONINFO raw{};
+    require(GetIconInfo(icon, &raw) != FALSE, "extract old menu bitmap for regression control");
+    HDC source = CreateCompatibleDC(nullptr), target = CreateCompatibleDC(nullptr);
+    require(source && target, "create native icon comparison DCs");
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = 48; info.bmiHeader.biHeight = -32;
+    info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HBITMAP canvas = CreateDIBSection(target, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    require(canvas != nullptr, "create native icon comparison canvas");
+    const auto oldTarget = SelectObject(target, canvas);
+    const auto oldSource = SelectObject(source, item.hbmpItem);
+    auto output = static_cast<RGBQUAD*>(bits);
+    for (int y = 0; y < 32; ++y)
+        for (int x = 0; x < 48; ++x)
+        {
+            const BYTE shade = y < 16 ? 32 : 240;
+            output[y * 48 + x] = {shade, shade, shade, 255};
+        }
+    const BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    for (int y : {0, 16})
+    {
+        require(AlphaBlend(target, 16, y, 16, 16, source, 0, 0, 16, 16, blend) != FALSE,
+            "composite actual menu bitmap with Windows AlphaBlend");
+        require(DrawIconEx(target, 32, y, icon, 16, 16, 0, nullptr, DI_NORMAL) != FALSE,
+            "draw independent resource icon reference");
+    }
+    SelectObject(source, raw.hbmColor);
+    for (int y : {0, 16})
+        require(AlphaBlend(target, 0, y, 16, 16, source, 0, 0, 16, 16, blend) != FALSE,
+            "render old straight-alpha path as regression control");
+    GdiFlush();
+    unsigned oldDifferences = 0;
+    bool compositesMatch = true;
+    for (int y = 0; y < 32; ++y)
+        for (int x = 0; x < 16; ++x)
+        {
+            const auto actual = output[y * 48 + 16 + x], expected = output[y * 48 + 32 + x];
+            compositesMatch &= std::abs(int(actual.rgbRed) - expected.rgbRed) <= 1 &&
+                std::abs(int(actual.rgbGreen) - expected.rgbGreen) <= 1 &&
+                std::abs(int(actual.rgbBlue) - expected.rgbBlue) <= 1;
+            const auto old = output[y * 48 + x];
+            oldDifferences += std::abs(int(old.rgbRed) - expected.rgbRed) > 1 ||
+                std::abs(int(old.rgbGreen) - expected.rgbGreen) > 1 || std::abs(int(old.rgbBlue) - expected.rgbBlue) > 1;
+        }
+    require(compositesMatch, "menu composite matches native icon on light/dark background");
+    require(oldDifferences > 0, "regression control reproduces old icon fringe");
+    wchar_t evidence[32768]{};
+    if (GetEnvironmentVariableW(L"TORTOISESCM_MENU_BITMAP_QA", evidence, ARRAYSIZE(evidence)))
+    {
+        BITMAPFILEHEADER header{};
+        header.bfType = 0x4d42; header.bfOffBits = sizeof(header) + sizeof(BITMAPINFOHEADER);
+        header.bfSize = header.bfOffBits + 48 * 32 * 4;
+        std::ofstream file(evidence, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        file.write(reinterpret_cast<const char*>(&info.bmiHeader), sizeof(BITMAPINFOHEADER));
+        file.write(static_cast<const char*>(bits), 48 * 32 * 4);
+        require(file.good(), "save old/fixed/reference light-dark native rendering evidence");
+    }
+    SelectObject(source, oldSource); SelectObject(target, oldTarget);
+    DeleteDC(source); DeleteDC(target); DeleteObject(canvas);
+    DeleteObject(raw.hbmColor); DeleteObject(raw.hbmMask); DestroyIcon(icon);
+}
+
 // UX contract, independent of the production presentation array. Identities
 // retain their pre-reorder values even though visible offsets have changed.
 constexpr const wchar_t* expectedMenuVerbs[] = {
@@ -292,6 +386,7 @@ void ClassicHandoffTest(const std::filesystem::path& first, const wchar_t* binar
                 std::cerr << "Classic menu selection=" << selectionKind << " expected=" << expectedCount
                     << " actual=" << HRESULT_CODE(queried) << " HRESULT=" << queried << '\n';
             require(SUCCEEDED(queried) && HRESULT_CODE(queried) == expectedCount, "classic handoff filtered menu populated");
+            if (selectionKind == 0) CheckMenuBitmap(menu, loaded);
             CheckClassicOrder(context.Get(), GetSubMenu(menu, 0), selectionKind);
             for (const wchar_t* command : (selectionKind < 3 ? std::vector<const wchar_t*>{L"update", L"checkin", L"history", L"version", L"add", L"remove"} : std::vector<const wchar_t*>{L"create-workspace"}))
             {

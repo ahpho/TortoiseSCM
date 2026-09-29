@@ -596,3 +596,10 @@ cs42 为基线，cs43 包含增删改移动；回滚生成待提交更改、选�
 - 覆盖文件、目录、目录背景、多选和工作区外的菜单排序/过滤，核对显示文字、canonical verb、稳定 GUID，以及真实进程启动器收到的命令和路径。
 - 日志：`bin/TortoiseSCM/qa/menu-order-20260929/` 下的 `build.log`、`test-build.log`、`shell.log`、`production-dll.log`。
 - 本轮未更新已安装的 Explorer 扩展，也未完成桌面右键点击验收；需安装更新版本并让 Explorer 重新加载扩展后，实际菜单才会采用新顺序。
+
+## 2026-09-29：经典右键菜单图标透明边缘
+
+- 原实现将 `GetIconInfo().hbmColor` 直接交给 `MIIM_BITMAP`，资源的直通 Alpha 未转换为菜单位图要求的预乘 Alpha，半透明边缘在深色菜单上发白。现在将带 Alpha 的内置图标通过 `DrawIconEx` 绘入清零的 32 位 DIB，保留透明背景与抗锯齿；位图仍由菜单扩展实例缓存并释放。
+- Release 解决方案与 ShellTests 构建通过，ShellTests 498 项、实际 DLL 的经典/现代菜单及进程派发测试 724 项断言通过。新增测试读取实际菜单的 `MIIM_BITMAP`，检查透明/半透明/不透明像素及预乘通道，再用 Windows `AlphaBlend` 与直接绘制资源图标逐像素比较深浅背景（各通道允许 1 级舍入误差）；旧代码路径作为对照，确认可复现差异。
+- 日志：`bin/TortoiseSCM/qa/menu-alpha-20260929/`。`comparison.bmp` 为原生 GDI 绘制结果，上行为深色背景、下行为浅色背景，三列依次是旧位图、新菜单位图、直接绘制图标；已目视检查。
+- 本轮没有修改资源图案、系统主题或已安装的 Explorer 注册，也没有重启 Explorer。实际桌面菜单须安装新包并重新加载扩展后验收。

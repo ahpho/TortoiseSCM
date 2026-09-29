@@ -31,6 +31,41 @@ constexpr CLSID OverlayClsids[] = {
 };
 HINSTANCE moduleInstance;
 std::atomic<long> moduleReferences{0};
+
+HBITMAP CreateMenuBitmap(HICON icon, int width, int height)
+{
+    if (!icon || width <= 0 || height <= 0) return nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return nullptr;
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    bool drawn = false;
+    if (bitmap)
+    {
+        HGDIOBJ previous = SelectObject(dc, bitmap);
+        if (previous && previous != HGDI_ERROR)
+        {
+            // The bundled icon has an alpha channel. Drawing onto a transparent
+            // 32-bit DIB produces the premultiplied alpha MIIM_BITMAP requires.
+            // GetIconInfo().hbmColor contains straight alpha and gives pale fringes.
+            ZeroMemory(pixels, static_cast<size_t>(width) * height * 4);
+            drawn = DrawIconEx(dc, 0, 0, icon, width, height, 0, nullptr, DI_NORMAL) != FALSE;
+            GdiFlush();
+            SelectObject(dc, previous);
+        }
+        if (!drawn) { DeleteObject(bitmap); bitmap = nullptr; }
+    }
+    DeleteDC(dc);
+    return bitmap;
+}
+
 struct Command { const wchar_t* name; const wchar_t* label; const wchar_t* chineseLabel; };
 constexpr Command commands[] = {
     {L"status", L"Pending changes...", L"待处理更改..."}, {L"checkin", L"Check in...", L"签入..."},
@@ -337,12 +372,7 @@ public:
                 HICON icon = static_cast<HICON>(LoadImageW(moduleInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR));
                 if (icon)
                 {
-                    ICONINFO iconInfo{};
-                    if (GetIconInfo(icon, &iconInfo))
-                    {
-                        menuBitmap = iconInfo.hbmColor;
-                        if (iconInfo.hbmMask) DeleteObject(iconInfo.hbmMask);
-                    }
+                    menuBitmap = CreateMenuBitmap(icon, 16, 16);
                     DestroyIcon(icon);
                 }
             }
