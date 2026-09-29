@@ -241,7 +241,7 @@ namespace TortoiseSCM
             }
         }
         private async Task<PlasticCommandResult> ExecuteWithPartialConflictGuardAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken,
-            Func<Task> beforeExecute = null, Func<PlasticWorkspace, Task> beforeExecuteWithWorkspace = null)
+            Func<Task> beforeExecute = null, Func<PlasticWorkspace, IList<PlasticStatusItem>, Task> beforeExecuteWithWorkspace = null)
         {
             if (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Update || request.Command == PlasticCommand.Undo)
             {
@@ -254,7 +254,7 @@ namespace TortoiseSCM
             return await ExecutePartialConflictGuardCoreAsync(command, request, cancellationToken, beforeExecute, beforeExecuteWithWorkspace).ConfigureAwait(false);
         }
         private async Task<PlasticCommandResult> ExecutePartialConflictGuardCoreAsync(PlasticProcessCommand command, PlasticCommandRequest request, CancellationToken cancellationToken,
-            Func<Task> beforeExecute = null, Func<PlasticWorkspace, Task> beforeExecuteWithWorkspace = null)
+            Func<Task> beforeExecute = null, Func<PlasticWorkspace, IList<PlasticStatusItem>, Task> beforeExecuteWithWorkspace = null)
         {
             if (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Update || request.Command == PlasticCommand.Undo)
                 ThrowIfPartialStructureActive(command.WorkingDirectory);
@@ -265,6 +265,7 @@ namespace TortoiseSCM
             using (var gate = OpenMergeGate(workspace.RootPath))
             {
                 var state = LoadPartialState(workspace.RootPath, false);
+                IList<PlasticStatusItem> checkinPending = null;
                 if (request.Command == PlasticCommand.Checkin)
                 {
                     if (state != null)
@@ -284,14 +285,14 @@ namespace TortoiseSCM
                     // Signing in one child can also publish its pending added
                     // parents. A colliding added directory must therefore guard
                     // every selected descendant, not only a directory selection.
-                    var checkinPending = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
+                    checkinPending = await GetStatusAsync(workspace.RootPath, cancellationToken).ConfigureAwait(false);
                     if (incoming.Any(item => PartialSelected(request, workspace.RootPath, item.RepositoryPath) ||
                         checkinPending.Any(change => change.StatusCode == "AD" && change.IsDirectory && SamePath(change.Path, MergeLocalPath(workspace.RootPath, item.RepositoryPath)) &&
                             request.Paths.Any(value => IsWithin(Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(request.WorkingDirectory, value)), change.Path)))))
                         throw new ArgumentException("Selected files have incoming conflicts. Prepare and resolve them before checkin; no official merge tool was launched.");
                 }
                 // No native standard merge session can coexist with a Partial resolution.
-                if (beforeExecuteWithWorkspace != null) await beforeExecuteWithWorkspace(workspace).ConfigureAwait(false);
+                if (beforeExecuteWithWorkspace != null) await beforeExecuteWithWorkspace(workspace, checkinPending).ConfigureAwait(false);
                 else if (beforeExecute != null) await beforeExecute().ConfigureAwait(false);
                 var result = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded || state == null) return result;

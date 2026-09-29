@@ -90,16 +90,16 @@ namespace TortoiseSCM
             // performs the authoritative mode check immediately before execution.
             if (actual.IsPartial != preview.IsPartial) throw new InvalidOperationException("工作区模式已改变，请重新预检签入范围。");
             return await ExecuteWithPartialConflictGuardAsync(command, request, cancellationToken,
-                null, current => ValidatePreparedCheckinAsync(preview, current, cancellationToken)).ConfigureAwait(false);
+                null, (current, status) => ValidatePreparedCheckinAsync(preview, current, status, cancellationToken)).ConfigureAwait(false);
         }
 
-        private async Task ValidatePreparedCheckinAsync(PlasticCheckinPreview preview, PlasticWorkspace actual, CancellationToken token)
+        private async Task ValidatePreparedCheckinAsync(PlasticCheckinPreview preview, PlasticWorkspace actual, IList<PlasticStatusItem> status, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             var expected = new PlasticWorkspace { RootPath = preview.RootPath, Repository = preview.Repository, Selector = preview.Selector, Name = preview.ExpectedName, IsPartial = preview.IsPartial };
             ValidateCheckinContext(expected);
             if (actual.IsPartial != preview.IsPartial) throw new InvalidOperationException("工作区模式已改变，请重新预检签入范围。");
-            var status = await GetStatusAsync(preview.RootPath, token).ConfigureAwait(false);
+            if (status == null) status = await GetStatusAsync(preview.RootPath, token).ConfigureAwait(false);
             var selected = SelectCheckinStatus(status, preview.RootPath, preview.Paths);
             if (await Task.Run(() => CheckinFingerprint(preview.RootPath, selected), token).ConfigureAwait(false) != preview.Fingerprint)
                 throw new InvalidOperationException("待签入文件的状态、路径或内容已改变，请重新预检签入范围。");
