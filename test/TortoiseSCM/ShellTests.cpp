@@ -168,8 +168,10 @@ void CheckClassicOrder(IContextMenu* context, HMENU menu, unsigned selectionKind
         const bool topLevel = promoted && (name == L"update" || name == L"checkin" || name == L"history");
         HMENU target = topLevel ? menu : submenu;
         UINT itemPosition = topLevel ? offset : position++;
+        const std::wstring expectedLabel = topLevel ? L"SCM " + std::wstring(Label(commands[expectedMenuIdentities[index]])) :
+            std::wstring(Label(commands[expectedMenuIdentities[index]]));
         require(GetMenuStringW(target, itemPosition, label, ARRAYSIZE(label), MF_BYPOSITION) > 0 &&
-            wcscmp(label, Label(commands[expectedMenuIdentities[index]])) == 0, "classic visible label matches reordered verb");
+            wcscmp(label, expectedLabel.c_str()) == 0, "classic visible label matches reordered verb");
         MENUITEMINFOW icon{sizeof(icon)};
         icon.fMask = MIIM_BITMAP;
         require(GetMenuItemInfoW(target, itemPosition, TRUE, &icon) && icon.hbmpItem,

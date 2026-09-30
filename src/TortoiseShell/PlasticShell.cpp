@@ -140,6 +140,11 @@ const wchar_t* Label(const Command& command)
     return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? command.chineseLabel : command.label;
 }
 
+std::wstring PromotedLabel(const Command& command)
+{
+    return L"SCM " + std::wstring(Label(command));
+}
+
 std::wstring WorkspaceRoot(const std::wstring& input);
 bool CheckoutParent(const std::vector<std::wstring>& paths);
 
@@ -467,7 +472,8 @@ public:
                     MENUITEMINFOW item{sizeof(item)};
                     item.fMask = MIIM_ID | MIIM_STRING | MIIM_BITMAP;
                     item.wID = first + static_cast<UINT>(found - visibleCommands.begin());
-                    item.dwTypeData = const_cast<wchar_t*>(Label(commands[command]));
+                    const std::wstring promotedLabel = PromotedLabel(commands[command]);
+                    item.dwTypeData = const_cast<wchar_t*>(promotedLabel.c_str());
                     item.hbmpItem = CommandBitmap(command);
                     if (!InsertMenuItemW(menu, position + promoted, TRUE, &item))
                     {
