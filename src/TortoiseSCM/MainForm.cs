@@ -132,6 +132,11 @@ namespace TortoiseSCM
             changes.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
             changes.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var selectionBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+            showUnversioned.Text = "显示未版本控制文件";
+            showUnversioned.AutoSize = true;
+            showUnversioned.Margin = new Padding(0, 1, 12, 0);
+            showUnversioned.CheckedChanged += async delegate { if (loaded && !busy) await RefreshAsync(); };
+            selectionBar.Controls.Add(showUnversioned);
             selectionBar.Controls.Add(new Label { Text = "选择：", AutoSize = true, Margin = new Padding(0, 3, 2, 0) });
             selectAll.Text = "全部 (&A)";
             selectNone.Text = "无 (&N)";
@@ -141,11 +146,6 @@ namespace TortoiseSCM
             selectNone.LinkClicked += delegate { foreach (ListViewItem item in files.Items) item.Checked = false; };
             selectionBar.Controls.Add(selectAll);
             selectionBar.Controls.Add(selectNone);
-            showUnversioned.Text = "显示未版本控制文件";
-            showUnversioned.AutoSize = true;
-            showUnversioned.Margin = new Padding(0, 1, 12, 0);
-            showUnversioned.CheckedChanged += async delegate { if (loaded && !busy) await RefreshAsync(); };
-            selectionBar.Controls.Add(showUnversioned);
             AddSelectionLink(selectionBar, "已版本控制", item => !IsPrivate(item.StatusCode));
             AddSelectionLink(selectionBar, "未版本控制", item => IsPrivate(item.StatusCode));
             changes.Controls.Add(selectionBar, 0, 0);
@@ -163,7 +163,7 @@ namespace TortoiseSCM
             menu.Items.Add("Annotate / Blame", null, async delegate { await ShowBlameAsync(HighlightedPaths()); });
             menu.Items.Add("显示历史 / 恢复版本", null, async delegate { await ExecuteAsync(PlasticCommand.History, HighlightedPaths()); });
             menu.Items.Add("查看差异", null, async delegate { await ExecuteAsync(PlasticCommand.Diff, HighlightedPaths()); });
-            menu.Items.Add("丢弃所选行的修改…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo, HighlightedPaths()); });
+            menu.Items.Add("撤销更改…", null, async delegate { await ExecuteAsync(PlasticCommand.Undo, HighlightedPaths()); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("重命名 / 移动…", null, async delegate { await ExecuteFileOperationAsync("move", HighlightedPaths()); });
             menu.Items.Add("删除受控项…", null, async delegate { await ExecuteFileOperationAsync("remove", HighlightedPaths()); });

@@ -37,6 +37,30 @@ namespace TortoiseSCM
         public Task<PlasticHistoryPage> GetHistoryPageAsync(string path, long? beforeChangeset, int scanLimit, CancellationToken cancellationToken)
         { return GetHistoryPageAsync(path, null, beforeChangeset, scanLimit, cancellationToken); }
 
+        public async Task<int> GetHistoryChangesetCountAsync(string path, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var validated = await BuildReadCommandAsync(path, cancellationToken).ConfigureAwait(false);
+            var workspace = DiscoverWorkspace(validated.WorkingDirectory);
+            if (workspace == null) throw new InvalidOperationException("The selected path is not in a Plastic SCM workspace.");
+            ValidateBranchRepository(workspace.Repository);
+            if (workspace.Repository.Contains("'")) throw new InvalidDataException("The repository cannot safely be represented in a history query.");
+            ValidateHistoryRepository(validated.WorkingDirectory, workspace.Repository);
+            var response = await ExecuteAsync(RevisionCommand(validated.WorkingDirectory, new[] {
+                "find", "changeset", "on repository '" + workspace.Repository + "'", "--format={id}", "--nototal", "--encoding=utf-8"
+            }), cancellationToken).ConfigureAwait(false);
+            RequireSuccess(response);
+            ValidateHistoryRepository(validated.WorkingDirectory, workspace.Repository);
+            int count = 0;
+            foreach (string line in response.Output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                long ignored;
+                if (Int64.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ignored)) count++;
+            }
+            if (count < 1) throw new InvalidDataException("The history query did not return a changeset count.");
+            return count;
+        }
+
         public async Task<PlasticHistoryPage> GetHistoryPageAsync(string path, string branch, long? beforeChangeset, int scanLimit, CancellationToken cancellationToken)
         {
             if (scanLimit < 1 || scanLimit > 100) throw new ArgumentOutOfRangeException("scanLimit", "Scan between 1 and 100 changesets per page.");

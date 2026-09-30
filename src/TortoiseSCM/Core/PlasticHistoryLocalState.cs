@@ -139,7 +139,12 @@ namespace TortoiseSCM
             if (state.LoadedChangesets != null) return !state.LoadedChangesets.Contains(entry.Changeset);
             bool missing;
             if (state.Missing.TryGetValue(entry.Changeset, out missing)) return missing;
-            if (entry.Changeset == 0) return !state.Items.ContainsKey("/");
+            // Gluon has no workspace changeset. Changesets 0 and 1 establish the
+            // repository root and initial tree; they are bootstrap metadata rather
+            // than actionable incoming updates. A root directory is also reported
+            // by cm ls with RevId/Changeset -1, so treating it as a missing item
+            // makes both initial rows appear bold in an otherwise valid workspace.
+            if (entry.Changeset <= 1) return false;
             var changes = (await HistoryFilesCachedAsync(state.Workspace.RootPath, state.Workspace.Repository,
                 entry.Changeset, token).ConfigureAwait(false)).Where(change => state.Scope == "/" || HistoryPathMatches(change, state.Scope)).ToList();
             if (changes.Any(change => !change.Revision.HasValue)) throw new InvalidDataException("历史明细缺少修订标识，无法判断本地版本。");

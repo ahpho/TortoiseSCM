@@ -38,6 +38,7 @@ namespace TortoiseSCM
         private bool loadingHistory;
         private bool hasMoreHistory = true;
         private int scannedChangesets;
+        private int totalChangesets;
         private bool historyCompatibilityFallback;
         private string historyRepository;
         private Font notLoadedFont;
@@ -288,13 +289,30 @@ namespace TortoiseSCM
             var seen = new HashSet<long>();
             string repository = null;
             long? before = null;
-            hasMoreHistory = true; scannedChangesets = 0; historyCompatibilityFallback = false;
+            hasMoreHistory = true; scannedChangesets = 0; totalChangesets = 0; historyCompatibilityFallback = false;
             UpdateHistorySummary();
             try
             {
                 string loadError = null;
                 try
                 {
+                    try
+                    {
+                        totalChangesets = await client.GetHistoryChangesetCountAsync(path, cancellation.Token);
+                        historyProgress.Style = ProgressBarStyle.Continuous;
+                        historyProgress.Minimum = 0;
+                        historyProgress.Maximum = Math.Max(1, totalChangesets);
+                        historyProgress.Value = 0;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch
+                    {
+                        // A server/client version may not support formatted totals.
+                        // History remains usable; only the visual indicator falls
+                        // back to an indeterminate state.
+                        totalChangesets = 0;
+                        historyProgress.Style = ProgressBarStyle.Marquee;
+                    }
                     var localSnapshot = ReadLocalStateAsync(cancellation.Token);
                     if (!wholeWorkspace)
                     {
@@ -342,6 +360,8 @@ namespace TortoiseSCM
                         historyCompatibilityFallback |= !String.IsNullOrEmpty(page.FallbackReason);
                         foreach (var item in page.Items) if (seen.Add(item.Changeset)) refreshed.Add(item);
                         scannedChangesets += page.ScannedChangesets;
+                        if (totalChangesets > 0)
+                            historyProgress.Value = Math.Min(scannedChangesets, historyProgress.Maximum);
                         before = page.NextBeforeChangeset;
                         hasMoreHistory = page.HasMore;
                         bool repositoryChanged = historyRepository != null && historyRepository != repository;
