@@ -245,12 +245,8 @@ namespace TortoiseSCM
             using (var form = OpenOperation("checkout", path))
             {
                 Require(Status(root) == clean && Field<Label>(form, "status").Text.Contains("签出"), "Shell checkout opens operation window without checking out automatically");
-                using (var guard = new DialogGuard(form, true, "继续签出", path))
-                {
-                    Field<Button>(form, "execute").PerformClick();
-                    Pump(() => !Field<bool>(form, "busy") && guard.Count == 1, "Checkout GUI handler completes");
-                    Require(guard.Count == 1 && guard.Error == "", "Checkout requires exact-path confirmation");
-                }
+                Field<Button>(form, "execute").PerformClick();
+                Pump(() => !Field<bool>(form, "busy"), "Checkout GUI handler completes without a second confirmation");
                 Require(Pending(root, path, "CO"), "Confirmed checkout creates native checkout state");
             }
             using (var checkin = Launch("checkin", root, false, null, null))
@@ -272,14 +268,11 @@ namespace TortoiseSCM
             {
                 Require(Field<Button>(cancelCheckout, "execute").Text == "撤销签出" && cancelCheckout.Text.Contains("撤销签出"),
                     "Checked-out file changes the checkout action to cancel checkout");
-                using (var guard = new DialogGuard(cancelCheckout, true, "继续撤销签出", path))
-                {
-                    Field<Button>(cancelCheckout, "execute").PerformClick();
-                    Pump(() => !Field<bool>(cancelCheckout, "busy") && guard.Count == 1, "Cancel checkout handler completes");
-                }
+                Field<Button>(cancelCheckout, "execute").PerformClick();
+                Pump(() => !Field<bool>(cancelCheckout, "busy"), "Cancel checkout handler completes without a second confirmation");
             }
             Require(!Pending(root, path, "CO"), "Cancel checkout clears the native checkout state");
-            using (var restoreCheckout = LaunchOperation("checkout", path, true, "继续签出", path)) { }
+            using (var restoreCheckout = LaunchOperation("checkout", path, true, null, null)) { }
             Require(Pending(root, path, "CO"), "Checkout action can be used again after cancellation");
             string checkoutDirectory = Path.Combine(root, mode + " recursive checkout");
             string checkoutFirst = Path.Combine(checkoutDirectory, "first.txt"), checkoutSecond = Path.Combine(checkoutDirectory, "second.txt");
@@ -288,7 +281,7 @@ namespace TortoiseSCM
                 Require(Wait(client.RunAsync(new PlasticCommandRequest { Command = command, WorkingDirectory = root,
                     Paths = new[] { checkoutDirectory }, Recursive = true, Comment = "GUI recursive checkout fixture" }, CancellationToken.None)).Succeeded,
                     "Seed recursive checkout directory with " + command);
-            using (var form = LaunchOperation("checkout-recursive", checkoutDirectory, true, "继续递归签出", checkoutDirectory))
+            using (var form = LaunchOperation("checkout-recursive", checkoutDirectory, true, null, null))
                 Require(Pending(root, checkoutFirst, "CO") && Pending(root, checkoutSecond, "CO"),
                     "Recursive checkout checks out every descendant");
             Require(Wait(client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Undo, WorkingDirectory = root,
@@ -382,9 +375,9 @@ namespace TortoiseSCM
             using (var guard = new DialogGuard(form, accept, expectedNote, expectedPath))
             {
                 Field<Button>(form, "execute").PerformClick();
-                Pump(() => !Field<bool>(form, "busy") && guard.Count == 1, "Shell " + command + " operation finishes");
+                Pump(() => !Field<bool>(form, "busy") && guard.Count == (expectedNote == null ? 0 : 1), "Shell " + command + " operation finishes");
                 Require(guard.Error == "", "No unexpected operation dialog: " + guard.Error);
-                Require(guard.Count == 1, "Expected exact confirmation count for " + command);
+                Require(guard.Count == (expectedNote == null ? 0 : 1), "Expected exact confirmation count for " + command);
             }
             return form;
         }

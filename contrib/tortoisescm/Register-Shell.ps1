@@ -32,6 +32,32 @@ function Register-OverlayClasses([Microsoft.Win32.RegistryKey]$ClassesKey) {
         try { $server.SetValue('', $dll); $server.SetValue('ThreadingModel', 'Apartment') } finally { $server.Dispose() }
     }
 }
+
+function Get-OverlayRegistrationNames([Microsoft.Win32.RegistryKey]$OverlayRoot) {
+    # Explorer only loads a limited number of overlay handlers.  A leading
+    # space sorts before ordinary names; follow the existing handlers and add
+    # one more space so TortoiseSCM remains visible even when Plastic/Tortoise
+    # handlers are already installed.  Reuse our existing names on upgrade so
+    # registration and removal never leave duplicate entries behind.
+    $byId = @{}
+    $maxIndent = 0
+    foreach ($name in $OverlayRoot.GetSubKeyNames()) {
+        $indent = ([regex]::Match($name, '^ +')).Value.Length
+        if ($indent -gt $maxIndent) { $maxIndent = $indent }
+        $key = $OverlayRoot.OpenSubKey($name)
+        try {
+            $value = [string]$key.GetValue('')
+            if ($value) { $byId[$value.ToUpperInvariant()] = $name }
+        } finally { $key.Dispose() }
+    }
+    $result = @{}
+    foreach ($overlay in $overlays) {
+        $id = $overlay.Id.ToUpperInvariant()
+        if ($byId.ContainsKey($id)) { $result[$id] = $byId[$id]; continue }
+        $result[$id] = ((' ' * ($maxIndent + 1)) + $overlay.Name)
+    }
+    return $result
+}
 $classes = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Classes')
 try {
     $class = $classes.CreateSubKey("CLSID\$clsid")
@@ -52,11 +78,13 @@ if ($EnableMachineOverlays) {
     try { Register-OverlayClasses $machineClasses } finally { $machineClasses.Dispose() }
     $overlayRoot = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers')
     try {
+        $registrationNames = Get-OverlayRegistrationNames $overlayRoot
         foreach ($overlay in $overlays) {
-            $key = $overlayRoot.CreateSubKey($overlay.Name)
+            $registryName = $registrationNames[$overlay.Id.ToUpperInvariant()]
+            $key = $overlayRoot.CreateSubKey($registryName)
             try {
                 $existing = $key.GetValue('')
-                if ($existing -and $existing -ne $overlay.Id) { throw "Overlay name already belongs to another handler: $($overlay.Name)" }
+                if ($existing -and $existing -ne $overlay.Id) { throw "Overlay name already belongs to another handler: $registryName" }
                 $key.SetValue('', $overlay.Id)
             } finally { $key.Dispose() }
         }

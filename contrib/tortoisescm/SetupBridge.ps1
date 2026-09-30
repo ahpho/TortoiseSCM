@@ -93,12 +93,17 @@ try {
     $pointerPath = Join-TscmOwnedPath $rootPath 'current-install.json'
     if ($Action -eq 'Install') {
         if ([string]::IsNullOrWhiteSpace($PackageArchive)) { throw '缺少随包安装文件。' }
-        $overlays = $false
+        # The graphical setup is elevated (Setup.iss uses PrivilegesRequired=admin),
+        # so a new installation enables Explorer's machine-level overlay handlers.
+        # TestSetup passes -NoRegister and must remain isolated from HKLM.
+        $overlays = -not $NoRegister
         if (Test-Path -LiteralPath $pointerPath -PathType Leaf) {
             $pointer = [IO.File]::ReadAllText($pointerPath) | ConvertFrom-Json
             $previous = Read-SetupOwnedRecord $rootPath $pointer.versionDirectory
             if ($NoRegister -and $previous.registered) { throw '隔离测试安装不能覆盖已注册的活动安装。' }
-            $overlays = [bool]$previous.machineOverlays
+            # Upgrade older per-user installs to the enabled machine overlay
+            # registration as well; the elevated setup owns this transition.
+            $overlays = -not $NoRegister
             if (($overlays -or ($previous.PSObject.Properties['modernMenu'] -and $previous.modernMenu)) -and -not (Test-TscmAdministrator)) {
                 throw '现有安装启用了系统级状态图标或现代菜单；请关闭安装程序，右键安装包选择“以管理员身份运行”后重试。'
             }

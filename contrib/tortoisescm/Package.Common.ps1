@@ -94,6 +94,12 @@ function Get-TscmRegistryTargets([bool]$MachineOverlays) {
     if ($MachineOverlays) {
         [pscustomobject]@{ hive = 'CurrentUser'; path = 'Software\Microsoft\Windows\CurrentVersion\Run'; valueName = 'TortoiseSCMCache' }
         foreach ($id in $classes | Select-Object -Skip 1) { [pscustomobject]@{ hive = 'LocalMachine'; path = "Software\Classes\CLSID\$id" } }
+        # Overlay registration names are intentionally selected at install time
+        # from the existing Explorer handlers (leading spaces win the 15-slot
+        # ordering). Snapshot the complete parent key so rollback restores the
+        # exact dynamic names and ordering, while retaining the explicit legacy
+        # targets below for compatibility with older package tests/installations.
+        [pscustomobject]@{ hive = 'LocalMachine'; path = 'Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers' }
         foreach ($name in @('Normal', 'Modified', 'Conflict', 'Added', 'Deleted', 'Ignored', 'Locked', 'Unversioned')) { [pscustomobject]@{ hive = 'LocalMachine'; path = "Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers\TortoiseSCM $name" } }
     }
 }

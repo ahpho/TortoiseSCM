@@ -159,7 +159,12 @@ namespace TortoiseSCM
             string label = undo ? "撤销签出" : CommandLabel(commandName);
             string warning = undo ? "所选项的本地更改将丢失。\r\n" : "";
             if (paths.Any(Directory.Exists)) warning += "目录操作会包含其全部子项，包括没有单独勾选的子项。\r\n";
-            if (MessageBox.Show(this, warning + String.Join("\r\n", paths.Take(12).ToArray()) +
+            // The operation window is already the review step: it shows the exact
+            // paths and checked rows immediately before execution. Checkout and
+            // cancel-checkout therefore execute directly, matching TortoiseSVN /
+            // TortoiseGit. Keep a confirmation only for destructive row undo,
+            // where local content is about to be discarded from a status view.
+            if (!IsCheckout() && MessageBox.Show(this, warning + String.Join("\r\n", paths.Take(12).ToArray()) +
                 (paths.Count > 12 ? "\r\n… 共 " + paths.Count + " 项" : "") + "\r\n\r\n继续" + label + "？",
                 "TortoiseSCM — " + label, MessageBoxButtons.OKCancel,
                 undo ? MessageBoxIcon.Warning : MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;

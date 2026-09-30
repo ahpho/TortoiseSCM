@@ -77,6 +77,25 @@ if ($RemoveMachineOverlays) {
     $overlayRoot = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers', $true)
     if ($overlayRoot) {
         try {
+            # Registration names may have leading spaces to win Explorer's
+            # overlay-slot ordering. Find entries by their handler CLSID so
+            # upgrades and uninstall also remove names chosen dynamically.
+            $ownedIds = @{}
+            foreach ($overlay in $overlays) { $ownedIds[$overlay.Id.ToUpperInvariant()] = $overlay }
+            $removeNames = @()
+            foreach ($name in $overlayRoot.GetSubKeyNames()) {
+                $key = $overlayRoot.OpenSubKey($name)
+                try {
+                    $value = [string]$key.GetValue('')
+                    if ($value -and $ownedIds.ContainsKey($value.ToUpperInvariant()) -and
+                        $machineClasses -and (Test-OwnedServer $machineClasses $ownedIds[$value.ToUpperInvariant()].Id)) {
+                        $removeNames += $name
+                    }
+                } finally { $key.Dispose() }
+            }
+            foreach ($name in $removeNames) { $overlayRoot.DeleteSubKeyTree($name, $false) }
+            <# Keep the explicit legacy-name pass for installations created
+               before dynamic priority names were introduced. #>
             foreach ($overlay in $overlays) {
                 if (-not $machineClasses -or -not (Test-OwnedServer $machineClasses $overlay.Id)) { continue }
                 $key = $overlayRoot.OpenSubKey($overlay.Name)

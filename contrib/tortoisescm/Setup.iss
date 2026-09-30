@@ -31,7 +31,9 @@ AppVersion={#PackageVersion}
 AppPublisher=TortoiseSCM contributors
 AppPublisherURL=https://github.com/ahpho/TortoiseSCM
 AppSupportURL=https://github.com/ahpho/TortoiseSCM/issues
-PrivilegesRequired=lowest
+; Explorer discovers icon overlay handlers from HKLM. The setup therefore
+; requests elevation and enables the machine registration by default.
+PrivilegesRequired=admin
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
@@ -60,7 +62,7 @@ Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Messages]
 WelcomeLabel2=本向导将安装或升级 TortoiseSCM。%n%n已包含比较和合并工具，无需另行安装。需要预先安装 Plastic SCM / Unity Version Control 客户端和 .NET Framework 4.8。%n%n安装完成后使用资源管理器右键菜单。向导不会自动打开工作区，也不会自动重启资源管理器。
-FinishedLabel=安装成功。%n%n请通过文件或目录的右键菜单使用 TortoiseSCM。“版本信息”可以核对当前程序版本。默认使用包内 TortoiseGitMerge，也可在设置中选择 Beyond Compare。
+FinishedLabel=安装成功。%n%n右键菜单和 SCM 状态图标覆盖已经注册；如资源管理器仍显示旧图标，请重启资源管理器。请通过文件或目录的右键菜单使用 TortoiseSCM。“版本信息”可以核对当前程序版本。默认使用包内 TortoiseGitMerge，也可在设置中选择 Beyond Compare。
 
 [Files]
 Source: "{#PackageArchive}"; DestName: "payload.zip"; Flags: dontcopy
