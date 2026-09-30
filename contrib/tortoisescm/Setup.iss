@@ -31,9 +31,15 @@ AppVersion={#PackageVersion}
 AppPublisher=TortoiseSCM contributors
 AppPublisherURL=https://github.com/ahpho/TortoiseSCM
 AppSupportURL=https://github.com/ahpho/TortoiseSCM/issues
-; Explorer discovers icon overlay handlers from HKLM. The setup therefore
-; requests elevation and enables the machine registration by default.
+#ifdef TestSetup
+; The isolated wizard test must remain a per-user install so its Apps entry
+; and payload are disposable without changing the machine registry.
+PrivilegesRequired=lowest
+#else
+; Explorer discovers icon overlay handlers from HKLM. The production setup
+; therefore requests elevation and enables machine registration by default.
 PrivilegesRequired=admin
+#endif
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
