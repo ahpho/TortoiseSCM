@@ -71,6 +71,7 @@ internal static class WorkspaceCreationTests
                 Check(File.ReadAllText(Path.Combine(root, "switch-args")) == "br:/main/topic 中文 & literal@" + Repository + "\n--workspace=" + Target(), "Explicit branch literal args, no default download");
                 Check(File.ReadAllText(Path.Combine(Target(), "downloaded.txt")) == "selected", "Selected files downloaded");
                 Check(Read("create-count") == "1" && Read("switch-count") == "1", "Exactly one create/download");
+                Check(File.Exists(Path.Combine(Target(), ".plastic", "tortoisescm-root-update.xml")), "Confirmed first download records its root version");
             }
             foreach (string selectedBranch in new[] { "/main", "/main/topic 中文 & literal" })
             {
@@ -80,6 +81,7 @@ internal static class WorkspaceCreationTests
                 Check(Read("configure-count") == "1" && Read("partial-update-count") == "1", "Gluon initializes exactly once after full download");
                 Check(Read("branch") == selectedBranch && File.ReadAllText(Path.Combine(Target(), "downloaded.txt")) == "selected", "Gluon retains requested branch and first-download bytes");
                 Check(File.ReadAllText(Path.Combine(Target(), ".plastic", "plastic.workspace")).EndsWith("Standard"), "Mode verification uses actual tree, not stale metadata label");
+                Check(File.ReadAllText(Path.Combine(Target(), ".plastic", "tortoisescm-root-update.xml")).Contains("<Changeset>0</Changeset>"), "Gluon creation records its verified standard download baseline");
             }
             foreach (string mode in new[] { "configure-fail", "partial-update-fail", "partial-mode-wrong", "partial-branch-wrong", "partial-repo-changed" })
             {
@@ -186,7 +188,7 @@ internal static class WorkspaceCreationTests
                 Check(File.Exists(Path.Combine(root, "switch-count")), "Configure follows full branch download");
                 Count("configure-count"); return mode == "configure-fail" ? 1 : 0;
             }
-            if (args.SequenceEqual(new[] { "partial", "update", ".", "--report" }))
+            if (args.SequenceEqual(new[] { "partial", "update", ".", "--report", "--changeset=0" }))
             {
                 Check(File.Exists(Path.Combine(root, "configure-count")), "Partial update follows configure");
                 Count("partial-update-count");

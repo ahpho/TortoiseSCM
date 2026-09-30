@@ -60,6 +60,7 @@ namespace TortoiseSCM
                         // Selector and wktree are intentionally allowed to change after
                         // native switching: loaded items now refer to the target revisions.
                         ValidateBranchWorkspaceUnchanged(updated);
+                        if (!token.IsCancellationRequested) RecordHistoryRootLoaded(updated, expected.HeadChangeset);
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception error) { result.ExitCode = 1; result.Error += "Partial branch switch verification failed: " + error.Message + advisory; }

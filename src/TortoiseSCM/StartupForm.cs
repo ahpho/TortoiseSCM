@@ -38,7 +38,10 @@ namespace TortoiseSCM
             status.Text = "首次拉取默认 Gluon，可按文件或目录更新；也可选择 Standard。默认 TortoiseGitMerge，也可在设置中选择 Beyond Compare。"; status.Dock = DockStyle.Fill; layout.Controls.Add(status, 0, 3);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft }; buttons.Controls.Add(close); buttons.Controls.Add(version); layout.Controls.Add(buttons, 0, 4);
             Controls.Add(layout); AcceptButton = create; CancelButton = close;
-            create.Click += delegate { var path = createNew(); if (!String.IsNullOrEmpty(path)) Finish(path); };
+            create.Click += delegate {
+                var path = createNew();
+                if (!String.IsNullOrEmpty(path)) status.Text = "拉取完成：" + path + "\r\n可以从资源管理器使用 SCM 菜单，或点击“打开已有工作区”。";
+            };
             version.Click += delegate { using (var form = new VersionInfoForm()) form.ShowDialog(this); };
             open.Click += async delegate { await OpenAsync(); }; settings.Click += delegate { using (var form = new SettingsForm()) form.ShowDialog(this); }; close.Click += delegate { Close(); };
             FormClosing += delegate { if (cancellation != null) cancellation.Cancel(); };

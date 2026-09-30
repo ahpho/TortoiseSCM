@@ -71,7 +71,7 @@ internal static class HistoryWorkflowGuiIntegrationTests
             string selector = Selector(root), clean = Native(root, "status", "--short", "--machinereadable"), head = Head(root);
             using (var form = Open(client, local, root, branch))
             {
-                EqualHistory(form, new[] { first, second, third }, kind + " file loads all versions automatically");
+                EqualHistory(form, new[] { first, second, third }, kind + " file loads all versions after explicit full refresh if needed");
                 Select(form, third, "/" + file); Screenshot(form, kind + "-file-history");
                 Compare(form, false, "version two 中文\r\n", "version three 中文\r\n");
                 Compare(form, true, "version two 中文\r\n", "version three 中文\r\n");
@@ -114,8 +114,12 @@ internal static class HistoryWorkflowGuiIntegrationTests
         Console.WriteLine("OPEN " + path + " branch=" + selectedBranch);
         var form = new HistoryForm(client, path, root, selectedBranch);
         form.ShowInTaskbar = false; form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-24000, -24000); form.Show();
-        Pump(() => !(bool)Field(form, "loadingHistory"), "all history");
-        Check(!(bool)Field(form, "hasMoreHistory") && ((ListView)Field(form, "revisions")).Items.Count > 0, "History completes without manual refresh"); return form;
+        Pump(() => !(bool)Field(form, "loadingHistory"), "recent history");
+        if ((bool)Field(form, "hasMoreHistory")) {
+            ((Button)Field(form, "refreshHistory")).PerformClick();
+            Pump(() => !(bool)Field(form, "loadingHistory"), "explicit full refresh");
+        }
+        Check(!(bool)Field(form, "hasMoreHistory") && ((ListView)Field(form, "revisions")).Items.Count > 0, "History is complete after explicit refresh when needed"); return form;
     }
     private static void EqualHistory(HistoryForm form, long[] expected, string description)
     {

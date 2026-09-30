@@ -37,6 +37,8 @@ namespace TortoiseSCM
         private CancellationTokenSource historyRequest;
         private bool loadingHistory;
         private bool hasMoreHistory = true;
+        private bool fullHistoryScan;
+        private bool historyLoadFailed;
         private int scannedChangesets;
         private int totalChangesets;
         private bool historyCompatibilityFallback;
@@ -92,11 +94,12 @@ namespace TortoiseSCM
             MinimumSize = new Size(860, 580);
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Dpi;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 5 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 6 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, branch == null ? 30 : 54));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = branch == null ? 1 : 2, Margin = Padding.Empty };
@@ -109,7 +112,7 @@ namespace TortoiseSCM
                 TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, Margin = new Padding(0, 0, 12, 3) }, 0, 0);
             header.Controls.Add(new Label { Text = "筛选(&F):", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 1, 0);
             filter.Dock = DockStyle.Fill;
-            filter.AccessibleName = "筛选全部历史：版本、日期、作者、分支或说明";
+            filter.AccessibleName = "筛选已加载历史：版本、日期、作者、分支或说明";
             filter.Margin = new Padding(3, 2, 0, 4);
             filter.TextChanged += async delegate { await ApplyFilterAsync(); };
             header.Controls.Add(filter, 2, 0);
@@ -197,10 +200,11 @@ namespace TortoiseSCM
             status.Margin = Padding.Empty;
             historySummary.Dock = DockStyle.Fill; historySummary.AutoEllipsis = true;
             historySummary.TextAlign = ContentAlignment.MiddleLeft; historySummary.Margin = Padding.Empty;
-            var historyNavigation = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
-            historyNavigation.Controls.Add(historySummary);
+            var historyNavigation = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty,
+                FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
             layout.Controls.Add(historyNavigation, 0, 2);
-            layout.Controls.Add(status, 0, 3);
+            layout.Controls.Add(historySummary, 0, 3);
+            layout.Controls.Add(status, 0, 4);
             restore.Text = wholeWorkspace ? "整仓回滚为待提交(&R)..." : "恢复此范围到此版本(&R)...";
             restore.Dock = DockStyle.Fill;
             restore.Margin = new Padding(3, 3, 6, 3);
@@ -210,10 +214,12 @@ namespace TortoiseSCM
             historicalFile.Dock = DockStyle.Fill; historicalFile.Enabled = false;
             historicalFile.Click += async delegate { await CompareHistoricalFileAsync(false); };
             footer.Controls.Add(historicalFile, 0, 0);
-            var paging = new FlowLayoutPanel { Dock = DockStyle.Right, Width = 164, Margin = Padding.Empty, WrapContents = false };
             refreshHistory.Text = "刷新全部"; refreshHistory.Width = 78;
+            refreshHistory.Height = cancelHistory.Height = 26;
+            refreshHistory.Margin = new Padding(0, 0, 6, 0);
             refreshHistory.Click += async delegate { await LoadHistoryPageAsync(true); };
             cancelHistory.Text = "取消加载"; cancelHistory.Width = 72; cancelHistory.Enabled = false;
+            cancelHistory.Margin = new Padding(0, 0, 8, 0);
             cancelHistory.Click += delegate
             {
                 if (historyRequest != null) historyRequest.Cancel();
@@ -223,12 +229,12 @@ namespace TortoiseSCM
             historyProgress.Style = ProgressBarStyle.Marquee;
             historyProgress.MarqueeAnimationSpeed = 30;
             historyProgress.Width = 118;
-            historyProgress.Dock = DockStyle.Right;
-            historyProgress.Margin = new Padding(4, 6, 4, 6);
+            historyProgress.Height = 12;
+            historyProgress.Margin = new Padding(0, 7, 0, 0);
             historyProgress.Visible = false;
+            historyNavigation.Controls.Add(refreshHistory);
+            historyNavigation.Controls.Add(cancelHistory);
             historyNavigation.Controls.Add(historyProgress);
-            paging.Controls.Add(refreshHistory); paging.Controls.Add(cancelHistory);
-            historyNavigation.Controls.Add(paging);
             snapshot.Text = "切换历史快照…";
             snapshot.Dock = DockStyle.Fill; snapshot.Visible = wholeWorkspace; snapshot.Enabled = false;
             snapshot.Click += async delegate { await RestoreAsync(true); };
@@ -240,7 +246,7 @@ namespace TortoiseSCM
             close.DialogResult = DialogResult.Cancel;
             footer.Controls.Add(close, 4, 0);
             CancelButton = close;
-            layout.Controls.Add(footer, 0, 4);
+            layout.Controls.Add(footer, 0, 5);
             Controls.Add(layout);
             DialogStyle.Apply(this);
             normalRevisionFont = new Font(revisions.Font, FontStyle.Regular);
@@ -248,10 +254,10 @@ namespace TortoiseSCM
             revisions.ShowItemToolTips = true;
             // Row fonts are applied when local-state work completes. Reapplying
             // them on focus changes causes ListView to repaint stale bold state.
-            Shown += async delegate { await LoadHistoryPageAsync(true); };
+            Shown += async delegate { await LoadHistoryPageAsync(false); };
             Activated += async delegate
             {
-                if (!loadingHistory && !writing && !checkingLocalState && entries.Count > 0)
+                if (wholeWorkspace && !loadingHistory && !writing && !checkingLocalState && entries.Count > 0)
                 { await ReadLocalStateAsync(lifetime.Token); await UpdateLocalRowsAsync(lifetime.Token); }
             };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (writing) e.Cancel = true; else lifetime.Cancel(); };
@@ -275,13 +281,15 @@ namespace TortoiseSCM
         {
             if (loadingHistory || writing || checkingLocalState || lifetime.IsCancellationRequested) return;
             loadingHistory = true;
+            fullHistoryScan = reset;
+            historyLoadFailed = false;
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             historyRequest = cancellation;
             refreshHistory.Enabled = false; cancelHistory.Enabled = true;
-            historyProgress.Visible = true;
+            historyProgress.Visible = reset;
             historyProgress.Style = ProgressBarStyle.Marquee;
             historyProgress.MarqueeAnimationSpeed = 30;
-            status.Text = "正在读取全部历史；可随时取消…";
+            status.Text = reset ? "正在读取全部历史；可随时取消…" : "正在读取最近历史…";
             // During refresh retain old rows alongside completed batches; on failure
             // restore the previous result. Native hints never establish completeness.
             var previous = entries.ToList();
@@ -298,7 +306,7 @@ namespace TortoiseSCM
                 string loadError = null;
                 try
                 {
-                    try
+                    if (reset) try
                     {
                         totalChangesets = await client.GetHistoryChangesetCountAsync(path, cancellation.Token);
                         historyProgress.Style = ProgressBarStyle.Continuous;
@@ -315,7 +323,7 @@ namespace TortoiseSCM
                         totalChangesets = 0;
                         historyProgress.Style = ProgressBarStyle.Marquee;
                     }
-                    var localSnapshot = ReadLocalStateAsync(cancellation.Token);
+                    var localSnapshot = wholeWorkspace ? ReadLocalStateAsync(cancellation.Token) : Task.CompletedTask;
                     if (!wholeWorkspace)
                     {
                         if (branch != null) ValidateHistoryContext();
@@ -370,8 +378,8 @@ namespace TortoiseSCM
                         if (repositoryChanged) comparisonChangeset = null;
                         historyRepository = repository;
                         entries.Clear();
-                        // The final list comes exclusively from the complete publication scan.
-                        // Until then, newly confirmed rows can be used without hiding old rows.
+                        // A default load stops after one bounded publication page. A full
+                        // refresh retains previous rows until all pages have succeeded.
                         IEnumerable<PlasticHistoryItem> visible = refreshed;
                         if (page.HasMore) visible = visible.Concat(previewItems)
                             .Concat(previousRepository == repository ? previous : new List<PlasticHistoryItem>());
@@ -381,14 +389,15 @@ namespace TortoiseSCM
                         await UpdateLocalRowsAsync(cancellation.Token);
                         UpdateHistorySummary();
                         // Yield between bounded batches even when all backend tasks are cached.
-                        if (page.HasMore) await Task.Yield();
+                        if (reset && page.HasMore) await Task.Yield();
                     }
-                    while (hasMoreHistory);
+                    while (reset && hasMoreHistory);
                 }
                 catch (OperationCanceledException) { loadError = "已取消加载；已加载历史保留。点击“刷新全部”重试。"; }
                 catch (Exception ex) { loadError = "读取失败：" + ex.Message; }
                 if (loadError != null && !lifetime.IsCancellationRequested)
                 {
+                    historyLoadFailed = true;
                     hasMoreHistory = true;
                     // Restore/snapshot cancels history before starting its write. Do
                     // not change its status or desynchronize visible and stored rows.
@@ -423,9 +432,14 @@ namespace TortoiseSCM
 
         private void UpdateHistorySummary()
         {
-            historySummary.Text = (localStateError == null ? "粗体：当前更新范围内未拉取；" : "本地拉取状态暂不可用；") +
+            historySummary.Text = (wholeWorkspace ? (localStateError != null ? "根目录拉取状态暂不可用；" :
+                (localState == null ? "" : "根目录已更新至 cs:" + localState.LoadedThroughChangeset +
+                    (localState.IsApproximate ? "（初始估算）" : "") + "；") + "粗体：未拉取；") : "") +
                 revisions.Items.Count + " / " + entries.Count + " 个已加载提交；已扫描 " + scannedChangesets +
-                " 个提交；" + (hasMoreHistory ? (loadingHistory ? "正在读取全部历史，可取消" : "加载未完成，请刷新全部重试") : "已扫描全部历史") +
+                (totalChangesets > 0 ? " / " + totalChangesets : "") + " 个提交；" +
+                (loadingHistory ? (fullHistoryScan ? "正在读取全部历史，可取消" : "正在读取最近历史") :
+                    (historyLoadFailed ? "加载未完成，请刷新全部重试" :
+                        (hasMoreHistory ? "仅加载最近一页，点击刷新全部读取更早历史" : "已扫描全部历史"))) +
                 (branch != null ? "（仅本分支提交，不含祖先）" :
                     (wholeWorkspace ? "" : "（路径历史，不追溯重命名前的其他路径）")) +
                 (historyCompatibilityFallback ? "；已使用兼容查询" : "");
@@ -470,6 +484,7 @@ namespace TortoiseSCM
 
         private async Task ReadLocalStateAsync(CancellationToken token)
         {
+            if (!wholeWorkspace) return;
             int request = ++localStateGeneration;
             checkingLocalState = true;
             localState = null; localStateError = null; notLoaded.Clear();
@@ -497,7 +512,7 @@ namespace TortoiseSCM
 
         private async Task UpdateLocalRowsAsync(CancellationToken token)
         {
-            if (localState == null || checkingLocalState || lifetime.IsCancellationRequested) return;
+            if (!wholeWorkspace || localState == null || checkingLocalState || lifetime.IsCancellationRequested) return;
             int request = localStateGeneration;
             var state = localState;
             checkingLocalState = true;
@@ -549,11 +564,10 @@ namespace TortoiseSCM
         private void ApplyLocalRowStyle(ListViewItem row)
         {
             bool missing;
-            bool known = notLoaded.TryGetValue(((PlasticHistoryItem)row.Tag).Changeset, out missing);
+            bool known = notLoaded.TryGetValue(((PlasticHistoryItem)row.Tag).Changeset, out missing) && wholeWorkspace;
             row.Font = known && missing ? notLoadedFont : normalRevisionFont;
-            row.ToolTipText = known ? (missing ? "当前更新范围内尚未拉取到本地" :
-                (localState != null && !localState.HeadAncestors.Contains(((PlasticHistoryItem)row.Tag).Changeset) ?
-                    "不属于当前工作区的更新范围，无需拉取" : "已包含在本地加载版本中（当前范围）")) :
+            row.ToolTipText = !wholeWorkspace ? "" : known ? (missing ? "根目录尚未拉取此变更集" :
+                (((PlasticHistoryItem)row.Tag).Changeset <= 1 ? "仓库初始变更集" : "根目录已更新至此变更集或更高版本")) :
                 (localStateError == null ? "正在检查本地拉取状态…" : "无法判断本地拉取状态：" + localStateError);
         }
 

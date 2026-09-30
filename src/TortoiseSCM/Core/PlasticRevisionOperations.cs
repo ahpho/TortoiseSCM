@@ -183,7 +183,10 @@ namespace TortoiseSCM
             IList<string> args = workspace.IsPartial
                 ? new List<string> { "partial", "update", root, "--changeset=" + changeset.ToString(CultureInfo.InvariantCulture), "--dontmerge", "--report" }
                 : new List<string> { "switch", "cs:" + changeset.ToString(CultureInfo.InvariantCulture), "--workspace=" + root };
-            var result = await ExecuteAsync(RevisionCommand(root, args), cancellationToken).ConfigureAwait(false);
+            var command = RevisionCommand(root, args);
+            var historyUpdate = workspace.IsPartial ? await PrepareHistoryRootUpdateAsync(command, cancellationToken).ConfigureAwait(false) : null;
+            var result = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            await CompleteHistoryRootUpdateAsync(historyUpdate, result, cancellationToken).ConfigureAwait(false);
             if (result.Succeeded && workspace.IsPartial) result.Output += Environment.NewLine + "Loaded partial workspace scope at the requested changeset; working branch and load configuration retained.";
             return result;
         }

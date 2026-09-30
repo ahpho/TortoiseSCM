@@ -129,6 +129,7 @@ namespace TortoiseSCM
                     await VerifyCreatedWorkspaceAsync(repository, name, path, false, CancellationToken.None).ConfigureAwait(false);
                     var actualBranch = (await GetBranchesAsync(path, CancellationToken.None).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch && item.IsCurrent);
                     RequireCreationBranchIdentity(selected, actualBranch);
+                    long downloadedChangeset = await ReadHistoryWorkspaceChangesetAsync(DiscoverWorkspace(path), CancellationToken.None).ConfigureAwait(false);
                     if (partial)
                     {
                         result.Stage = "配置 Gluon 工作区";
@@ -140,7 +141,8 @@ namespace TortoiseSCM
                         // Empty configure can retain the complete tree. A partial update establishes
                         // partial tree semantics even for an empty branch; metadata text is not authoritative.
                         result.Stage = "完成 Gluon 初始化";
-                        var partialUpdate = await ExecuteAsync(CreationCommand(path, new[] { "partial", "update", ".", "--report" }), CancellationToken.None).ConfigureAwait(false);
+                        var partialUpdate = await ExecuteAsync(CreationCommand(path, new[] { "partial", "update", ".", "--report",
+                            "--changeset=" + downloadedChangeset.ToString(System.Globalization.CultureInfo.InvariantCulture) }), CancellationToken.None).ConfigureAwait(false);
                         result.Output += partialUpdate.Output;
                         if (!partialUpdate.Succeeded) throw new PlasticCommandException(partialUpdate);
                         await RequireCreationRepositoryAsync(repository, CancellationToken.None).ConfigureAwait(false);
@@ -148,6 +150,7 @@ namespace TortoiseSCM
                         actualBranch = (await GetBranchesAsync(path, CancellationToken.None).ConfigureAwait(false)).SingleOrDefault(item => item.Name == branch && item.IsCurrent);
                         RequireCreationBranchIdentity(selected, actualBranch);
                     }
+                    RecordHistoryRootLoaded(DiscoverWorkspace(path), downloadedChangeset);
                     result.UpdateCompleted = true; result.Stage = "完成";
                     return result;
                 }

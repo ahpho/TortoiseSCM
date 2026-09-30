@@ -45,6 +45,7 @@ namespace TortoiseSCM
         private CommitMessageStore messageStore = CommitMessageStore.CreateDefault();
         private Func<string, string, string> showMessageLibrary;
         private Func<string, bool> confirmMessageReplacement;
+        private Func<string> showWorkspaceCreation;
 
         public MainForm(LaunchRequest request) : this(request, true) { }
 
@@ -58,6 +59,8 @@ namespace TortoiseSCM
             prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinFastAsync(root, paths, repository, selector, token);
             submitCheckin = (preview, message, token) => client.CheckinPreparedFastAsync(preview, message, token, SelectedCheckinInputMode());
             runCommand = (commandRequest, token) => client.RunAsync(commandRequest, token);
+            showWorkspaceCreation = delegate { using (var wizard = new WorkspaceCreationForm())
+                return wizard.ShowDialog(this) == DialogResult.OK ? wizard.SelectedWorkspacePath : null; };
             // The preview is already shown in the main check-in window. Submit
             // immediately after preflight; keep this delegate as a test seam so
             // UI tests can still simulate a cancelled submission without opening
@@ -249,18 +252,7 @@ namespace TortoiseSCM
             operations.Items.Add("操作记录…", null, delegate { ShowOutput(); });
             operations.Items.Add(new ToolStripSeparator());
             operations.Items.Add("打开 Gluon", null, async delegate { await ExecuteAsync(PlasticCommand.Gluon); });
-            operations.Items.Add("拉取仓库…", null, delegate {
-                if (busy) return;
-                using (var wizard = new WorkspaceCreationForm())
-                {
-                    if (wizard.ShowDialog(this) != DialogResult.OK) return;
-                    try {
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath,
-                            "--path " + PlasticClient.QuoteArgument(wizard.SelectedWorkspacePath)) { UseShellExecute = false });
-                    }
-                    catch (Exception ex) { ShowError(new InvalidOperationException("工作区已创建，但无法打开新窗口。请从该目录右键打开 TortoiseSCM。\r\n" + wizard.SelectedWorkspacePath, ex)); }
-                }
-            });
+            operations.Items.Add("拉取仓库…", null, delegate { PullRepository(); });
             operations.Items.Add("设置…", null, delegate { using (var settings = new SettingsForm()) settings.ShowDialog(this); client = WinFormsPlasticToolHost.CreateClient(PlasticClientConfig.Load(), this); });
             operations.Items.Add("版本信息…", null, delegate { using (var version = new VersionInfoForm()) version.ShowDialog(this); });
             actions.Click += delegate { operations.Show(actions, new Point(0, actions.Height)); };
@@ -309,6 +301,13 @@ namespace TortoiseSCM
                 comment.Text = selected; comment.Focus(); comment.SelectionStart = comment.TextLength;
             }
             catch (Exception ex) { AppendOutput(ex.Message); reportError("无法使用提交说明：" + ex.Message); }
+        }
+
+        private void PullRepository()
+        {
+            if (busy) return;
+            string path = showWorkspaceCreation();
+            if (!String.IsNullOrEmpty(path)) status.Text = "拉取完成：" + path;
         }
 
         private void AddSelectionLink(FlowLayoutPanel panel, string text, Func<PlasticStatusItem, bool> predicate)

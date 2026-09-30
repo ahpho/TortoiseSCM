@@ -1,6 +1,5 @@
-// GPL-2.0-or-later. Native-command contract and isolated Gluon regression tests.
+// GPL-2.0-or-later. Root-watermark history tests in an isolated native-process double.
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -13,248 +12,203 @@ using TortoiseSCM;
 internal static class HistoryLocalStateTests
 {
     private static int assertions;
-    private static readonly CancellationToken Token = CancellationToken.None;
     private const string Repository = "test@server:8087";
-
+    private static readonly CancellationToken Token = CancellationToken.None;
     private static int Main(string[] args)
     {
-        if (args.Length > 0 && new[] { "status", "ls", "log", "diff", "find" }.Contains(args[0])) return Fake(args);
-        try
-        {
-            if (args.Length == 3 && args[0] == "--read-only") ReadOnly(args[1], Int32.Parse(args[2])).GetAwaiter().GetResult();
-            else if (args.Length == 5 && args[0] == "--live") Live(args).GetAwaiter().GetResult();
-            else if (args.Length == 0) Run().GetAwaiter().GetResult();
-            else throw new ArgumentException("Use --read-only <workspace> <expected-bold-count> or --live <producer> <partial> <repository> <branch>.");
-            Console.WriteLine("PASS: history local state (" + assertions + " assertions)"); return 0;
-        }
-        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+        if (args.Length != 0) return Fake(args);
+        try { Run().GetAwaiter().GetResult(); Console.WriteLine("PASS: root history watermark (" + assertions + " assertions)"); return 0; }
+        catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 
     private static async Task Run()
     {
-        string root = Path.Combine(Path.GetTempPath(), "TortoiseSCM-history-local-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "TSCM-history-root-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, ".plastic"));
-        File.WriteAllText(Path.Combine(root, ".plastic", "plastic.workspace"), "history-local\nguid\nStandard\n");
-        File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"" + Repository + "\"\n path \"/\"\n branch \"/main\"");
+        Directory.CreateDirectory(Path.Combine(root, "child"));
+        Write(root, "plastic.workspace", "History test\r\nunique-workspace-id\r\nStandard\r\n");
+        Selector(root, "/main");
+        Write(root, "loaded", "10"); Write(root, "root-revision", "10"); Write(root, "head", "12");
+        File.WriteAllText(Path.Combine(root, "child", "file.txt"), "content");
         var client = new PlasticClient(new PlasticClientConfig { CmPath = Assembly.GetExecutingAssembly().Location });
         try
         {
             var state = await client.GetHistoryLocalStateAsync(root, Token);
-            Require(!await Missing(client, state, 10), "Complete workspace contains its loaded changeset");
-            Require(!await Missing(client, state, 2), "Complete workspace includes merged/parent ancestors");
-            Require(!await Missing(client, state, 4), "An older unmerged branch is not an incoming update");
-            Require(await Missing(client, state, 11), "A newer commit is not loaded");
-            Require(await Missing(client, state, 7), "An incoming ancestor remains bold regardless of its older changeset number");
-            string selector = File.ReadAllText(Path.Combine(root, ".plastic", "plastic.selector"));
-            File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), "repository \"" + Repository + "\"\n changeset \"10\"");
+            Require(state.IsWorkspaceRoot && !state.IsApproximate && state.LoadedThroughChangeset == 10, "Standard workspace uses one native loaded changeset");
+            Require(!await Missing(client, state, 0) && !await Missing(client, state, 1) && !await Missing(client, state, 10) && await Missing(client, state, 11), "Only root versions beyond its watermark are bold; bootstrap revisions stay ordinary");
+            int calls = Calls(root).Length;
+            var child = await client.GetHistoryLocalStateAsync(Path.Combine(root, "child"), Token);
+            var file = await client.GetHistoryLocalStateAsync(Path.Combine(root, "child", "file.txt"), Token);
+            Require(!child.IsWorkspaceRoot && !await Missing(client, child, 12) && !await Missing(client, file, 12), "Child directories and file histories are always ordinary");
+            Require(Calls(root).Length == calls, "Child local-state checks start no native processes");
+            var rows = await client.GetHistoryNotLoadedAsync(state, Enumerable.Range(0, 1000).Select(cs => Entry(cs)).ToArray(), Token);
+            Require(rows.Count == 1000 && rows[999] && !rows[10] && Calls(root).Length == calls, "A thousand row comparisons use only the root number, with no native calls");
+            Write(root, "loaded", "5");
             state = await client.GetHistoryLocalStateAsync(root, Token);
-            Require(!await Missing(client, state, 11), "A pinned workspace does not claim later branch changes need downloading");
-            File.WriteAllText(Path.Combine(root, ".plastic", "plastic.selector"), selector);
-            File.WriteAllText(Path.Combine(root, ".plastic", "complete"), "");
+            Require(state.LoadedThroughChangeset == 5 && await Missing(client, state, 10), "Standard rollback immediately makes later changesets bold again");
+            Write(root, "partial", ""); Write(root, "root-revision", "10");
             state = await client.GetHistoryLocalStateAsync(root, Token);
-            for (long cs = 0; cs <= 12; cs++) Require(!await Missing(client, state, cs), "Fully updated standard workspace has no bold rows");
-            File.Delete(Path.Combine(root, ".plastic", "complete"));
-            File.WriteAllText(Path.Combine(root, ".plastic", "partial"), "");
+            Require(state.IsApproximate && state.LoadedThroughChangeset == 10 && !await Missing(client, state, 10), "An existing Gluon workspace gets one approximate root-only initial value");
+            Require(File.Exists(Meta(root, "tortoisescm-root-update.xml")) && Calls(root).Count(line => line.StartsWith("fileinfo ")) == 1, "The approximate initial value is persisted after one root-only fileinfo");
+            Write(root, "root-revision", "99");
             state = await client.GetHistoryLocalStateAsync(root, Token);
-            int calls = File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Length;
-            Require(!await Missing(client, state, 4), "Unmerged branch is also regular in mixed-version workspaces");
-            for (long unrelated = 100; unrelated < 1100; unrelated++)
-                Require(!await Missing(client, state, unrelated), "Unrelated history is not pending download");
-            Require(File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Length == calls,
-                "A thousand unrelated rows need zero additional native processes");
-            Require(await Missing(client, state, 5), "Upper directory stays bold when only one of two changed files is pulled");
-            var fileState = await client.GetHistoryLocalStateAsync(Path.Combine(root, "new.txt"), Token);
-            Require(!await Missing(client, fileState, 5), "File history only considers its selected scope");
-            Require(!await Missing(client, state, 6), "A later revision includes an earlier file change");
-            Require(!await Missing(client, state, 7), "Republishing an older revision already loaded locally is not missing");
-            Require(await Missing(client, state, 8), "A deletion whose old revision remains local is missing");
-            Require(!await Missing(client, state, 9), "A deletion already absent locally is applied");
-            Require(await Missing(client, state, 12), "An incoming rename is missing until the destination is loaded");
-            int diffCalls = File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("diff "));
-            var details = await client.GetHistoryDetailsAsync(root, new PlasticHistoryItem { Changeset = 5, Repository = Repository }, Token);
-            Require(details.Files.Count == 2 && File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("diff ")) == diffCalls,
-                "Selecting history reuses the exact diff already read for bold state");
-            File.WriteAllText(Path.Combine(root, ".plastic", "updated"), "");
+            Require(state.LoadedThroughChangeset == 10 && Calls(root).Count(line => line.StartsWith("fileinfo ")) == 1, "Refreshing does not replace the saved watermark with changing root metadata");
+            var result = await Update(client, root, Path.Combine(root, "child"));
             state = await client.GetHistoryLocalStateAsync(root, Token);
-            Require(!await Missing(client, state, 5), "Refreshing after the remaining file is pulled clears upper-directory bold");
-            Require(!await Missing(client, state, 12), "A pulled rename uses the destination and unchanged revision identity");
-            Require(!await Missing(client, state, 6), "Old file history remains loaded after a later rename");
-            Require(File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("diff ")) == diffCalls,
-                "Fresh local snapshot reuses immutable diffs while recomputing mixed-version state");
-            File.WriteAllText(Path.Combine(root, ".plastic", "directory"), "");
+            Require(result.Succeeded && state.LoadedThroughChangeset == 10 && await Missing(client, state, 12), "Successful child update cannot clear root history bold");
+            result = await Update(client, root, Path.Combine(root, "child", "file.txt"));
+            Require(result.Succeeded && (await client.GetHistoryLocalStateAsync(root, Token)).LoadedThroughChangeset == 10, "Successful file update cannot advance root watermark");
+            result = await Update(client, root, root);
             state = await client.GetHistoryLocalStateAsync(root, Token);
-            Require(await Missing(client, state, 11), "Loading a moved directory does not hide children still at the old path");
-            var destinationState = await client.GetHistoryLocalStateAsync(Path.Combine(root, "new-dir", "child.txt"), Token);
-            Require(await Missing(client, destinationState, 11), "History at the move destination still detects an unpulled child at the old path");
-            File.WriteAllText(Path.Combine(root, ".plastic", "directory-updated"), "");
+            Require(result.Succeeded && !state.IsApproximate && state.LoadedThroughChangeset == 12 && !await Missing(client, state, 12), "Successful Gluon root update replaces the approximate record with its captured target");
+            Write(root, "head", "15"); Write(root, "fail-update", "");
+            result = await Update(client, root, root);
             state = await client.GetHistoryLocalStateAsync(root, Token);
-            Require(!await Missing(client, state, 11), "Moving the remaining children clears the directory marker");
-            int revisionCalls = File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("find revision "));
-            Require(!await Missing(client, state, 10), "Batched item identity resolution preserves ancestry semantics");
-            Require(File.ReadAllLines(Path.Combine(root, ".plastic", "calls")).Count(line => line.StartsWith("find revision ")) - revisionCalls == 2,
-                "140 unresolved revision identities require two bounded queries, not 140 processes");
-            var rows = await client.GetHistoryNotLoadedAsync(state, Enumerable.Range(5, 8).Select(cs => new PlasticHistoryItem { Changeset = cs, Repository = Repository }).ToArray(), Token);
-            Require(!rows[11] && !rows[12] && rows[8], "Batch results reflect the same fresh snapshot, including pending deletion");
-            File.WriteAllText(Path.Combine(root, ".plastic", "broken"), "");
+            Require(!result.Succeeded && state.LoadedThroughChangeset == 12 && await Missing(client, state, 15), "Failed root update leaves the previous watermark unchanged");
+            File.Delete(Meta(root, "fail-update"));
+            Write(root, "advance-during-update", "");
+            result = await Update(client, root, root);
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(result.Succeeded && state.LoadedThroughChangeset == 15 && await Missing(client, state, 16), "A head published during update is not incorrectly marked downloaded");
+            File.Delete(Meta(root, "advance-during-update"));
+            var rollback = new PlasticProcessCommand { FileName = Assembly.GetExecutingAssembly().Location, WorkingDirectory = root,
+                Arguments = new[] { "partial", "update", root, "--changeset=5", "--report" } };
+            var capture = await client.PrepareHistoryRootUpdateAsync(rollback, Token);
+            result = await client.ExecuteAsync(rollback, Token);
+            await client.CompleteHistoryRootUpdateAsync(capture, result);
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(state.LoadedThroughChangeset == 5 && await Missing(client, state, 12), "A successful pinned root rollback replaces rather than maximizes the watermark");
+            Require(Calls(root).All(line => !line.StartsWith("ls ") && !line.StartsWith("log ") && !line.StartsWith("diff ") && !line.StartsWith("find revision ")), "Root history never scans all files, ancestors, revisions, or per-row diffs");
+            result = await client.SwitchAsync(root, 8, Token);
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(result.Succeeded && state.LoadedThroughChangeset == 8 && await Missing(client, state, 12), "The actual Gluon history snapshot switch records its requested root changeset");
+            Write(root, "fail-update", "");
+            result = await client.SwitchAsync(root, 12, Token);
+            Require(!result.Succeeded && (await client.GetHistoryLocalStateAsync(root, Token)).LoadedThroughChangeset == 8, "A failed history snapshot switch cannot change the root watermark");
+            File.Delete(Meta(root, "fail-update")); Write(root, "slow-update", "");
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var switching = client.SwitchAsync(root, 12, cancellation.Token);
+                await WaitFor(root, "update-entered"); cancellation.Cancel();
+                bool cancelled = false;
+                try { await switching; } catch (OperationCanceledException) { cancelled = true; }
+                Require(cancelled && (await client.GetHistoryLocalStateAsync(root, Token)).LoadedThroughChangeset == 8, "Cancelling the native snapshot update leaves the previous record untouched");
+            }
+            File.Delete(Meta(root, "slow-update")); File.Delete(Meta(root, "update-entered"));
+            Selector(root, "/main/other"); Write(root, "root-revision", "3");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(state.IsApproximate && state.LoadedThroughChangeset == 3 && await Missing(client, state, 5), "A changed selector never reuses another branch's saved watermark");
+            Selector(root, "/main");
+            bool invalidated = false;
+            try { await Missing(client, state, 5); } catch (InvalidOperationException) { invalidated = true; }
+            Require(invalidated, "An in-flight state is invalidated when the workspace selector changes");
+            File.Delete(Meta(root, "tortoisescm-root-update.xml")); Write(root, "root-revision", "-1");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(state.LoadedThroughChangeset == 1 && !await Missing(client, state, 0) && !await Missing(client, state, 1) && await Missing(client, state, 2), "Unavailable root revisions safely fall back while preserving both initial revisions");
+            client.RecordHistoryRootLoaded(client.DiscoverWorkspace(root), 20);
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(!state.IsApproximate && state.LoadedThroughChangeset == 20 && !await Missing(client, state, 20), "A confirmed initial workspace download establishes its root watermark");
+            Write(root, "plastic.workspace", "History test\nrecreated-workspace-id\nStandard\n"); Write(root, "root-revision", "4");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(state.IsApproximate && state.LoadedThroughChangeset == 4, "A recreated workspace cannot inherit another workspace identity's record");
+            Write(root, "tortoisescm-root-update.xml", "<broken"); Write(root, "root-revision", "6");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Require(state.IsApproximate && state.LoadedThroughChangeset == 6, "A corrupt local marker is replaced by the inexpensive approximate initializer");
+            File.Delete(Meta(root, "tortoisescm-root-update.xml")); Write(root, "slow-fileinfo", "");
+            var initializing = client.GetHistoryLocalStateAsync(root, Token);
+            await WaitFor(root, "fileinfo-entered");
+            client.RecordHistoryRootLoaded(client.DiscoverWorkspace(root), 40);
+            state = await initializing;
+            Require(!state.IsApproximate && state.LoadedThroughChangeset == 40 && (await client.GetHistoryLocalStateAsync(root, Token)).LoadedThroughChangeset == 40,
+                "A delayed approximate initializer cannot overwrite an exact record written by another window");
+            File.Delete(Meta(root, "tortoisescm-root-update.xml")); File.Delete(Meta(root, "fileinfo-entered"));
+            initializing = client.GetHistoryLocalStateAsync(root, Token);
+            await WaitFor(root, "fileinfo-entered");
+            Write(root, "plastic.workspace", "History test\nidentity-replaced-during-await\nStandard\n");
+            bool identityChanged = false;
+            try { await initializing; } catch (InvalidOperationException) { identityChanged = true; }
+            Require(identityChanged && !File.Exists(Meta(root, "tortoisescm-root-update.xml")), "An old asynchronous root read cannot publish a marker for a recreated workspace");
+            File.Delete(Meta(root, "slow-fileinfo")); File.Delete(Meta(root, "fileinfo-entered"));
+            var staleCapture = await client.PrepareHistoryRootUpdateAsync(rollback, Token);
+            Write(root, "plastic.workspace", "History test\nidentity-replaced-during-update\nStandard\n");
+            await client.CompleteHistoryRootUpdateAsync(staleCapture, new PlasticCommandResult { ExitCode = 0 });
+            Require(!File.Exists(Meta(root, "tortoisescm-root-update.xml")), "A root update capture is bound to the original workspace identity");
+            state = await client.GetHistoryLocalStateAsync(root, Token);
+            Write(root, "broken-status", "");
             bool failed = false;
             try { await client.GetHistoryLocalStateAsync(root, Token); } catch (InvalidDataException) { failed = true; }
-            Require(failed, "Malformed local metadata is unknown rather than marking all history loaded");
-            var cancelled = new CancellationToken(true);
+            Require(failed, "Malformed authoritative status is not treated as all history downloaded");
+            File.Delete(Meta(root, "broken-status"));
             failed = false;
-            try { await client.GetHistoryLocalStateAsync(root, cancelled); } catch (OperationCanceledException) { failed = true; }
-            Require(failed, "Local-state reads honor cancellation");
+            try { await client.GetHistoryLocalStateAsync(root, new CancellationToken(true)); } catch (OperationCanceledException) { failed = true; }
+            Require(failed, "Root snapshot honors cancellation before native work");
+            failed = false;
+            try { await client.GetHistoryNotLoadedAsync(state, new[] { Entry(1) }, new CancellationToken(true)); } catch (OperationCanceledException) { failed = true; }
+            Require(failed, "Pure row evaluation still honors cancellation");
+            Require(Calls(root).All(line => !line.StartsWith("ls ") && !line.StartsWith("log ") && !line.StartsWith("find revision ")), "Additional snapshot operations do not introduce file scans or ancestry queries");
         }
         finally { Directory.Delete(root, true); }
     }
 
+    private static Task<PlasticCommandResult> Update(PlasticClient client, string root, string selected)
+    { return client.RunAsync(new PlasticCommandRequest { Command = PlasticCommand.Update, WorkingDirectory = root, Paths = new[] { selected }.ToList() }, Token); }
     private static Task<bool> Missing(PlasticClient client, PlasticHistoryLocalState state, long cs)
-    { return client.IsHistoryNotLoadedAsync(state, new PlasticHistoryItem { Changeset = cs, Repository = state.Workspace.Repository }, Token); }
+    { return client.IsHistoryNotLoadedAsync(state, Entry(cs), Token); }
+    private static PlasticHistoryItem Entry(long cs) { return new PlasticHistoryItem { Changeset = cs, Repository = Repository }; }
+    private static string Meta(string root, string name) { return Path.Combine(root, ".plastic", name); }
+    private static void Write(string root, string name, string value) { File.WriteAllText(Meta(root, name), value); }
+    private static string Read(string root, string name) { return File.ReadAllText(Meta(root, name)); }
+    private static string[] Calls(string root) { return File.ReadAllLines(Meta(root, "calls")); }
+    private static void Selector(string root, string branch) { Write(root, "plastic.selector", "repository \"" + Repository + "\"\r\n  path \"/\"\r\n    smartbranch \"" + branch + "\"\r\n"); }
+    private static void Require(bool condition, string message) { assertions++; if (!condition) throw new Exception(message); }
+    private static async Task WaitFor(string root, string name)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!File.Exists(Meta(root, name)) && DateTime.UtcNow < deadline) await Task.Delay(10);
+        Require(File.Exists(Meta(root, name)), "The delayed native operation reached " + name);
+    }
 
     private static int Fake(string[] args)
     {
         string root = Environment.CurrentDirectory;
-        bool partial = File.Exists(Path.Combine(root, ".plastic", "partial"));
-        bool updated = File.Exists(Path.Combine(root, ".plastic", "updated"));
-        File.AppendAllText(Path.Combine(root, ".plastic", "calls"), String.Join(" ", args) + "\n");
+        File.AppendAllText(Meta(root, "calls"), String.Join(" ", args) + "\n");
         Console.OutputEncoding = new UTF8Encoding(false);
         if (args[0] == "status")
         {
-            if (File.Exists(Path.Combine(root, ".plastic", "broken"))) { Console.WriteLine("<invalid/>"); return 0; }
+            if (File.Exists(Meta(root, "broken-status"))) { Console.WriteLine("<invalid/>"); return 0; }
             Console.WriteLine(new XElement("StatusOutput", new XElement("WorkspaceStatus", new XElement("Status",
-                new XElement("Changeset", partial ? -1 : File.Exists(Path.Combine(root, ".plastic", "complete")) ? 12 : 10), new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))),
-                new XElement("WkConfigName", "/main@" + Repository))); return 0;
+                new XElement("Changeset", File.Exists(Meta(root, "partial")) ? "-1" : Read(root, "loaded")),
+                new XElement("RepSpec", new XElement("Name", "test"), new XElement("Server", "server:8087")))))); return 0;
         }
-        if (args[0] == "ls")
+        if (args[0] == "fileinfo")
         {
-            Console.WriteLine(new XElement("LsResults", new XElement("LsItems", Item(root, "", 1, 0),
-                Item(root, updated ? "renamed.txt" : "new.txt", 100, 10), Item(root, "stale.txt", updated ? 50 : 20, updated ? 5 : 2),
-                File.Exists(Path.Combine(root, ".plastic", "directory")) ? new[] {
-                    Item(root, "new-dir", 500, 11), Item(root, File.Exists(Path.Combine(root, ".plastic", "directory-updated")) ? "new-dir/child.txt" : "old-dir/child.txt", 600, 2) } : null))); return 0;
-        }
-        if (args[0] == "log")
-        {
-            long top = Int64.Parse(args[1].Substring(3).Split('@')[0]);
-            long[] ids = top == 12 ? new long[] { 12, 11, 10, 9, 8, 7, 6, 5, 2, 0 } : top == 10 ? new long[] { 10, 6, 5, 2, 0 } : top == 5 ? new long[] { 5, 2, 0 } : top == 2 ? new long[] { 2, 0 } : new long[] { 0 };
-            Console.WriteLine(new XElement("LogList", ids.Select(id => new XElement("Changeset", new XElement("ChangesetId", id))))); return 0;
+            if (File.Exists(Meta(root, "slow-fileinfo"))) { Write(root, "fileinfo-entered", ""); Thread.Sleep(500); }
+            Console.WriteLine(new XElement("FileInfos", new XElement("FileInfo", new XElement("ClientPath", root),
+                new XElement("RevisionChangeset", Read(root, "root-revision")), new XElement("RepSpec", Repository)))); return 0;
         }
         if (args[0] == "find" && args[1] == "branch")
         {
             Console.WriteLine(new XElement("PLASTICQUERY", new XElement("BRANCH", new XElement("NAME", "/main"),
-                new XElement("CHANGESET", 12), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")))); return 0;
+                new XElement("CHANGESET", Read(root, "head")), new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087")))); return 0;
         }
-        if (args[0] == "find")
+        if (args[0] == "find" && args[1] == "changeset")
         {
-            var revisions = System.Text.RegularExpressions.Regex.Matches(args[2], @"id = (\d+)").Cast<System.Text.RegularExpressions.Match>().Select(match => Int64.Parse(match.Groups[1].Value));
-            Console.WriteLine(new XElement("PLASTICQUERY", revisions.Select(revision => new XElement("REVISION", new XElement("ID", revision),
-                new XElement("ITEMID", revision == 20 || revision == 50 ? 2000 : revision == 99 ? 3000 : 1000),
-                new XElement("REPNAME", "test"), new XElement("REPSERVER", "server:8087"))))); return 0;
+            long cs = Int64.Parse(args[2].Substring("where changesetid = ".Length));
+            Console.WriteLine(new XElement("PLASTICQUERY", new XElement("CHANGESET", new XElement("CHANGESETID", cs), new XElement("REPOSITORY", Repository)))); return 0;
         }
-        long cs = Int64.Parse(args[1].Substring(3).Split('@')[0]);
-        switch (cs)
+        if (args[0] == "diff") { Console.WriteLine("C|/child/file.txt|F||"); return 0; }
+        int verb = args[0] == "partial" ? 1 : 0;
+        if (args[verb] == "update")
         {
-            case 5: Console.WriteLine("C|/new.txt|F|||60\nC|/stale.txt|F|||50"); break;
-            case 6: Console.WriteLine("C|/new.txt|F|||100"); break;
-            case 7: Console.WriteLine("C|/stale.txt|F|||20"); break;
-            case 8: Console.WriteLine("D|/stale.txt|F|||20"); break;
-            case 9: Console.WriteLine("D|/gone.txt|F|||99"); break;
-            case 10: for (int i = 0; i < 140; i++) Console.WriteLine("C|/batch-" + i + ".txt|F|||" + (10000 + i)); break;
-            case 11: Console.WriteLine("M|/old-dir|D|/old-dir|/new-dir|500"); break;
-            case 12: Console.WriteLine("M|/new.txt|F|/new.txt|/renamed.txt|100"); break;
-            default: return 8;
+            if (File.Exists(Meta(root, "slow-update"))) { Write(root, "update-entered", ""); Thread.Sleep(10000); }
+            if (File.Exists(Meta(root, "fail-update"))) { Console.Error.WriteLine("Expected update failure"); return 17; }
+            string pinned = args.FirstOrDefault(argument => argument.StartsWith("--changeset="));
+            string target = pinned == null ? Read(root, "head") : pinned.Substring("--changeset=".Length);
+            Write(root, "root-revision", target);
+            if (verb == 0) Write(root, "loaded", target);
+            if (File.Exists(Meta(root, "advance-during-update"))) Write(root, "head", (Int64.Parse(target) + 1).ToString());
+            return 0;
         }
-        return 0;
+        Console.Error.WriteLine("Unexpected native call: " + String.Join(" ", args)); return 96;
     }
-
-    private static XElement Item(string root, string name, long revision, long cs)
-    { return new XElement("LsItem", new XElement("CurrentPath", Path.Combine(root, name)), new XElement("RevId", revision),
-        new XElement("Changeset", cs), new XElement("ItemId", name == "" ? 1 : name == "stale.txt" ? 2000 : revision == 500 ? 5000 : revision == 600 ? 6000 : 1000), new XElement("Repository", "rep:" + Repository)); }
-
-    private static async Task ReadOnly(string path, int expectedBold)
-    {
-        var client = new PlasticClient(new PlasticClientConfig());
-        var watch = Stopwatch.StartNew();
-        var entries = new System.Collections.Generic.List<PlasticHistoryItem>();
-        var state = await client.GetHistoryLocalStateAsync(path, Token);
-        Console.WriteLine("Local snapshot ms: " + watch.ElapsedMilliseconds + "; update head: " + state.HeadChangeset);
-        int rows = 0, bold = 0; long? before = null;
-        do
-        {
-            var page = await client.GetHistoryPageAsync(path, before, 100, Token);
-            entries.AddRange(page.Items);
-            rows += page.Items.Count;
-            bold += (await client.GetHistoryNotLoadedAsync(state, page.Items, Token)).Values.Count(value => value);
-            before = page.HasMore ? page.NextBeforeChangeset : null;
-        } while (before.HasValue);
-        Console.WriteLine("History rows: " + rows + "; bold: " + bold + "; total ms: " + watch.ElapsedMilliseconds);
-        Require(bold == expectedBold, "Read-only real workspace has expected incoming history markers");
-        watch.Restart();
-        state = await client.GetHistoryLocalStateAsync(path, Token);
-        var refreshed = await client.GetHistoryNotLoadedAsync(state, entries, Token);
-        Console.WriteLine("Reactivated local snapshot + markers ms: " + watch.ElapsedMilliseconds);
-        Require(refreshed.Values.Count(value => value) == expectedBold, "Cached history facts preserve fresh local-state results");
-        var selected = entries.First(item => item.Changeset > 0);
-        for (int pass = 0; pass < 2; pass++)
-        {
-            watch.Restart();
-            var details = await client.GetHistoryDetailsAsync(path, selected, Token);
-            Console.WriteLine("Details pass " + pass + ": " + watch.ElapsedMilliseconds + " ms; files " + details.Files.Count);
-            watch.Restart();
-            await client.GetChangesetParentComparisonAsync(path, selected.Changeset, selected.Repository, Token);
-            Console.WriteLine("Parent comparison pass " + pass + ": " + watch.ElapsedMilliseconds + " ms");
-        }
-    }
-
-    private static async Task Live(string[] args)
-    {
-        string producer = args[1], partial = args[2], repository = args[3], branch = args[4];
-        var client = new PlasticClient(new PlasticClientConfig());
-        Require(branch.StartsWith("/main/tortoisescm-autotest-", StringComparison.Ordinal) &&
-            client.DiscoverWorkspace(producer).Selector.Contains(branch) && client.DiscoverWorkspace(partial).Selector.Contains(branch), "Live writes are isolated to the test branch");
-        string folder = Path.Combine(producer, "mixed"); Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(folder, "a.txt"), "base a"); File.WriteAllText(Path.Combine(folder, "b.txt"), "base b");
-        Native(producer, "add", folder, "-R"); Native(producer, "checkin", producer, "--all", "-c=History local-state baseline");
-        Native(partial, "partial", "configure", "+/mixed");
-        File.WriteAllText(Path.Combine(folder, "a.txt"), "new a"); File.WriteAllText(Path.Combine(folder, "b.txt"), "new b");
-        Native(producer, "checkin", producer, "--all", "-c=History local-state mixed versions");
-        long cs = Int64.Parse(XDocument.Parse(Native(producer, "status", "--header", "--xml", "--encoding=utf-8")).Descendants("Changeset").Single().Value);
-        Native(partial, "partial", "update", Path.Combine(partial, "mixed", "a.txt"), "--report");
-        var state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed"), Token);
-        Require(await Missing(client, state, cs), "Real Gluon parent directory remains bold with one stale file");
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed", "a.txt"), Token);
-        Require(!await Missing(client, state, cs), "Real Gluon pulled file is regular");
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed", "b.txt"), Token);
-        Require(await Missing(client, state, cs), "Real Gluon stale file is bold");
-        Native(partial, "partial", "update", Path.Combine(partial, "mixed", "b.txt"), "--report");
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed"), Token);
-        Require(!await Missing(client, state, cs), "Real Gluon parent becomes regular when both files are pulled");
-        Native(partial, "partial", "configure", "-/mixed/b.txt");
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed"), Token);
-        Require(await Missing(client, state, cs), "An unloaded file keeps its parent history bold");
-        Native(partial, "partial", "configure", "+/mixed/b.txt");
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed"), Token);
-        Require(!await Missing(client, state, cs), "Loading the omitted file clears the parent marker");
-        Native(producer, "move", Path.Combine(folder, "a.txt"), Path.Combine(folder, "renamed.txt"));
-        Native(producer, "remove", Path.Combine(folder, "b.txt"));
-        Native(producer, "checkin", producer, "--all", "-c=History local-state move and deletion");
-        long structural = Int64.Parse(XDocument.Parse(Native(producer, "status", "--header", "--xml", "--encoding=utf-8")).Descendants("Changeset").Single().Value);
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed"), Token);
-        Require(await Missing(client, state, structural), "Real Gluon pending move/deletion is bold");
-        Native(partial, "partial", "update", Path.Combine(partial, "mixed"), "--report");
-        state = await client.GetHistoryLocalStateAsync(Path.Combine(partial, "mixed"), Token);
-        Require(!await Missing(client, state, structural), "Real Gluon applied move/deletion is regular");
-        Require(!await Missing(client, state, cs), "Earlier changes stay regular after a later move/deletion");
-        Console.WriteLine("Live workspace: " + partial + " repository: " + repository);
-    }
-
-    private static string Native(string root, params string[] args)
-    {
-        var command = new PlasticProcessCommand { FileName = new PlasticClientConfig().CmPath, WorkingDirectory = root, Arguments = args };
-        var client = new PlasticClient(new PlasticClientConfig());
-        var result = client.ExecuteAsync(command, Token).GetAwaiter().GetResult();
-        if (!result.Succeeded) throw new Exception("Native " + String.Join(" ", args) + ": " + result.Output + result.Error);
-        return result.Output;
-    }
-
-    private static void Require(bool condition, string message)
-    { assertions++; if (!condition) throw new Exception(message); }
 }

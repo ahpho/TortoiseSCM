@@ -185,7 +185,12 @@ namespace TortoiseSCM
                 foreach (PlasticProcessCommand command in commands)
                 {
                     PlasticCommandResult current;
-                    try { current = await ExecuteWithPartialConflictGuardAsync(command, request, cancellationToken).ConfigureAwait(false); }
+                    try
+                    {
+                        var historyUpdate = await PrepareHistoryRootUpdateAsync(command, cancellationToken).ConfigureAwait(false);
+                        current = await ExecuteWithPartialConflictGuardAsync(command, request, cancellationToken).ConfigureAwait(false);
+                        await CompleteHistoryRootUpdateAsync(historyUpdate, current, cancellationToken).ConfigureAwait(false);
+                    }
                     catch (Exception error)
                     {
                         // A later launch or cancellation must not hide already-completed
@@ -227,7 +232,10 @@ namespace TortoiseSCM
                 planned = await Task.Run(() => Build(request, cancellationToken, actualWorkspace.IsPartial), cancellationToken).ConfigureAwait(false);
                 ApplyWorkspaceMode(planned, actualWorkspace.IsPartial);
             }
+            var rootHistoryUpdate = request.Command == PlasticCommand.Update ?
+                await PrepareHistoryRootUpdateAsync(planned, cancellationToken).ConfigureAwait(false) : null;
             PlasticCommandResult result = await ExecuteWithPartialConflictGuardAsync(planned, request, cancellationToken).ConfigureAwait(false);
+            await CompleteHistoryRootUpdateAsync(rootHistoryUpdate, result, cancellationToken).ConfigureAwait(false);
             if (request.Command == PlasticCommand.History && result.Succeeded)
             {
                 var history = new StringBuilder();

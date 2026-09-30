@@ -28,7 +28,7 @@ namespace TortoiseSCM
 
         internal static void Run(string artifacts)
         {
-            assertions = 0; Directory.CreateDirectory(artifacts); TestDefaults(artifacts); TestQueries(artifacts); TestCreation(artifacts); TestStartup(artifacts);
+            assertions = 0; Directory.CreateDirectory(artifacts); TestDefaults(artifacts); TestRepositoryNaming(artifacts); TestQueries(artifacts); TestCreation(artifacts); TestCreationRoutes(artifacts); TestStartup(artifacts);
             Console.WriteLine("PASS: workspace creation UI (" + assertions + " assertions)");
         }
         private static PlasticRepositoryInfo Repository(string name)
@@ -74,6 +74,8 @@ namespace TortoiseSCM
                 using (var rootForm = new WorkspaceCreationForm(null, @"D:\")) {
                     Require(Path.GetDirectoryName(Field<TextBox>(rootForm, "directory").Text) == @"D:\", "Drive root produces child destination instead of targeting root");
                     Require(Field<ComboBox>(rootForm, "mode").SelectedIndex == 0, "Gluon is the default workspace mode");
+                    Require(Field<TextBox>(rootForm, "server").Text == "plasticscm7.seasungame.com:8087", "Checkout defaults to the requested repository server");
+                    Require(Field<Button>(rootForm, "create").Text == "拉取", "Checkout button describes pulling without promising another window");
                 }
                 Directory.CreateDirectory(Path.Combine(root, "TestSCM"));
                 File.WriteAllText(Path.Combine(root, "TestSCM2"), "preserve");
@@ -102,13 +104,37 @@ namespace TortoiseSCM
                     Require(!Field<bool>(form, "defaultsReady") && !Field<Button>(form, "create").Enabled && Field<TextBox>(form, "status").Text.Contains("名单读取失败"), "Workspace list failure is visible and does not allow unchecked creation");
                     Set(form, "getWorkspaces", new Func<CancellationToken, Task<IList<PlasticWorkspace>>>(token => Task.FromResult<IList<PlasticWorkspace>>(registered)));
                     QueryResult(form);
-                    Require(Field<TextBox>(form, "workspaceName").Text == "TestSCM5" && Field<TextBox>(form, "directory").Text == Path.Combine(root, "TestSCM5"), "Retry resolves all local collisions automatically");
+                    Require(Field<TextBox>(form, "workspaceName").Text == "示例仓库" && Field<TextBox>(form, "directory").Text == Path.Combine(root, "TestSCM5"), "Repository selection names the workspace while retaining a collision-free suggested directory");
                     Save(form, Path.Combine(artifacts, "checkout-defaults.png")); form.Size = form.MinimumSize; Application.DoEvents(); Bounds(form); Save(form, Path.Combine(artifacts, "checkout-defaults-minimum.png"));
                     form.Close();
                 }
                 Require(File.ReadAllText(Path.Combine(root, "TestSCM2")) == "preserve", "Suggestion checks never modify collisions");
             }
             finally { Directory.Delete(Path.GetDirectoryName(root), true); }
+        }
+        private static void TestRepositoryNaming(string artifacts)
+        {
+            using (var form = Open()) {
+                string requestedServer = null;
+                Set(form, "getRepositories", new Func<string, CancellationToken, Task<IList<PlasticRepositoryInfo>>>((server, token) => {
+                    requestedServer = server; return Task.FromResult<IList<PlasticRepositoryInfo>>(new List<PlasticRepositoryInfo> { Repository("Alpha"), Repository("中文 仓库"), Repository("Beta") });
+                }));
+                Await(InvokeTask(form, "QueryAsync"));
+                Require(requestedServer == "plasticscm7.seasungame.com:8087", "Query uses the requested default server unchanged");
+                var name = Field<TextBox>(form, "workspaceName"); var list = Field<ComboBox>(form, "repositories");
+                Require(name.Text == "Alpha", "Initial repository selection replaces earlier workspace name input");
+                name.Text = "manual-workspace";
+                Field<ComboBox>(form, "mode").SelectedIndex = 1;
+                Require(name.Text == "manual-workspace", "Workspace name remains manually editable after repository selection");
+                list.SelectedIndex = 1;
+                Require(name.Text == "中文 仓库", "Switching repository immediately synchronizes the workspace name including Unicode and spaces");
+                name.Text = "another-manual-name"; list.SelectedIndex = 2;
+                Require(name.Text == "Beta", "Each subsequent repository change resets a manually edited name");
+                Require(Field<TextBox>(form, "directory").Text == @"D:\Workspaces\新项目", "Repository switches leave the exact destination directory unchanged");
+                Save(form, Path.Combine(artifacts, "checkout-repository-name.png"));
+                form.Size = form.MinimumSize; Application.DoEvents(); Bounds(form);
+                Save(form, Path.Combine(artifacts, "checkout-repository-name-minimum.png"));
+            }
         }
         private static void TestQueries(string artifacts)
         {
@@ -139,6 +165,7 @@ namespace TortoiseSCM
         {
             for (int scenario = 0; scenario < 5; scenario++) using (var form = Open()) {
                 QueryResult(form); int writes = 0; string confirmation = ""; var pending = new TaskCompletionSource<PlasticWorkspaceCreationResult>();
+                Field<TextBox>(form, "workspaceName").Text = "my-workspace";
                 Set(form, "confirm", new Func<string, bool>(message => { confirmation = message; return false; }));
                 bool expectedPartial = scenario != 4; Field<ComboBox>(form, "mode").SelectedIndex = expectedPartial ? 0 : 1;
                 Set(form, "createWorkspace", new Func<PlasticRepositoryInfo, string, string, string, bool, IProgress<string>, CancellationToken, Task<PlasticWorkspaceCreationResult>>((repo, name, path, branch, partial, progress, token) => {
@@ -158,7 +185,7 @@ namespace TortoiseSCM
                 else pending.SetResult(new PlasticWorkspaceCreationResult { WorkspaceCreated = scenario == 1, OutcomeUncertain = scenario == 2,
                     WorkspacePath = @"D:\Workspaces\新项目", Stage = scenario == 1 ? "首次更新" : "创建工作区", Error = "模拟失败", RecoveryInstructions = "保留目录，请核查后打开已有工作区继续更新。" });
                 Await(creating);
-                if (scenario == 0) Require(form.SelectedWorkspacePath == @"D:\confirmed" && form.DialogResult == DialogResult.OK, "Only complete success opens backend-confirmed workspace");
+                if (scenario == 0) Require(form.SelectedWorkspacePath == @"D:\confirmed" && form.DialogResult == DialogResult.OK && !form.Visible, "Complete success closes checkout and retains its backend-confirmed destination");
                 else {
                     Require(form.SelectedWorkspacePath == null && form.DialogResult != DialogResult.OK, "Failure never reports successful checkout");
                     Require(Field<Button>(form, "close").Enabled, "Failure permits close");
@@ -171,12 +198,55 @@ namespace TortoiseSCM
                 }
             }
         }
+        private static void TestCreationRoutes(string artifacts)
+        {
+            int dialogs = 0, writes = 0;
+            var request = LaunchRequest.Parse(new[] { "--command", "create-workspace", "--path", @"D:\Exact checkout 中文" });
+            int windowCount = Application.OpenForms.Count;
+            int exitCode = Program.RunWorkspaceCreation(request, wizard => {
+                dialogs++; EmptyWorkspaces(wizard);
+                Set(wizard, "confirm", new Func<string, bool>(text => true));
+                Set(wizard, "createWorkspace", new Func<PlasticRepositoryInfo, string, string, string, bool, IProgress<string>, CancellationToken, Task<PlasticWorkspaceCreationResult>>((repo, name, path, branch, partial, progress, token) => {
+                    writes++; Require(name == "示例仓库" && path == @"D:\Exact checkout 中文", "Standalone checkout route forwards repository name and exact destination");
+                    return Task.FromResult(new PlasticWorkspaceCreationResult { WorkspaceCreated = true, UpdateCompleted = true, WorkspacePath = path });
+                }));
+                wizard.Show(); Application.DoEvents(); QueryResult(wizard);
+                Field<Button>(wizard, "create").PerformClick(); Application.DoEvents();
+                Require(wizard.DialogResult == DialogResult.OK && !wizard.Visible, "Standalone checkout route completes its real wizard successfully");
+                return wizard.DialogResult;
+            });
+            Require(exitCode == 0 && dialogs == 1 && writes == 1 && Application.OpenForms.Count == windowCount,
+                "Standalone checkout terminates without opening the commit form");
+            Require(request.Command == "create-workspace" && request.Paths[0] == @"D:\Exact checkout 中文", "Successful checkout never rewrites its launch request into a commit/status request");
+            exitCode = Program.RunWorkspaceCreation(LaunchRequest.Parse(new[] { "--command", "create-workspace", "--parent-path", @"D:\" }), wizard => {
+                Require(Path.GetDirectoryName(Field<TextBox>(wizard, "directory").Text) == @"D:\", "Standalone parent-folder route preserves its suggested child directory");
+                return DialogResult.Cancel;
+            });
+            Require(exitCode == 0 && Application.OpenForms.Count == windowCount, "Canceled standalone checkout opens no commit form");
+            using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", @"D:\existing workspace" }), false)) {
+                form.Show(); Application.DoEvents(); int opens = 0;
+                Set(form, "showWorkspaceCreation", new Func<string>(() => { opens++; return @"D:\confirmed checkout"; }));
+                InvokeTaskless(form, "PullRepository");
+                Require(opens == 1 && form.Visible && Application.OpenForms.Count == windowCount + 1 && Field<Label>(form, "status").Text.Contains(@"D:\confirmed checkout"),
+                    "Main-window checkout reports completion while retaining the current window alone");
+                Set(form, "showWorkspaceCreation", new Func<string>(() => { opens++; return null; }));
+                string completedStatus = Field<Label>(form, "status").Text;
+                InvokeTaskless(form, "PullRepository");
+                Require(opens == 2 && Field<Label>(form, "status").Text == completedStatus, "Canceled main-window checkout preserves the previous feedback");
+                Set(form, "busy", true); InvokeTaskless(form, "PullRepository"); Set(form, "busy", false);
+                Require(opens == 2, "Main-window checkout cannot launch during another operation");
+            }
+        }
         private static void TestStartup(string artifacts)
         {
             using (var form = new StartupForm()) {
                 form.Show(); Application.DoEvents(); Save(form, Path.Combine(artifacts, "startup.png")); form.Size = form.MinimumSize; Application.DoEvents(); Bounds(form); Save(form, Path.Combine(artifacts, "startup-minimum.png"));
                 Set(form, "createNew", new Func<string>(() => null)); Field<Button>(form, "create").PerformClick();
                 Require(form.SelectedWorkspacePath == null && form.Visible, "Canceled wizard retains startup");
+                Set(form, "createNew", new Func<string>(() => @"D:\confirmed checkout")); Field<Button>(form, "create").PerformClick();
+                Require(form.SelectedWorkspacePath == null && form.DialogResult != DialogResult.OK && form.Visible && Field<Label>(form, "status").Text.Contains(@"D:\confirmed checkout"),
+                    "Successful startup checkout keeps the startup page with completion feedback instead of opening commit");
+                Save(form, Path.Combine(artifacts, "startup-checkout-completed.png"));
                 Set(form, "selectExisting", new Func<string>(() => @"D:\invalid"));
                 Set(form, "getWorkspace", new Func<string, CancellationToken, Task<PlasticWorkspace>>((path, token) => { throw new IOException("无效工作区"); }));
                 Await(InvokeTask(form, "OpenAsync")); Require(form.SelectedWorkspacePath == null && Field<Label>(form, "status").Text.Contains("无效工作区"), "Invalid existing folder cannot open main window");
@@ -191,6 +261,7 @@ namespace TortoiseSCM
         private static T Field<T>(object owner, string name) { return (T)owner.GetType().GetField(name, Flags).GetValue(owner); }
         private static void Set(object owner, string name, object value) { owner.GetType().GetField(name, Flags).SetValue(owner, value); }
         private static Task InvokeTask(object owner, string name) { return (Task)owner.GetType().GetMethod(name, Flags).Invoke(owner, null); }
+        private static void InvokeTaskless(object owner, string name) { owner.GetType().GetMethod(name, Flags).Invoke(owner, null); }
         private static void Require(bool condition, string message) { assertions++; if (!condition) throw new Exception(message); }
     }
 }

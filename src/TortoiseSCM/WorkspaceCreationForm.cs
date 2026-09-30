@@ -22,7 +22,7 @@ namespace TortoiseSCM
         private readonly Button query = DialogStyle.Button("查询仓库");
         private readonly Button cancelQuery = DialogStyle.Button("取消查询");
         private readonly Button browse = DialogStyle.Button("浏览…");
-        private readonly Button create = DialogStyle.Button("拉取并打开");
+        private readonly Button create = DialogStyle.Button("拉取");
         private readonly Button close = DialogStyle.Button("关闭");
         private Func<string, CancellationToken, Task<IList<PlasticRepositoryInfo>>> getRepositories;
         private Func<CancellationToken, Task<IList<PlasticWorkspace>>> getWorkspaces;
@@ -60,7 +60,7 @@ namespace TortoiseSCM
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
             introduction.Dock = DockStyle.Fill;
             grid.Controls.Add(introduction, 0, 0); grid.SetColumnSpan(introduction, 3);
-            AddField(grid, 1, "服务器", server); server.AccessibleName = "仓库服务器"; server.Text = "localhost:8087";
+            AddField(grid, 1, "服务器", server); server.AccessibleName = "仓库服务器"; server.Text = "plasticscm7.seasungame.com:8087";
             grid.Controls.Add(query, 2, 1);
             repositories.DropDownStyle = ComboBoxStyle.DropDownList; repositories.DisplayMember = "Name";
             AddField(grid, 2, "仓库", repositories); grid.Controls.Add(cancelQuery, 2, 2);
@@ -84,7 +84,11 @@ namespace TortoiseSCM
             Controls.Add(grid); AcceptButton = create; CancelButton = close;
             query.Click += async delegate { await QueryAsync(); }; cancelQuery.Click += delegate { CancelQuery("查询已取消。可以重新查询。"); };
             server.TextChanged += delegate { CancelQuery("服务器已更改，请重新查询仓库。"); repositories.Items.Clear(); UpdateControls(); };
-            repositories.SelectedIndexChanged += delegate { UpdateControls(); };
+            repositories.SelectedIndexChanged += delegate {
+                var repository = repositories.SelectedItem as PlasticRepositoryInfo;
+                if (repository != null) workspaceName.Text = repository.Name;
+                UpdateControls();
+            };
             mode.SelectedIndexChanged += delegate { UpdateModeText(); };
             workspaceName.TextChanged += delegate { if (!settingDefaults) nameEdited = true; };
             directory.TextChanged += delegate { if (!settingDefaults) directoryEdited = true; };

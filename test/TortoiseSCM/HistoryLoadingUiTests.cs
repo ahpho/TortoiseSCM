@@ -1,4 +1,4 @@
-// GPL-2.0-or-later. Exercise automatic history exhaustion through real fake-cm processes.
+// GPL-2.0-or-later. Exercise bounded opening and explicit full refresh through real fake-cm processes.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -48,17 +48,30 @@ namespace TortoiseSCM
                 {
                     form.Show(); Pump(() => !Field<bool>(form, "loadingHistory"));
                     var revisions = Field<ListView>(form, "revisions");
-                    Require(revisions.Items.Count == 126 && Ids(form).First() == 125 && Ids(form).Last() == 0, "Opening automatically loads every repository changeset across two batches: " + revisions.Items.Count + " / " + Field<Label>(form, "status").Text);
-                    Require(PageQueries(root) == 2 && !Field<bool>(form, "hasMoreHistory"), "Exhaustion is based on server continuation, not first page size");
-                    Require(Ids(form).Distinct().Count() == 126, "Automatic pages contain no duplicates");
+                    Require(revisions.Items.Count == 100 && Ids(form).First() == 125 && Ids(form).Last() == 26, "Opening stops after the newest bounded page: " + revisions.Items.Count + " / " + Field<Label>(form, "status").Text);
+                    Require(PageQueries(root) == 1 && Field<bool>(form, "hasMoreHistory"), "Opening does not scan older pages");
+                    Require(ReadCalls(root).All(line => !line.Contains("--format={id}")), "Opening skips the repository-wide count query");
+                    Require(!Field<ProgressBar>(form, "historyProgress").Visible && Field<Label>(form, "historySummary").Text.Contains("仅加载最近一页"), "Idle partial history hides progress and explains how to load older rows");
+                    Require(Ids(form).Distinct().Count() == 100, "Initial page contains no duplicates");
                     Require(revisions.Items.Cast<ListViewItem>().All(row => row.Font.Bold ==
                         ((PlasticHistoryItem)row.Tag).Changeset > 110),
-                        "Only incoming current-branch commits are bold; unmerged branches are regular");
+                        "Root history uses only the last root update changeset watermark");
+                    Require(ReadCalls(root).All(line => !line.Contains("--ancestors") && !line.StartsWith("ls ")), "Root styling never scans per-file loaded revisions or ancestry");
                     Require(ReadCalls(root).Count(line => line.Contains("changesetid = ")) == 0, "Selected history metadata is reused without another changeset query");
+                    var navigation = Field<Button>(form, "refreshHistory").Parent;
+                    Require(navigation == Field<Button>(form, "cancelHistory").Parent && navigation == Field<ProgressBar>(form, "historyProgress").Parent,
+                        "Refresh, cancel and progress share one toolbar");
+                    Require(Field<Button>(form, "refreshHistory").Left == 0 && Field<Button>(form, "cancelHistory").Left > Field<Button>(form, "refreshHistory").Right,
+                        "Toolbar buttons start at the left edge in request order");
+                    Require(Field<ProgressBar>(form, "historyProgress").Height < Field<Button>(form, "refreshHistory").Height &&
+                        Field<Label>(form, "historySummary").Top >= navigation.Bottom, "Thin progress stays above the separate information row");
+                    Save(form, Path.Combine(artifacts, "history-recent.png"));
+                    Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(revisions.Items.Count == 126 && Ids(form).Last() == 0 && !Field<bool>(form, "hasMoreHistory"), "Refresh all explicitly scans older history");
                     var filter = Field<TextBox>(form, "filter");
                     filter.Text = "oldest-only"; Pump(() => Field<Button>(form, "restore").Enabled);
                     Require(Ids(form).SequenceEqual(new long[] { 1 }), "Filtering finds a match beyond the first batch");
-                    Require(!revisions.Items[0].Font.Bold && revisions.Items[0].ToolTipText.Contains("无需拉取"), "Unmerged branch tooltip explains why it is not bold");
+                    Require(!revisions.Items[0].Font.Bold && revisions.Items[0].ToolTipText.Contains("初始"), "Bootstrap rows remain ordinary");
                     filter.Text = "commit 125"; Pump(() => Field<Button>(form, "restore").Enabled);
                     Require(revisions.Items.Count == 1 && revisions.Items[0].Font.Bold && revisions.Items[0].UseItemStyleForSubItems, "Filtering retains bold for actual incoming commits");
                     filter.Clear(); Pump(() => Field<Button>(form, "restore").Enabled);
@@ -84,12 +97,12 @@ namespace TortoiseSCM
                     localRefresh = (Task)typeof(HistoryForm).GetMethod("UpdateLocalRowsAsync", Flags).Invoke(form, new object[] { CancellationToken.None });
                     Pump(() => localRefresh.IsCompleted); localRefresh.GetAwaiter().GetResult();
                     Require(revisions.Items.Cast<ListViewItem>().All(row => !row.Font.Bold),
-                        "After fully updating no row is bold, including unrelated branch commits");
+                        "After the root watermark advances no row is bold");
                     Write(root, "invalid-local-state", "");
                     typeof(Form).GetMethod("OnActivated", Flags).Invoke(form, new object[] { EventArgs.Empty });
                     Pump(() => !Field<bool>(form, "checkingLocalState"));
                     Require(revisions.Items.Count == 131 && revisions.Items.Cast<ListViewItem>().All(row => !row.Font.Bold) &&
-                        Field<Label>(form, "historySummary").Text.Contains("本地拉取状态暂不可用"),
+                        Field<Label>(form, "historySummary").Text.Contains("根目录拉取状态暂不可用"),
                         "Returning to the window rechecks local state; failure retains history and clears stale styling");
                     File.Delete(Meta(root, "invalid-local-state"));
 
@@ -97,11 +110,18 @@ namespace TortoiseSCM
                     long[] retained = Ids(form);
                     Field<Button>(form, "refreshHistory").PerformClick();
                     Pump(() => File.Exists(Meta(root, "continuation-entered")));
+                    Require(Field<ProgressBar>(form, "historyProgress").Visible && Field<ProgressBar>(form, "historyProgress").Style == ProgressBarStyle.Continuous &&
+                        Field<ProgressBar>(form, "historyProgress").Value == 100 && Field<ProgressBar>(form, "historyProgress").Maximum == 146,
+                        "Full refresh shows determinate progress using scanned changesets / total");
+                    Require(Field<ProgressBar>(form, "historyProgress").Left >= Field<Button>(form, "cancelHistory").Right,
+                        "Visible progress follows cancel on the left toolbar");
+                    Save(form, Path.Combine(artifacts, "history-refreshing.png"));
                     Require(retained.All(id => Ids(form).Contains(id)) && Ids(form).First() == 145 && !Field<Button>(form, "refreshHistory").Enabled, "Refresh progressively shows new rows while retaining previous history and disabling duplicate refresh");
                     int runningQueries = PageQueries(root);
                     var ignored = (Task)typeof(HistoryForm).GetMethod("LoadHistoryPageAsync", Flags).Invoke(form, new object[] { true });
                     Require(ignored.IsCompleted && PageQueries(root) == runningQueries, "A second refresh cannot start a concurrent scan");
                     Field<Button>(form, "cancelHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(!Field<ProgressBar>(form, "historyProgress").Visible, "Cancelling hides progress again");
                     Require(Ids(form).SequenceEqual(retained) && Field<bool>(form, "hasMoreHistory"), "Cancelling later refresh batches preserves existing records and reports incompleteness");
                     Require(Field<Label>(form, "historySummary").Text.Contains("加载未完成") && Field<Button>(form, "refreshHistory").Enabled,
                         "Cancelled refresh stays explicitly retryable: " + Field<Label>(form, "historySummary").Text + " / refresh=" + Field<Button>(form, "refreshHistory").Enabled);
@@ -127,13 +147,15 @@ namespace TortoiseSCM
 
                 Write(root, "slow-continuation", "");
                 using (var form = new HistoryForm(Client(), root, root)) {
-                    form.Show(); Pump(() => File.Exists(Meta(root, "continuation-entered")));
-                    Require(Ids(form).Length == 100 && Field<Button>(form, "cancelHistory").Enabled, "First load publishes the first batch while scanning older history");
-                    Field<Button>(form, "cancelHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
-                    Require(Ids(form).Length == 100 && Field<bool>(form, "hasMoreHistory"), "Cancelling initial load preserves already visible rows");
+                    int pagesBefore = PageQueries(root);
+                    form.Show(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(Ids(form).Length == 100 && !File.Exists(Meta(root, "continuation-entered")) && PageQueries(root) == pagesBefore + 1,
+                        "A slow older page cannot delay the initial history window");
+                    Require(!Field<Button>(form, "cancelHistory").Enabled && !Field<ProgressBar>(form, "historyProgress").Visible,
+                        "Default recent load finishes with idle controls");
                     form.Close();
                 }
-                File.Delete(Meta(root, "slow-continuation")); File.Delete(Meta(root, "continuation-entered"));
+                File.Delete(Meta(root, "slow-continuation"));
 
                 Write(root, "slow-details", "");
                 using (var form = new HistoryForm(Client(), root, root)) {
@@ -155,22 +177,31 @@ namespace TortoiseSCM
                 using (var form = new HistoryForm(Client(), file, root)) {
                     int pagesBefore = PageQueries(root);
                     form.Show(); Pump(() => !Field<bool>(form, "loadingHistory"));
-                    Require(!File.Exists(file) && Ids(form).SequenceEqual(new long[] { 4, 1 }), "Missing local file automatically finds all historical path records");
-                    Require(PageQueries(root) - pagesBefore == 3 && Field<int>(form, "scannedChangesets") == 111 && !Field<bool>(form, "hasMoreHistory"),
-                        "Two empty path batches do not stop loading older matches");
+                    Require(!File.Exists(file) && Ids(form).Length == 0 && Field<bool>(form, "hasMoreHistory") && PageQueries(root) == pagesBefore + 1,
+                        "Missing path opening remains bounded even if its recent page has no match");
+                    int callsBeforeRefresh = ReadCalls(root).Count(line => line.StartsWith("status "));
+                    Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(Ids(form).SequenceEqual(new long[] { 4, 1 }) && Field<int>(form, "scannedChangesets") == 111 && !Field<bool>(form, "hasMoreHistory"),
+                        "Explicit full refresh traverses empty path batches and finds all older matches");
+                    Require(revisionsFor(form).All(row => !row.Font.Bold) && ReadCalls(root).Count(line => line.StartsWith("status ")) == callsBeforeRefresh &&
+                        !Field<Label>(form, "historySummary").Text.Contains("粗体"), "Non-root path history never queries or advertises bold local state");
                     form.Close();
                 }
                 using (var form = new HistoryForm(Client(), root, root, "/main/older")) {
                     form.Show(); Pump(() => !Field<bool>(form, "loadingHistory"));
-                    Require(Ids(form).SequenceEqual(new long[] { 4, 1 }) && !Field<bool>(form, "hasMoreHistory"), "Sparse branch history also traverses empty batches automatically");
+                    Require(Ids(form).Length == 0 && Field<bool>(form, "hasMoreHistory"), "Sparse branch opening stops after its recent scan");
+                    Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
+                    Require(Ids(form).SequenceEqual(new long[] { 4, 1 }) && !Field<bool>(form, "hasMoreHistory"), "Sparse branch full refresh traverses empty batches");
                     form.Close();
                 }
                 File.WriteAllText(file, "preview fixture"); Write(root, "slow-continuation", "");
                 using (var form = new HistoryForm(Client(), file, root)) {
-                    form.Show(); Pump(() => File.Exists(Meta(root, "continuation-entered")));
+                    form.Show(); Pump(() => !Field<bool>(form, "loadingHistory"));
                     Require(Ids(form).SequenceEqual(new long[] { 4 }) && Field<bool>(form, "hasMoreHistory"),
-                        "Native preview appears before the full scan reaches the old matching page and is never labelled complete");
+                        "Native preview supplements the bounded initial publication page without claiming completeness");
+                    Require(revisionsFor(form).All(row => !row.Font.Bold), "Native child preview also stays ordinary");
                     Save(form, Path.Combine(artifacts, "history-native-preview.png"));
+                    Field<Button>(form, "refreshHistory").PerformClick(); Pump(() => File.Exists(Meta(root, "continuation-entered")));
                     Field<Button>(form, "cancelHistory").PerformClick(); Pump(() => !Field<bool>(form, "loadingHistory"));
                     Require(Ids(form).SequenceEqual(new long[] { 4 }) && Field<bool>(form, "hasMoreHistory"), "Cancel preserves confirmed native preview and incomplete state");
                     File.Delete(Meta(root, "slow-continuation")); File.Delete(Meta(root, "continuation-entered"));
@@ -258,6 +289,7 @@ namespace TortoiseSCM
             }
             if (before.Success && File.Exists(Meta(root, "fail-continuation"))) { Console.Error.WriteLine("simulated older-history failure"); return 8; }
             int top = Int32.Parse(File.ReadAllText(Meta(root, "head")));
+            if (args.Contains("--format={id}")) { foreach (int id in Enumerable.Range(0, top + 1)) Console.WriteLine(id); return 0; }
             IEnumerable<int> ids = exact.Success ? new[] { Int32.Parse(exact.Groups[1].Value) } : Enumerable.Range(0, top + 1).Reverse();
             if (before.Success) ids = ids.Where(i => i < Int32.Parse(before.Groups[1].Value));
             if (limit.Success) ids = ids.Take(Int32.Parse(limit.Groups[1].Value));
@@ -274,6 +306,7 @@ namespace TortoiseSCM
         private static int PageQueries(string root) { return ReadCalls(root).Count(line => line.Contains("order by changesetid desc limit ")); }
         private static T Field<T>(object owner, string name) { return (T)owner.GetType().GetField(name, Flags).GetValue(owner); }
         private static long[] Ids(HistoryForm form) { return Field<ListView>(form, "revisions").Items.Cast<ListViewItem>().Select(row => ((PlasticHistoryItem)row.Tag).Changeset).ToArray(); }
+        private static IEnumerable<ListViewItem> revisionsFor(HistoryForm form) { return Field<ListView>(form, "revisions").Items.Cast<ListViewItem>(); }
         private static void Pump(Func<bool> ready) {
             var timer = Stopwatch.StartNew();
             Application.DoEvents();

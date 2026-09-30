@@ -37,11 +37,7 @@ namespace TortoiseSCM
                 }
                 if (request.Command == "create-workspace")
                 {
-                    using (var wizard = new WorkspaceCreationForm(request.Paths.FirstOrDefault(), request.ParentPath))
-                    {
-                        if (wizard.ShowDialog() != DialogResult.OK) return 0;
-                        request = LaunchRequest.Parse(new[] { "--path", wizard.SelectedWorkspacePath });
-                    }
+                    return RunWorkspaceCreation(request, wizard => wizard.ShowDialog());
                 }
                 else if (request.Paths.Count == 0 && request.Command == "status")
                 {
@@ -67,6 +63,13 @@ namespace TortoiseSCM
                 MessageBox.Show(ex.Message, "TortoiseSCM", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
+        }
+
+        internal static int RunWorkspaceCreation(LaunchRequest request, Func<WorkspaceCreationForm, DialogResult> showDialog)
+        {
+            using (var wizard = new WorkspaceCreationForm(request.Paths.FirstOrDefault(), request.ParentPath))
+                showDialog(wizard);
+            return 0;
         }
 
         // Keep shell dispatch independent of the pending-change/checkin surface.

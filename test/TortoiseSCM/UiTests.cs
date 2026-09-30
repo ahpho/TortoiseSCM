@@ -305,8 +305,9 @@ namespace TortoiseSCM
                             Require(((ListView)Field(history, "revisions")).Items.Count > 0, "Upper history pane contains real changesets");
                             Require(((ListView)Field(history, "changedFiles")).Items.Count > 0, "Lower history pane contains real changed files");
                             var revisions = (ListView)Field(history, "revisions");
-                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Initial automatic full history finishes");
-                            Require(!(bool)Field(history, "hasMoreHistory"), "History opens after automatically exhausting all pages");
+                            WaitUntil(() => !(bool)Field(history, "loadingHistory"), "Initial recent history finishes");
+                            Require(revisions.Items.Count <= 100 && !((ProgressBar)Field(history, "historyProgress")).Visible,
+                                "History opens with a bounded recent page and hidden idle progress");
                             var historyFlags = BindingFlags.Instance | BindingFlags.NonPublic;
                             var marked = (PlasticHistoryItem)revisions.SelectedItems[0].Tag;
                             revisions.ContextMenuStrip.Items.Cast<ToolStripItem>().Single(item => item.Text == "标记为比较起点").PerformClick();
@@ -323,7 +324,7 @@ namespace TortoiseSCM
                                 "Revision copy actions preserve the selected identifier and full multiline comment without touching the clipboard");
                             int fullyLoadedCount = revisions.Items.Count;
                             Require(revisions.Items.Cast<ListViewItem>().Select(item => ((PlasticHistoryItem)item.Tag).Changeset).Distinct().Count() == fullyLoadedCount,
-                                "Automatic complete history contains no duplicate commits");
+                                "Recent history contains no duplicate commits");
                             var refreshButton = (Button)Field(history, "refreshHistory");
                             Require(refreshButton.Enabled && refreshButton.CanSelect, "Full history refresh remains available");
                             refreshButton.PerformClick();
