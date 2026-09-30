@@ -54,6 +54,14 @@ internal static class CheckinPreflightTests
         Reset(); preview = Prepare(client, root);
         Check(preview.Files.Count == 3 && preview.ExcludedPrivateCount == 1, "Root preview excludes private descendants and counts them");
         Check(client.CheckinPreparedAsync(preview, "root review", CancellationToken.None).GetAwaiter().GetResult().Succeeded, "Root checkin allows unrelated excluded private file");
+        Reset(); File.WriteAllText(Path.Combine(root, "mode"), "partial");
+        preview = client.PrepareCheckinFastAsync(root, new[] { "file.txt" }, "repo@server", Selector, CancellationToken.None).GetAwaiter().GetResult();
+        Check(preview.IsPartial, "Fast preview uses authoritative partial workspace status");
+        Check(client.CheckinPreparedFastAsync(preview, "partial review", CancellationToken.None).GetAwaiter().GetResult().Succeeded,
+            "Fast checkin accepts Standard metadata after Gluon conversion");
+        string[] fastExecuted = XDocument.Load(Path.Combine(root, "executed")).Root.Elements("arg").Select(x => x.Value).ToArray();
+        Check(fastExecuted.Length > 1 && fastExecuted[0] == "partial" && fastExecuted[1] == "checkin",
+            "Fast partial checkin dispatches cm partial command");
         Reset(); Reject(() => Prepare(client, "private.txt"), "Explicit private selection rejected");
         Reset(); Reject(() => Prepare(client, "missing.txt"), "Missing selected pending path rejected");
         Reset(); File.WriteAllText(Path.Combine(root, "mode"), "added-directory"); Reject(() => Prepare(client, "folder/child.txt"), "Unselected pending directory dependency rejected");
@@ -87,7 +95,7 @@ internal static class CheckinPreflightTests
             if (args.Contains("--header"))
             {
                 if (mode == "late-content") File.WriteAllText(Path.Combine(root, "file.txt"), "changed during guarded awaits");
-                Console.WriteLine("<StatusOutput><WorkspaceStatus><Status><Changeset>4</Changeset></Status></WorkspaceStatus></StatusOutput>"); return 0;
+                Console.WriteLine("<StatusOutput><WorkspaceStatus><Status><Changeset>" + (mode == "partial" ? "-1" : "4") + "</Changeset></Status></WorkspaceStatus></StatusOutput>"); return 0;
             }
             var changes = new XElement("Changes", Row("file.txt", mode == "status" ? "CO" : "CH", false), Row("other.txt", "CH", false), Row("folder/child.txt", "CH", false), Row("private.txt", "PR", false));
             if (mode == "new-child") changes.Add(Row("folder/new.txt", "AD", false));
@@ -99,7 +107,8 @@ internal static class CheckinPreflightTests
             if (mode == "locks-failed") return 15;
             Console.WriteLine("TSLOCK|repo|12|bfc84710-23bf-4343-bc03-54548f8e4fdd|today|/main|4|/main|4|Locked|tester|review|/file.txt|END"); return 0;
         }
-        if (args[0] == "checkin") { new XDocument(new XElement("args", args.Select(a => new XElement("arg", a)))).Save(Path.Combine(root, "executed")); return mode == "checkin-failed" ? 19 : 0; }
+        if ((args[0] == "checkin") || (args.Length > 1 && args[0] == "partial" && args[1] == "checkin"))
+        { new XDocument(new XElement("args", args.Select(a => new XElement("arg", a)))).Save(Path.Combine(root, "executed")); return mode == "checkin-failed" ? 19 : 0; }
         return 20;
     }
     private static XElement Row(string path, string status, bool directory)

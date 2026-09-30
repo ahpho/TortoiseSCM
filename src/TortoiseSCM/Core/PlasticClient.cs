@@ -50,6 +50,12 @@ namespace TortoiseSCM
         }
 
         private PlasticProcessCommand Build(PlasticCommandRequest request, CancellationToken cancellationToken)
+        { return Build(request, cancellationToken, null); }
+
+        // Some write paths have already obtained the authoritative workspace
+        // mode from cm status. Keep that value when the local workspace file
+        // still contains the stale "Standard" hint left by Gluon conversion.
+        private PlasticProcessCommand Build(PlasticCommandRequest request, CancellationToken cancellationToken, bool? partialOverride)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (request == null) throw new ArgumentNullException("request");
@@ -82,7 +88,7 @@ namespace TortoiseSCM
                 (request.Recursive && (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Undo));
             if (recursiveMutation) foreach (string path in paths.Where(Directory.Exists)) RejectUnsafeDescendants(path, workspace.RootPath, cancellationToken);
             var result = new PlasticProcessCommand { FileName = config.CmPath, WorkingDirectory = workspace.RootPath, Arguments = args };
-            bool partial = workspace.IsPartial;
+            bool partial = partialOverride ?? workspace.IsPartial;
             if (partial && (request.Command == PlasticCommand.Add || request.Command == PlasticCommand.Checkout || request.Command == PlasticCommand.Checkin || request.Command == PlasticCommand.Undo || request.Command == PlasticCommand.Update)) args.Add("partial");
             switch (request.Command)
             {
@@ -111,19 +117,30 @@ namespace TortoiseSCM
                 case PlasticCommand.Gluon:
                     result.FileName = config.GluonPath; args.Clear(); args.Add("--wk=" + workspace.RootPath); result.Interactive = true; break;
             }
-            // cm supports reading one path per line from stdin. Use it for
-            // sizeable selections as well as very long command lines: a list
-            // of 194 ordinary paths can be below the Win32 command-line limit
-            // but still exceed cm's own argument parser limit. Keeping the
-            // whole list in one invocation preserves one atomic changeset.
-            if (request.Command == PlasticCommand.Checkin &&
+            // Standard cm checkin supports reading one path per line from
+            // stdin. Use it for sizeable selections as well as very long
+            // command lines: a list of 194 ordinary paths can be below the
+            // Win32 command-line limit but still exceed cm's own parser limit.
+            // Partial/Gluon checkin has no equivalent stdin form and is kept
+            // on explicit, workspace-relative arguments above.
+            if (request.Command == PlasticCommand.Checkin && partial && paths.Count >= 128)
+            {
+                // `cm partial checkin` does not support the standard-checkin
+                // stdin form. Keep one changeset intact, but shorten the
+                // command by passing validated workspace-relative paths.
+                string root = workspace.RootPath.TrimEnd('\\', '/');
+                var relative = paths.Select(path => path.Equals(root, StringComparison.OrdinalIgnoreCase)
+                    ? "." : path.Substring(root.Length).TrimStart('\\', '/')).ToList();
+                args.Clear(); args.Add("partial"); args.Add("checkin"); args.AddRange(relative);
+                if (request.Recursive) args.Add("--all"); args.Add("-c=" + request.Comment);
+            }
+            else if (request.Command == PlasticCommand.Checkin && !partial &&
                 (paths.Count >= 128 || String.Join(" ", args.Select(QuoteArgument)).Length > 20000))
             {
-                // Both standard and partial checkin accept one path per line from
-                // stdin when '-' is supplied. This avoids the Windows command-line
-                // limit without splitting one atomic changeset into several writes.
+                // Standard checkin accepts one path per line from stdin. This
+                // avoids the Windows command-line limit without splitting one
+                // atomic changeset into several writes.
                 args.Clear();
-                if (partial) args.Add("partial");
                 args.Add("checkin"); if (request.Recursive) args.Add("--all"); args.Add("-"); args.Add("-c=" + request.Comment);
                 string root = workspace.RootPath.TrimEnd('\\', '/');
                 result.StandardInput = String.Join(Environment.NewLine, paths.Select(path =>

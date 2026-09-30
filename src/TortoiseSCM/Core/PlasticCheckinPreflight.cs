@@ -95,7 +95,7 @@ namespace TortoiseSCM
             ValidateCheckinContext(workspace);
             var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
                 Paths = preview.Paths.ToList(), Comment = comment, Recursive = HasDirectoryScope(preview) };
-            var command = Build(request, cancellationToken);
+            var command = Build(request, cancellationToken, preview.IsPartial);
             ApplyWorkspaceMode(command, preview.IsPartial);
             bool actualPartial = command.Arguments.Count > 0 && command.Arguments[0] == "partial";
             var actual = new PlasticWorkspace { IsPartial = actualPartial };
@@ -114,13 +114,17 @@ namespace TortoiseSCM
             if (preview == null) throw new ArgumentNullException("preview");
             if (String.IsNullOrWhiteSpace(comment)) throw new ArgumentException("A checkin comment is required.", "comment");
             cancellationToken.ThrowIfCancellationRequested();
-            var workspace = DiscoverWorkspace(preview.RootPath);
+            // plastic.workspace can still say "Standard" after the workspace
+            // has been converted to Gluon/Partial.  Read the authoritative
+            // status header here as well as during preview; using the metadata
+            // hint would reject a valid partial checkin immediately before cm.
+            var workspace = await GetWorkspaceAsync(preview.RootPath, cancellationToken).ConfigureAwait(false);
             if (workspace == null || !SamePath(workspace.RootPath, preview.RootPath) || workspace.Repository != preview.Repository ||
                 workspace.Name != preview.ExpectedName || workspace.Selector != preview.Selector || workspace.IsPartial != preview.IsPartial)
-                throw new InvalidOperationException("宸ヤ綔鍖哄凡鏀瑰彉锛岃鍒锋柊鐘舵€佸悗閲嶆柊棰勬绛惧叆鑼冨洿銆?");
+                throw new InvalidOperationException("工作区已改变，请刷新状态后重新预检签入范围。");
             var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
                 Paths = preview.Paths.ToList(), Comment = comment, Recursive = HasDirectoryScope(preview) };
-            var command = Build(request, cancellationToken);
+            var command = Build(request, cancellationToken, preview.IsPartial);
             ApplyWorkspaceMode(command, preview.IsPartial);
             using (var gate = StructureGate(preview.RootPath))
             {

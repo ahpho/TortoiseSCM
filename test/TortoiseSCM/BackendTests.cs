@@ -109,10 +109,10 @@ internal static class BackendTests
             for (int i = 0; i < 300; i++) request.Paths.Add(Path.Combine(temporary,
                 "partial-bulk-" + i.ToString("D4") + "-" + new String('y', 80) + " 中文.txt"));
             built = client.Build(request);
-            Assert(built.Arguments.SequenceEqual(new[] { "partial", "checkin", "-", "-c=" + request.Comment }) &&
-                built.StandardInput.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries)
-                    .SequenceEqual(request.Paths.Select(path => path.Substring(temporary.TrimEnd('\\').Length).TrimStart('\\'))),
-                "Large partial checkin uses the same complete stdin path transport");
+            Assert(built.Arguments.SequenceEqual(new[] { "partial", "checkin" }.Concat(request.Paths.Select(path =>
+                path.Substring(temporary.TrimEnd('\\').Length).TrimStart('\\'))).Concat(new[] { "-c=" + request.Comment })) &&
+                String.IsNullOrEmpty(built.StandardInput),
+                "Large partial checkin keeps one changeset with relative paths because partial cm has no stdin form");
             string xml = "<StatusOutput><Changes><Change><Type>MV</Type><TypeVerbose>Moved</TypeVerbose><Path>new.txt</Path><OldPath>old.txt</OldPath><RevisionType>enTextFile</RevisionType></Change><Change><Type>DE</Type><Path>gone</Path><RevisionType>enDirectory</RevisionType></Change></Changes></StatusOutput>";
             var parsed = PlasticClient.ParseStatus(xml, temporary);
             Assert(parsed[0].Status == "MV" && parsed[0].OldPath == Path.Combine(temporary, "old.txt"), "Moved status preserves source and destination");
