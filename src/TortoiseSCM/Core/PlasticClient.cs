@@ -299,7 +299,13 @@ namespace TortoiseSCM
                     }
                 }
                 Task<string> output = process.StandardOutput.ReadToEndAsync();
-                Task<string> error = process.StandardError.ReadToEndAsync();
+                // cm uses UTF-8 for machine-readable output but localized
+                // diagnostics follow the Windows console code page on some
+                // installations.  Read stderr as bytes and choose UTF-8 only
+                // when it is a valid encoding; otherwise use the system code
+                // page.  This prevents a failed bulk check-in from showing
+                // mojibake while keeping UTF-8 diagnostics intact.
+                Task<byte[]> error = ReadAllBytesAsync(process.StandardError.BaseStream);
                 try
                 {
                     if (!String.IsNullOrEmpty(command.StandardInput))
@@ -328,9 +334,31 @@ namespace TortoiseSCM
                         Output = output.Status == TaskStatus.RanToCompletion ? output.Result : "",
                         Error = "The Plastic SCM process did not close its output streams." };
                 string stdout = await output.ConfigureAwait(false);
-                string stderr = await error.ConfigureAwait(false);
+                string stderr = DecodeDiagnostic(await error.ConfigureAwait(false));
                 return new PlasticCommandResult { ExitCode = timedOut ? -1 : process.ExitCode, Output = stdout,
                     Error = timedOut ? "The Plastic SCM command timed out.\r\n" + stderr : stderr, TimedOut = timedOut };
+            }
+        }
+
+        private static async Task<byte[]> ReadAllBytesAsync(Stream stream)
+        {
+            using (var memory = new MemoryStream())
+            {
+                await stream.CopyToAsync(memory).ConfigureAwait(false);
+                return memory.ToArray();
+            }
+        }
+
+        private static string DecodeDiagnostic(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) return "";
+            int offset = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
+            byte[] payload = offset == 0 ? bytes : bytes.Skip(offset).ToArray();
+            try { return new UTF8Encoding(false, true).GetString(payload); }
+            catch (DecoderFallbackException)
+            {
+                try { return Encoding.Default.GetString(payload); }
+                catch (Exception) { return Encoding.UTF8.GetString(payload); }
             }
         }
 

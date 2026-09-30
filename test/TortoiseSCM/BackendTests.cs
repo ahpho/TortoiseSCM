@@ -49,6 +49,14 @@ internal static class BackendTests
                 using (var memory = new MemoryStream())
                 { input.CopyTo(memory); Console.Write(Convert.ToBase64String(memory.ToArray())); }
             }
+            else if (args[1] == "gbk-error")
+            {
+                // Simulate cm installations that write localized diagnostics
+                // using the Windows Chinese console code page.
+                byte[] diagnostic = Encoding.GetEncoding(936).GetBytes("\u6279\u91cf\u7b7e\u5165\u5931\u8d25\uff1a\u8def\u5f84\u592a\u957f");
+                using (Stream error = Console.OpenStandardError()) error.Write(diagnostic, 0, diagnostic.Length);
+                return 17;
+            }
             else foreach (string value in args.Skip(2)) Console.WriteLine(value);
             return 0;
         }
@@ -116,6 +124,9 @@ internal static class BackendTests
                 "UTF-8 standard input round trip has no BOM before the first path");
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "output" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.Output.Contains("stdout 中文 19999") && result.Error.Contains("stderr 中文 19999"), "Both redirected streams drain without deadlock");
+            result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "gbk-error" } }, CancellationToken.None).GetAwaiter().GetResult();
+            Assert(result.ExitCode == 17 && result.Error.Contains("\u6279\u91cf\u7b7e\u5165\u5931\u8d25") && result.Error.Contains("\u8def\u5f84\u592a\u957f"),
+                "Localized GBK diagnostics remain readable");
             config.Timeout = TimeSpan.FromMilliseconds(200);
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "wait" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.TimedOut && !result.Succeeded, "Timeout terminates process");

@@ -688,7 +688,7 @@ namespace TortoiseSCM
                 AppendOutput(result.Output); AppendOutput(result.Error);
                 AppendOutput(result.TimedOut ? "签入超时，服务器可能已经接受提交。" : "退出码：" + result.ExitCode);
                 succeeded = result.Succeeded;
-                if (!succeeded) throw new InvalidOperationException("签入未确认。说明和勾选已保留；请先刷新状态并查看历史核对服务器结果。\r\n" + result.Error);
+                if (!succeeded) throw new InvalidOperationException(FormatCheckinFailure(result, paths.Length));
                 comment.Clear(); submissionUncertain = submissionNeedsRefresh = false;
                 submissionNotice = "签入成功。";
                 // Local history is optional: its failure must never turn an accepted
@@ -835,6 +835,17 @@ namespace TortoiseSCM
 
         private void AppendOutput(string text)
         { if (!string.IsNullOrEmpty(text)) output.AppendText(text.TrimEnd() + Environment.NewLine); }
+
+        private static string FormatCheckinFailure(PlasticCommandResult result, int pathCount)
+        {
+            string detail = result == null ? "" : (result.Error ?? "").Trim();
+            if (detail.Length == 0 && result != null) detail = (result.Output ?? "").Trim();
+            if (detail.Length == 0) detail = "cm 未返回错误详情。";
+            int exitCode = result == null ? -1 : result.ExitCode;
+            string timeout = result != null && result.TimedOut ? "，命令已超时" : "";
+            return "签入失败（" + pathCount + " 个项目，退出码 " + exitCode + timeout + "）。\r\n" +
+                detail + "\r\n\r\n说明和勾选已保留；请先刷新状态并查看历史，核对服务器结果后再重试。";
+        }
 
         private void ShowError(Exception ex)
         {

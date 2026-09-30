@@ -69,10 +69,10 @@ HBITMAP CreateMenuBitmap(HICON icon, int width, int height)
 
 struct Command { const wchar_t* name; const wchar_t* label; const wchar_t* chineseLabel; };
 constexpr Command commands[] = {
-    {L"status", L"Pending changes...", L"待处理更改..."}, {L"checkin", L"SCM Check in...", L"SCM 签入..."},
-    {L"update", L"SCM Update...", L"SCM 更新..."}, {L"add", L"Add...", L"添加..."},
+    {L"status", L"Pending changes...", L"待处理更改..."}, {L"checkin", L"Check in...", L"签入..."},
+    {L"update", L"Update...", L"更新..."}, {L"add", L"Add...", L"添加..."},
     {L"checkout", L"Check out", L"签出"}, {L"undo", L"Undo changes...", L"撤销更改..."},
-    {L"diff", L"Diff...", L"比较差异..."}, {L"history", L"SCM History...", L"SCM 历史记录..."},
+    {L"diff", L"Diff...", L"比较差异..."}, {L"history", L"History...", L"历史记录..."},
     {L"gluon", L"Open Gluon", L"打开 Gluon"}, {L"settings", L"Settings...", L"设置..."},
     // Keep command identities stable (including modern canonical GUIDs).
     // Display order is defined separately below.
