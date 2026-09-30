@@ -150,7 +150,7 @@ begin
   RestartCheck.Parent := WizardForm.FinishedPage;
   RestartCheck.SetBounds(WizardForm.FinishedLabel.Left, WizardForm.FinishedPage.ClientHeight - ScaleY(60),
     WizardForm.FinishedLabel.Width, ScaleY(36));
-  RestartCheck.Caption := '现在重启资源管理器以启用新版右键菜单（将再次确认）';
+  RestartCheck.Caption := '现在重启资源管理器（启用图标覆盖和右键菜单）';
   RestartCheck.Checked := True;
   RestartCheck.Visible := False;
 end;
@@ -221,12 +221,21 @@ begin
   if CurPageID = wpFinished then begin
     WizardForm.FinishedLabel.Caption := InstallMessage + #13#10#13#10 +
       '请通过文件或目录的右键菜单使用 TortoiseSCM。“版本信息”可以核对当前程序版本。';
+#ifndef TestSetup
+    { Every production install registers machine overlay handlers. Loading the
+      current menu DLL does not prove Explorer has refreshed its overlay list.
+      Offer restart even for Current, NotLoaded and Unknown menu states. }
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'SCM 图标覆盖已注册，请重启资源管理器以生效。' + #13#10 +
+      '可勾选下方选项；也可稍后在任务管理器中重启“Windows 资源管理器”，或注销后重新登录。';
+    RestartCheck.Visible := True;
+#else
+    { Isolated test installations never register overlays or restart Explorer. }
+    RestartCheck.Visible := False;
+#endif
     if ExplorerState = 'Old' then begin
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-        '资源管理器仍加载旧版菜单。可稍后在任务管理器中重启“Windows 资源管理器”，或勾选下方选项。';
-#ifndef TestSetup
-      RestartCheck.Visible := True;
-#endif
+        '检测到资源管理器仍加载旧版菜单。';
     end else if ExplorerState = 'Unknown' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
         '暂时无法判断资源管理器加载的菜单版本，请通过右键“版本信息”核对。';
