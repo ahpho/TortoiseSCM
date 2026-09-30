@@ -57,6 +57,12 @@ internal static class BackendTests
                 using (Stream error = Console.OpenStandardError()) error.Write(diagnostic, 0, diagnostic.Length);
                 return 17;
             }
+            else if (args[1] == "gbk-output")
+            {
+                byte[] diagnostic = Encoding.GetEncoding(936).GetBytes("批量签入失败：路径太长");
+                using (Stream output = Console.OpenStandardOutput()) output.Write(diagnostic, 0, diagnostic.Length);
+                return 17;
+            }
             else foreach (string value in args.Skip(2)) Console.WriteLine(value);
             return 0;
         }
@@ -86,6 +92,11 @@ internal static class BackendTests
             Assert(built.StandardInput.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries)
                 .SequenceEqual(request.Paths.Select(path => path.Substring(temporary.TrimEnd('\\').Length).TrimStart('\\'))),
                 "Large standard checkin writes every exact workspace-relative path to stdin");
+            request.Paths.Clear();
+            for (int i = 0; i < 194; i++) request.Paths.Add(Path.Combine(temporary, "bulk-194-" + i.ToString("D3") + ".txt"));
+            built = client.Build(request);
+            Assert(built.Arguments.SequenceEqual(new[] { "checkin", "-", "-c=" + request.Comment }),
+                "A 194-file checkin uses stdin before cm reaches its argument parser limit");
             request.Paths.Clear(); request.Paths.Add(Path.Combine(temporary, "中文 space.txt"));
             request.Paths[0] = Path.GetTempPath(); Reject(delegate { client.Build(request); }, "Outside workspace rejected");
             request.Paths[0] = Path.Combine(temporary, ".plastic", "plastic.workspace"); Reject(delegate { client.Build(request); }, "Metadata rejected");
@@ -127,6 +138,9 @@ internal static class BackendTests
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "gbk-error" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.ExitCode == 17 && result.Error.Contains("\u6279\u91cf\u7b7e\u5165\u5931\u8d25") && result.Error.Contains("\u8def\u5f84\u592a\u957f"),
                 "Localized GBK diagnostics remain readable");
+            result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "gbk-output" } }, CancellationToken.None).GetAwaiter().GetResult();
+            Assert(result.ExitCode == 17 && result.Output.Contains("\u6279\u91cf\u7b7e\u5165\u5931\u8d25") && result.Output.Contains("\u8def\u5f84\u592a\u957f"),
+                "Localized GBK stdout diagnostics remain readable");
             config.Timeout = TimeSpan.FromMilliseconds(200);
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "wait" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.TimedOut && !result.Succeeded, "Timeout terminates process");

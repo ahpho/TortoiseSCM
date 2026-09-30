@@ -838,9 +838,13 @@ namespace TortoiseSCM
 
         private static string FormatCheckinFailure(PlasticCommandResult result, int pathCount)
         {
-            string detail = result == null ? "" : (result.Error ?? "").Trim();
-            if (detail.Length == 0 && result != null) detail = (result.Output ?? "").Trim();
+            string error = result == null ? "" : (result.Error ?? "").Trim();
+            string output = result == null ? "" : (result.Output ?? "").Trim();
+            string detail = error;
+            if (output.Length > 0 && !String.Equals(output, error, StringComparison.Ordinal))
+                detail = detail.Length == 0 ? output : detail + "\r\n" + output;
             if (detail.Length == 0) detail = "cm 未返回错误详情。";
+            if (detail.Length > 12000) detail = detail.Substring(0, 12000) + "\r\n…（完整输出已写入操作记录）";
             int exitCode = result == null ? -1 : result.ExitCode;
             string timeout = result != null && result.TimedOut ? "，命令已超时" : "";
             return "签入失败（" + pathCount + " 个项目，退出码 " + exitCode + timeout + "）。\r\n" +

@@ -111,7 +111,13 @@ namespace TortoiseSCM
                 case PlasticCommand.Gluon:
                     result.FileName = config.GluonPath; args.Clear(); args.Add("--wk=" + workspace.RootPath); result.Interactive = true; break;
             }
-            if (request.Command == PlasticCommand.Checkin && String.Join(" ", args.Select(QuoteArgument)).Length > 24000)
+            // cm supports reading one path per line from stdin. Use it for
+            // sizeable selections as well as very long command lines: a list
+            // of 194 ordinary paths can be below the Win32 command-line limit
+            // but still exceed cm's own argument parser limit. Keeping the
+            // whole list in one invocation preserves one atomic changeset.
+            if (request.Command == PlasticCommand.Checkin &&
+                (paths.Count >= 128 || String.Join(" ", args.Select(QuoteArgument)).Length > 20000))
             {
                 // Both standard and partial checkin accept one path per line from
                 // stdin when '-' is supplied. This avoids the Windows command-line
@@ -298,7 +304,7 @@ namespace TortoiseSCM
                         finally { Console.InputEncoding = previous; }
                     }
                 }
-                Task<string> output = process.StandardOutput.ReadToEndAsync();
+                Task<byte[]> output = ReadAllBytesAsync(process.StandardOutput.BaseStream);
                 // cm uses UTF-8 for machine-readable output but localized
                 // diagnostics follow the Windows console code page on some
                 // installations.  Read stderr as bytes and choose UTF-8 only
@@ -331,9 +337,9 @@ namespace TortoiseSCM
                 Task drain = Task.WhenAll(output, error);
                 if (await Task.WhenAny(drain, Task.Delay(5000)).ConfigureAwait(false) != drain)
                     return new PlasticCommandResult { ExitCode = -1, TimedOut = true,
-                        Output = output.Status == TaskStatus.RanToCompletion ? output.Result : "",
+                        Output = output.Status == TaskStatus.RanToCompletion ? DecodeDiagnostic(output.Result) : "",
                         Error = "The Plastic SCM process did not close its output streams." };
-                string stdout = await output.ConfigureAwait(false);
+                string stdout = DecodeDiagnostic(await output.ConfigureAwait(false));
                 string stderr = DecodeDiagnostic(await error.ConfigureAwait(false));
                 return new PlasticCommandResult { ExitCode = timedOut ? -1 : process.ExitCode, Output = stdout,
                     Error = timedOut ? "The Plastic SCM command timed out.\r\n" + stderr : stderr, TimedOut = timedOut };

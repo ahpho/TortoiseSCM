@@ -1,13 +1,15 @@
 #include <windows.h>
 1 ICON "..\\Resources\\gluon.ico"
-101 ICON "..\\Resources\\Icons\\Win10\\NormalIcon.ico"
-102 ICON "..\\Resources\\Icons\\Win10\\ModifiedIcon.ico"
-103 ICON "..\\Resources\\Icons\\Win10\\ConflictIcon.ico"
-104 ICON "..\\Resources\\Icons\\Win10\\AddedIcon.ico"
-105 ICON "..\\Resources\\Icons\\Win10\\DeletedIcon.ico"
-106 ICON "..\\Resources\\Icons\\Win10\\IgnoredIcon.ico"
-107 ICON "..\\Resources\\Icons\\Win10\\LockedIcon.ico"
-108 ICON "..\\Resources\\Icons\\Win10\\UnversionedIcon.ico"
+// High-contrast Tortoise-style overlays. The previous Win10 set was too dim
+// at Explorer's 16px overlay size, especially on dark folder backgrounds.
+101 ICON "..\\Resources\\Icons\\Blip\\NormalIcon.ico"
+102 ICON "..\\Resources\\Icons\\Blip\\ModifiedIcon.ico"
+103 ICON "..\\Resources\\Icons\\Blip\\ConflictIcon.ico"
+104 ICON "..\\Resources\\Icons\\Blip\\AddedIcon.ico"
+105 ICON "..\\Resources\\Icons\\Blip\\DeletedIcon.ico"
+106 ICON "..\\Resources\\Icons\\Blip\\IgnoredIcon.ico"
+107 ICON "..\\Resources\\Icons\\Blip\\LockedIcon.ico"
+108 ICON "..\\Resources\\Icons\\Blip\\UnversionedIcon.ico"
 200 ICON "..\\Resources\\menuupdate.ico"
 201 ICON "..\\Resources\\menucommit.ico"
 202 ICON "..\\Resources\\menuupdate.ico"

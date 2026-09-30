@@ -863,7 +863,15 @@ internal static class CliTests
             return 0;
         }
         string metadata = Path.Combine(Environment.CurrentDirectory, ".plastic");
-        if (Directory.Exists(metadata)) File.AppendAllText(Path.Combine(metadata, "cli-cm-calls.log"), Json.Serialize(args) + Environment.NewLine);
+        // Historical endpoints are downloaded in parallel in separate processes.
+        // Serialize fixture logging so a sharing violation cannot fail fake cm.
+        if (Directory.Exists(metadata))
+            using (var logLock = new Mutex(false, "Local\\TortoiseSCM-CliTests-Log"))
+            {
+                if (!logLock.WaitOne(TimeSpan.FromSeconds(10))) throw new TimeoutException("Fixture log lock timed out.");
+                try { File.AppendAllText(Path.Combine(metadata, "cli-cm-calls.log"), Json.Serialize(args) + Environment.NewLine); }
+                finally { logLock.ReleaseMutex(); }
+            }
         if (args[0] == "--tool-diff")
         {
             if (!File.Exists(args[1]) || !File.Exists(args[2])) return 9;
