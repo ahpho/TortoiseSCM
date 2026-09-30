@@ -279,6 +279,8 @@ namespace TortoiseSCM
             historyRequest = cancellation;
             refreshHistory.Enabled = false; cancelHistory.Enabled = true;
             historyProgress.Visible = true;
+            historyProgress.Style = ProgressBarStyle.Marquee;
+            historyProgress.MarqueeAnimationSpeed = 30;
             status.Text = "正在读取全部历史；可随时取消…";
             // During refresh retain old rows alongside completed batches; on failure
             // restore the previous result. Native hints never establish completeness.
