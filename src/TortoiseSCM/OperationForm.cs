@@ -162,8 +162,9 @@ namespace TortoiseSCM
             // The operation window is already the review step: it shows the exact
             // paths and checked rows immediately before execution. Checkout and
             // cancel-checkout therefore execute directly, matching TortoiseSVN /
-            // TortoiseGit. Keep a confirmation only for destructive row undo,
-            // where local content is about to be discarded from a status view.
+            // TortoiseGit. Keep the existing confirmation for other operations;
+            // row undo remains explicitly destructive because it discards local
+            // content from a status view.
             if (!IsCheckout() && MessageBox.Show(this, warning + String.Join("\r\n", paths.Take(12).ToArray()) +
                 (paths.Count > 12 ? "\r\n… 共 " + paths.Count + " 项" : "") + "\r\n\r\n继续" + label + "？",
                 "TortoiseSCM — " + label, MessageBoxButtons.OKCancel,
