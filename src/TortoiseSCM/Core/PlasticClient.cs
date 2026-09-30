@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -14,7 +15,6 @@ namespace TortoiseSCM
 {
     public sealed partial class PlasticClient
     {
-        private static readonly object StandardInputEncodingLock = new object();
         private readonly PlasticClientConfig config;
         public PlasticClient(PlasticClientConfig config) { if (config == null) throw new ArgumentNullException("config"); this.config = config; }
 
@@ -60,6 +60,7 @@ namespace TortoiseSCM
             cancellationToken.ThrowIfCancellationRequested();
             if (request == null) throw new ArgumentNullException("request");
             if (!Enum.IsDefined(typeof(PlasticCommand), request.Command)) throw new ArgumentException("Unsupported command.");
+            if (!Enum.IsDefined(typeof(PlasticCheckinInputMode), request.CheckinInputMode)) throw new ArgumentException("Unsupported checkin input method.");
             string working = String.IsNullOrWhiteSpace(request.WorkingDirectory) ? Environment.CurrentDirectory : request.WorkingDirectory;
             PlasticWorkspace workspace = DiscoverWorkspace(working);
             if (workspace == null && request.Paths != null && request.Paths.Count > 0) workspace = DiscoverWorkspace(request.Paths[0]);
@@ -101,7 +102,11 @@ namespace TortoiseSCM
                     args.Add("checkout"); args.AddRange(paths); if (request.Recursive) args.Add("--recursive"); break;
                 case PlasticCommand.Checkin:
                     if (String.IsNullOrWhiteSpace(request.Comment)) throw new ArgumentException("A checkin comment is required.");
-                    args.Add("checkin"); args.AddRange(paths); if (request.Recursive) args.Add("--all"); args.Add("-c=" + request.Comment);
+                    // The process runs at the workspace root. Relative arguments
+                    // keep exact selections while avoiding repeating a long root
+                    // for every file on the Windows command line.
+                    args.Add("checkin"); args.AddRange(paths.Select(path => WorkspaceRelativePath(path, workspace.RootPath)));
+                    if (request.Recursive) args.Add("--all"); args.Add("-c=" + request.Comment);
                     if (request.IncludePrivate) { if (partial) throw new ArgumentException("Add private files before checking in a partial workspace."); args.Add("--private"); } break;
                 case PlasticCommand.Undo:
                     args.Add("undo"); args.AddRange(paths); if (request.Recursive) args.Add("--recursive"); break;
@@ -117,37 +122,37 @@ namespace TortoiseSCM
                 case PlasticCommand.Gluon:
                     result.FileName = config.GluonPath; args.Clear(); args.Add("--wk=" + workspace.RootPath); result.Interactive = true; break;
             }
-            // Standard cm checkin supports reading one path per line from
-            // stdin. Use it for sizeable selections as well as very long
-            // command lines: a list of 194 ordinary paths can be below the
-            // Win32 command-line limit but still exceed cm's own parser limit.
-            // Partial/Gluon checkin has no equivalent stdin form and is kept
-            // on explicit, workspace-relative arguments above.
-            if (request.Command == PlasticCommand.Checkin && partial && paths.Count >= 128)
+            if (request.Command == PlasticCommand.Checkin &&
+                (request.CheckinInputMode == PlasticCheckinInputMode.StandardInput ||
+                 (request.CheckinInputMode == PlasticCheckinInputMode.Automatic &&
+                  (paths.Count >= 128 || String.Join(" ", args.Select(QuoteArgument)).Length > 20000))))
             {
-                // `cm partial checkin` does not support the standard-checkin
-                // stdin form. Keep one changeset intact, but shorten the
-                // command by passing validated workspace-relative paths.
-                string root = workspace.RootPath.TrimEnd('\\', '/');
-                var relative = paths.Select(path => path.Equals(root, StringComparison.OrdinalIgnoreCase)
-                    ? "." : path.Substring(root.Length).TrimStart('\\', '/')).ToList();
-                args.Clear(); args.Add("partial"); args.Add("checkin"); args.AddRange(relative);
-                if (request.Recursive) args.Add("--all"); args.Add("-c=" + request.Comment);
-            }
-            else if (request.Command == PlasticCommand.Checkin && !partial &&
-                (paths.Count >= 128 || String.Join(" ", args.Select(QuoteArgument)).Length > 20000))
-            {
-                // Standard checkin accepts one path per line from stdin. This
-                // avoids the Windows command-line limit without splitting one
-                // atomic changeset into several writes.
+                // Both standard and partial checkin accept one path per line
+                // from stdin. This avoids the Windows command-line length limit
+                // while preserving one native changeset for the whole selection.
                 args.Clear();
+                if (partial) args.Add("partial");
                 args.Add("checkin"); if (request.Recursive) args.Add("--all"); args.Add("-"); args.Add("-c=" + request.Comment);
+                if (request.IncludePrivate) args.Add("--private");
                 string root = workspace.RootPath.TrimEnd('\\', '/');
-                result.StandardInput = String.Join(Environment.NewLine, paths.Select(path =>
-                    path.Equals(root, StringComparison.OrdinalIgnoreCase) ? "." : path.Substring(root.Length).TrimStart('\\', '/'))) +
+                // Both are exact selections resolved at the workspace root.
+                // The partial form follows the documented `dir /S /B` example
+                // and sends absolute paths; standard checkin uses relative ones.
+                IEnumerable<string> inputPaths = partial ? paths : paths.Select(path =>
+                    path.Equals(root, StringComparison.OrdinalIgnoreCase) ? "." : path.Substring(root.Length).TrimStart('\\', '/'));
+                result.StandardInput = String.Join(Environment.NewLine, inputPaths) +
                     Environment.NewLine + Environment.NewLine;
             }
             return result;
+        }
+
+        private static string WorkspaceRelativePath(string path, string workspaceRoot)
+        {
+            string root = workspaceRoot.TrimEnd('\\', '/');
+            string relative = path.Equals(root, StringComparison.OrdinalIgnoreCase) ? "." : path.Substring(root.Length).TrimStart('\\', '/');
+            // A legal Windows filename can start with a dash. Keep it a path,
+            // rather than letting cm interpret it as an option/comment.
+            return relative.StartsWith("-", StringComparison.Ordinal) ? ".\\" + relative : relative;
         }
 
         public async Task<PlasticCommandResult> RunAsync(PlasticCommandRequest request, CancellationToken cancellationToken)
@@ -214,6 +219,12 @@ namespace TortoiseSCM
                 request.Command == PlasticCommand.Undo || request.Command == PlasticCommand.Update)
             {
                 var actualWorkspace = await GetWorkspaceAsync(planned.WorkingDirectory, cancellationToken).ConfigureAwait(false);
+                // Gluon conversions can leave plastic.workspace marked
+                // Standard even though cm status reports a partial workspace.
+                // Rebuild after that authoritative query so large-checkin
+                // stdin paths use the mode-specific format (absolute for
+                // partial, workspace-relative for standard).
+                planned = await Task.Run(() => Build(request, cancellationToken, actualWorkspace.IsPartial), cancellationToken).ConfigureAwait(false);
                 ApplyWorkspaceMode(planned, actualWorkspace.IsPartial);
             }
             PlasticCommandResult result = await ExecuteWithPartialConflictGuardAsync(planned, request, cancellationToken).ConfigureAwait(false);
@@ -278,6 +289,139 @@ namespace TortoiseSCM
         {
             if (config.Timeout <= TimeSpan.Zero) throw new InvalidOperationException("Process timeout must be positive.");
             cancellationToken.ThrowIfCancellationRequested();
+            string temporaryConfigDirectory = null;
+            try
+            {
+                command = PrepareCheckinTransport(command, out temporaryConfigDirectory);
+                bool shellCheckin = IsNativeCheckin(command) && !String.IsNullOrEmpty(command.StandardInput);
+                if (shellCheckin) command = PrepareCheckinStandardInput(command, ref temporaryConfigDirectory);
+                PlasticCommandResult result = await ExecuteCoreAsync(command, cancellationToken).ConfigureAwait(false);
+                return shellCheckin ? ReadShellCheckinResult(result) : result;
+            }
+            finally
+            {
+                if (temporaryConfigDirectory != null)
+                {
+                    // The awaited process has exited (including timeout or
+                    // cancellation). Never remove configuration while cm uses it.
+                    try { Directory.Delete(temporaryConfigDirectory, true); }
+                    catch (IOException error) { Trace.TraceWarning("Cannot remove temporary checkin configuration: " + error.Message); }
+                    catch (UnauthorizedAccessException error) { Trace.TraceWarning("Cannot remove temporary checkin configuration: " + error.Message); }
+                }
+            }
+        }
+
+        private static PlasticProcessCommand PrepareCheckinTransport(PlasticProcessCommand command, out string temporaryDirectory)
+        {
+            temporaryDirectory = null;
+            if (!IsNativeCheckin(command)) return command;
+            string original = GetCmClientConfigPath(command);
+            if (!File.Exists(original)) return command; // Let cm report its normal configuration error.
+            XDocument document = SafeXml.Load(File.ReadAllText(original));
+            if (document.Root == null || document.Root.Name.LocalName != "ClientConfigData")
+                throw new InvalidDataException("Invalid Plastic SCM client configuration.");
+            XElement compression = document.Root.Element("PlasticProtoEnableLz4");
+            if (compression != null && compression.Value.Equals("yes", StringComparison.OrdinalIgnoreCase)) return command;
+            if (compression == null) document.Root.Add(new XElement("PlasticProtoEnableLz4", "yes"));
+            else compression.Value = "yes";
+            // Old servers can hang discarding a large newer-version TryCheckIn
+            // request before falling back to their supported method version.
+            // Supported protocol compression keeps one native atomic checkin
+            // while avoiding that transport failure. All user settings,
+            // credentials and language are preserved in this per-process copy.
+            EnsureCheckinTemporaryDirectory(ref temporaryDirectory);
+            string copy = System.IO.Path.Combine(temporaryDirectory, "client.conf");
+            using (var writer = new StreamWriter(copy, false, new UTF8Encoding(false))) document.Save(writer);
+            var arguments = command.Arguments.Where(argument => !argument.StartsWith("--clientconf=", StringComparison.OrdinalIgnoreCase) &&
+                !argument.StartsWith("-clientconf=", StringComparison.OrdinalIgnoreCase)).ToList();
+            arguments.Add("--clientconf=" + copy);
+            return new PlasticProcessCommand { FileName = command.FileName, WorkingDirectory = command.WorkingDirectory,
+                Arguments = arguments, StandardInput = command.StandardInput, Interactive = command.Interactive };
+        }
+
+        private static bool IsNativeCheckin(PlasticProcessCommand command)
+        {
+            return !command.Interactive && System.IO.Path.GetFileName(command.FileName).Equals("cm.exe", StringComparison.OrdinalIgnoreCase) &&
+                command.Arguments.Count > 0 && (command.Arguments[0] == "checkin" ||
+                (command.Arguments.Count > 1 && command.Arguments[0] == "partial" && command.Arguments[1] == "checkin"));
+        }
+
+        private static void EnsureCheckinTemporaryDirectory(ref string directory)
+        {
+            if (directory != null) return;
+            directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "TortoiseSCM", "checkin-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+        }
+
+        private static PlasticProcessCommand PrepareCheckinStandardInput(PlasticProcessCommand command, ref string temporaryDirectory)
+        {
+            if (!command.Arguments.Contains("-")) throw new ArgumentException("Native checkin stdin requires an explicit path-list argument.");
+            string[] paths = command.StandardInput.TrimEnd('\r', '\n').Split(new [] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+            if (paths.Length == 0 || paths.Any(path => String.IsNullOrWhiteSpace(path) || path.IndexOf('\0') >= 0))
+                throw new ArgumentException("Checkin stdin must contain only one explicit path per line.");
+            string workspaceRoot = System.IO.Path.GetFullPath(command.WorkingDirectory);
+            paths = paths.Select(path => System.IO.Path.GetFullPath(System.IO.Path.IsPathRooted(path) ? path :
+                System.IO.Path.Combine(workspaceRoot, path))).ToArray();
+            if (paths.Any(path => !IsWithin(path, workspaceRoot) || !System.IO.Path.IsPathRooted(path)))
+                throw new ArgumentException("Checkin stdin paths must belong to the command workspace.");
+            var innerArguments = command.Arguments.ToList();
+            string comment = innerArguments.FirstOrDefault(argument => argument.StartsWith("-c=", StringComparison.Ordinal));
+            if (comment != null)
+            {
+                EnsureCheckinTemporaryDirectory(ref temporaryDirectory);
+                string commentsFile = System.IO.Path.Combine(temporaryDirectory, "comments.txt");
+                File.WriteAllText(commentsFile, comment.Substring(3), new UTF8Encoding(false, true));
+                innerArguments.Remove(comment);
+                innerArguments.Add("-commentsfile=" + commentsFile);
+            }
+            var shellArguments = new List<string> { "shell", "--encoding=utf-8", "--enablestderr" };
+            foreach (string argument in innerArguments.Where(argument => argument.StartsWith("--clientconf=", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("-clientconf=", StringComparison.OrdinalIgnoreCase)).ToArray())
+            { innerArguments.Remove(argument); shellArguments.Add(argument); }
+            // cm's ordinary Console.ReadLine reader corrupts CP936 characters
+            // at some long-input buffer boundaries. Its supported shell UTF-8
+            // reader preserves every path. Execute exactly one checkin inside
+            // one cm process; comments live in a file so their newlines cannot
+            // become commands. The path list ends before the controlled exit.
+            // An early native validation failure can leave the path list unread.
+            // Absolute drive/UNC paths cannot be cm shell command names, even
+            // then. Never send workspace-relative names as shell input lines.
+            string line = String.Join(" ", innerArguments.Select(QuoteCmShellArgument));
+            string input = line + Environment.NewLine + String.Join(Environment.NewLine, paths) +
+                Environment.NewLine + Environment.NewLine + "exit" + Environment.NewLine;
+            return new PlasticProcessCommand { FileName = command.FileName, WorkingDirectory = command.WorkingDirectory,
+                Arguments = shellArguments, StandardInput = input };
+        }
+
+        private static string QuoteCmShellArgument(string argument)
+        {
+            // cm shell has its own quote-toggle parser; it does not implement
+            // CRT backslash escaping. Windows paths cannot contain a quote.
+            if (argument.IndexOfAny(new [] { '"', '\r', '\n', '\0' }) >= 0)
+                throw new ArgumentException("Unsupported character in an internal Plastic SCM shell argument.");
+            return argument.IndexOf(' ') >= 0 ? "\"" + argument + "\"" : argument;
+        }
+
+        internal static PlasticCommandResult ReadShellCheckinResult(PlasticCommandResult result)
+        {
+            if (!result.Succeeded) return result;
+            MatchCollection statuses = Regex.Matches(result.Output, @"(?m)^CommandResult (-?\d+)\r?$", RegexOptions.CultureInvariant);
+            int exitCode;
+            if (statuses.Count != 1 || !Int32.TryParse(statuses[0].Groups[1].Value, out exitCode))
+            {
+                result.ExitCode = -1;
+                result.Error += (String.IsNullOrEmpty(result.Error) ? "" : Environment.NewLine) +
+                    "Plastic SCM did not return one unambiguous checkin result. Refresh status and inspect history before retrying.";
+                return result;
+            }
+            result.ExitCode = exitCode;
+            result.Output = result.Output.Remove(statuses[0].Index, statuses[0].Length).TrimEnd('\r', '\n') + Environment.NewLine;
+            return result;
+        }
+
+        private async Task<PlasticCommandResult> ExecuteCoreAsync(PlasticProcessCommand command, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             var start = new ProcessStartInfo { FileName = command.FileName, Arguments = String.Join(" ", command.Arguments.Select(QuoteArgument)),
                 WorkingDirectory = command.WorkingDirectory, UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
@@ -299,28 +443,11 @@ namespace TortoiseSCM
             }
             using (var process = new Process { StartInfo = start })
             {
-                StreamWriter standardInput;
-                if (String.IsNullOrEmpty(command.StandardInput))
-                {
-                    process.Start(); standardInput = process.StandardInput;
-                }
-                else
-                {
-                    // .NET Framework creates Process.StandardInput with
-                    // Console.InputEncoding. Its default UTF-8 instance emits a
-                    // BOM, which cm treats as part of the first path. Capture a
-                    // BOM-less writer while holding the process-wide encoding lock.
-                    lock (StandardInputEncodingLock)
-                    {
-                        Encoding previous = Console.InputEncoding;
-                        try
-                        {
-                            Console.InputEncoding = new UTF8Encoding(false);
-                            process.Start(); standardInput = process.StandardInput;
-                        }
-                        finally { Console.InputEncoding = previous; }
-                    }
-                }
+                // Encode before starting a mutation. A character unavailable in
+                // cm's input code page must not silently become '?' in a path.
+                byte[] inputBytes = String.IsNullOrEmpty(command.StandardInput) ? null :
+                    GetStandardInputEncoding(command).GetBytes(command.StandardInput);
+                process.Start();
                 Task<byte[]> output = ReadAllBytesAsync(process.StandardOutput.BaseStream);
                 // cm uses UTF-8 for machine-readable output but localized
                 // diagnostics follow the Windows console code page on some
@@ -331,10 +458,12 @@ namespace TortoiseSCM
                 Task<byte[]> error = ReadAllBytesAsync(process.StandardError.BaseStream);
                 try
                 {
-                    if (!String.IsNullOrEmpty(command.StandardInput))
-                        await standardInput.WriteAsync(command.StandardInput).ConfigureAwait(false);
+                    if (inputBytes != null)
+                        await process.StandardInput.BaseStream.WriteAsync(inputBytes, 0, inputBytes.Length).ConfigureAwait(false);
                 }
-                finally { standardInput.Close(); }
+                // Close the raw pipe, not the default StreamWriter: flushing a
+                // never-used UTF-8 writer can append its BOM to the path stream.
+                finally { process.StandardInput.BaseStream.Close(); }
                 var timer = Stopwatch.StartNew();
                 bool timedOut = false;
                 while (!process.HasExited)
@@ -363,6 +492,76 @@ namespace TortoiseSCM
             }
         }
 
+        [DllImport("kernel32.dll")]
+        private static extern uint GetOEMCP();
+
+        private static Encoding GetStandardInputEncoding(PlasticProcessCommand command)
+        {
+            if (!System.IO.Path.GetFileName(command.FileName).Equals("cm.exe", StringComparison.OrdinalIgnoreCase))
+                return new UTF8Encoding(false, true);
+            if (command.Arguments.Count > 0 && command.Arguments[0] == "shell" && command.Arguments.Contains("--encoding=utf-8"))
+                return new UTF8Encoding(false, true);
+            // cm 11 reads Console.In. It switches that console to UTF-8 only
+            // for its Chinese/Japanese/Korean UI language; with English UI on
+            // Chinese Windows it reads CP936 even though status XML is UTF-8.
+            string language = null;
+            // cm sets its console encoding before processing --clientconf.
+            // Our transport copy preserves that startup language unchanged.
+            string location = GetCmClientConfigPath(command, false);
+            if (File.Exists(location))
+            {
+                XElement data = SafeXml.Load(File.ReadAllText(location)).Root;
+                language = data == null ? null : (string)data.Element("Language");
+            }
+            return SelectCmStandardInputEncoding(language, (int)GetOEMCP());
+        }
+
+        private static string GetCmClientConfigPath(PlasticProcessCommand command)
+        { return GetCmClientConfigPath(command, true); }
+
+        private static string GetCmClientConfigPath(PlasticProcessCommand command, bool includeExplicitConfig)
+        {
+            string explicitConfig = !includeExplicitConfig ? null : command.Arguments.FirstOrDefault(argument => argument.StartsWith("--clientconf=", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("-clientconf=", StringComparison.OrdinalIgnoreCase));
+            if (explicitConfig != null)
+            {
+                string path = explicitConfig.Substring(explicitConfig.IndexOf('=') + 1);
+                return System.IO.Path.GetFullPath(System.IO.Path.IsPathRooted(path) ? path : System.IO.Path.Combine(command.WorkingDirectory, path));
+            }
+            string executable = command.FileName;
+            if (!System.IO.Path.IsPathRooted(executable))
+            {
+                foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+                {
+                    if (String.IsNullOrWhiteSpace(directory)) continue;
+                    string candidate;
+                    try { candidate = System.IO.Path.Combine(directory.Trim('"'), executable); }
+                    catch (ArgumentException) { continue; }
+                    if (File.Exists(candidate)) { executable = candidate; break; }
+                }
+            }
+            string installed = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(executable) ?? "", "client.conf");
+            if (File.Exists(installed)) return installed;
+            string userDirectory = Environment.GetEnvironmentVariable("PLASTIC_HOME");
+            if (String.IsNullOrEmpty(userDirectory)) userDirectory = Environment.GetEnvironmentVariable("PLASTIC_HOME", EnvironmentVariableTarget.User);
+            if (String.IsNullOrEmpty(userDirectory)) userDirectory = Environment.GetEnvironmentVariable("PLASTIC_HOME", EnvironmentVariableTarget.Machine);
+            if (String.IsNullOrEmpty(userDirectory)) userDirectory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "plastic4");
+            return System.IO.Path.Combine(userDirectory, "client.conf");
+        }
+
+        internal static Encoding SelectCmStandardInputEncoding(string language, int consoleCodePage)
+        {
+            if (String.IsNullOrEmpty(language))
+            {
+                string culture = System.Globalization.CultureInfo.CurrentCulture.TwoLetterISOLanguageName;
+                language = culture == "zh" ? "zh-Hans" : culture;
+            }
+            if (language == "zh-Hans" || language == "zh-Hant" || language == "ja" || language == "ko" ||
+                (language == "zh" && System.Globalization.CultureInfo.CurrentCulture.TwoLetterISOLanguageName == "zh"))
+                return new UTF8Encoding(false, true);
+            return Encoding.GetEncoding(consoleCodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+        }
+
         private static async Task<byte[]> ReadAllBytesAsync(Stream stream)
         {
             using (var memory = new MemoryStream())
@@ -380,6 +579,9 @@ namespace TortoiseSCM
             try { return new UTF8Encoding(false, true).GetString(payload); }
             catch (DecoderFallbackException)
             {
+                // cm.exe writes localized diagnostics using the active Windows
+                // console code page on some installations (CP936 on Chinese
+                // Windows), while machine-readable output is UTF-8.
                 try { return Encoding.Default.GetString(payload); }
                 catch (Exception) { return Encoding.UTF8.GetString(payload); }
             }

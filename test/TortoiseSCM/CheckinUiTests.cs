@@ -41,6 +41,8 @@ namespace TortoiseSCM
                 TestSubmissionRetention(root, client, initialRows, preview, executable, artifacts);
                 TestFailuresRefreshAndPendingClose(root, client, initialRows, preview);
                 TestPrivateScopeAndReviewCancel(root, client, initialRows, preview);
+                TestCommitLayoutAndInput(root, client, initialRows, artifacts);
+                TestPartialStructuralSelection(root, client);
                 TestDefaultChecksAndDoubleClick(root, client, initialRows, artifacts);
                 Console.WriteLine("PASS: check-in UI (" + assertions + " assertions)");
             }
@@ -48,6 +50,82 @@ namespace TortoiseSCM
         }
 
         [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr handle, uint message, IntPtr wparam, IntPtr lparam);
+
+        private static void TestPartialStructuralSelection(string root, PlasticClient client)
+        {
+            foreach (string code in new[] { "DE", "LD", "MV", "RM" })
+            using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root }), false))
+            {
+                var workspace = client.DiscoverWorkspace(root); workspace.IsPartial = true;
+                Set(form, "client", client); Set(form, "workspace", workspace); Set(form, "loaded", true);
+                Set(form, "messageStore", new CommitMessageStore(Path.Combine(root, "structure-message-history")));
+                var directory = new PlasticStatusItem { Path = Path.Combine(root, "structure-" + code), StatusCode = code, IsDirectory = true };
+                var child = new PlasticStatusItem { Path = Path.Combine(directory.Path, "child.txt"), StatusCode = code };
+                var rows = new[] { directory, child };
+                var list = Field<ListView>(form, "files");
+                foreach (var row in rows) list.Items.Add(new ListViewItem(row.Path) { Tag = row });
+                form.Show(); Application.DoEvents();
+                list.Items[0].Checked = true;
+                Require(list.CheckedItems.Count == 2, "Partial structural directory cascades to its child: " + code);
+                Field<TextBox>(form, "comment").Text = "QA directory operation " + code;
+                int submissions = 0;
+                Set(form, "reportError", new Action<string>(text => { throw new InvalidOperationException(text); }));
+                Set(form, "prepareCheckin", new Func<string, IList<string>, string, string, CancellationToken, Task<PlasticCheckinPreview>>((path, selected, repository, selector, token) =>
+                {
+                    Require(selected.SequenceEqual(new[] { directory.Path }), "Partial structural directory scope is retained: " + code);
+                    return Task.FromResult(Preview(root, rows));
+                }));
+                Set(form, "submitCheckin", new Func<PlasticCheckinPreview, string, CancellationToken, Task<PlasticCommandResult>>((preview, message, token) =>
+                { submissions++; return Task.FromResult(new PlasticCommandResult { ExitCode = 0 }); }));
+                Set(form, "getPending", new Func<string, CancellationToken, Task<IList<PlasticStatusItem>>>((path, token) => Task.FromResult<IList<PlasticStatusItem>>(new List<PlasticStatusItem>())));
+                Await(form, "CheckinSelectionAsync", new object[] { null });
+                Require(submissions == 1, "Partial structural selection dispatches once: " + code);
+            }
+        }
+
+        private static void TestCommitLayoutAndInput(string root, PlasticClient client, IList<PlasticStatusItem> rows, string artifacts)
+        {
+            using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", rows[0].Path }), false))
+            {
+                var workspace = client.DiscoverWorkspace(root); workspace.IsPartial = true;
+                Set(form, "client", client); Set(form, "workspace", workspace); Set(form, "loaded", true);
+                Invoke(form, "UpdateCommitTarget");
+                form.GetType().GetMethod("SetBusy", Flags).Invoke(form, new object[] { false, "" });
+                form.Show(); Application.DoEvents();
+                var target = Field<Label>(form, "scope");
+                Require(target.Text == "Commit to: checkin@server:/目录  ·  Gluon / 部分工作区",
+                    "Commit target uses selected repository path and workspace mode");
+                Require(!target.Text.Contains(root) && !target.Text.Contains("范围") && !target.Text.Contains("\n"),
+                    "Commit header is a single remote target line without duplicated local scope");
+                var recent = Field<Button>(form, "messageLibrary");
+                Require(recent.Text == "Recent messages" && recent.Dock == DockStyle.Left && recent.Left == 0,
+                    "Recent messages button is named and aligned like the native commit dialog");
+                var stdin = Field<CheckBox>(form, "useCheckinStdin");
+                Require(!stdin.Checked && stdin.Enabled && (PlasticCheckinInputMode)form.GetType().GetMethod("SelectedCheckinInputMode", Flags).Invoke(form, null) == PlasticCheckinInputMode.Paths,
+                    "Temporary check-in option defaults to explicit paths");
+                stdin.Checked = true;
+                Require((PlasticCheckinInputMode)form.GetType().GetMethod("SelectedCheckinInputMode", Flags).Invoke(form, null) == PlasticCheckinInputMode.StandardInput,
+                    "Temporary option selects stdin input mode");
+                form.GetType().GetMethod("SetBusy", Flags).Invoke(form, new object[] { true, "正在提交…" });
+                Require(!stdin.Enabled, "Input method cannot change during a check-in");
+                form.GetType().GetMethod("SetBusy", Flags).Invoke(form, new object[] { false, "" });
+                Require(stdin.Enabled && stdin.Checked, "Completing a command restores the temporary input selection");
+                Save(form, Path.Combine(artifacts, "checkin-target-and-input.png"));
+                form.Size = form.MinimumSize; Application.DoEvents(); CheckBounds(form);
+                Require(stdin.Parent.ClientRectangle.Contains(stdin.Bounds), "Minimum commit layout contains temporary input option");
+                Save(form, Path.Combine(artifacts, "checkin-target-and-input-minimum.png"));
+                form.GetType().GetMethod("SetBusy", Flags).Invoke(form, new object[] { true, "正在提交…" });
+                Require(Field<ProgressBar>(form, "progress").Parent.ClientRectangle.Contains(Field<ProgressBar>(form, "progress").Bounds),
+                    "Minimum busy layout contains progress after temporary input option");
+                form.GetType().GetMethod("SetBusy", Flags).Invoke(form, new object[] { false, "" });
+            }
+            using (var form = new MainForm(LaunchRequest.Parse(new[] { "--path", root, "--path", rows[1].Path }), false))
+            {
+                Set(form, "workspace", client.DiscoverWorkspace(root)); Invoke(form, "UpdateCommitTarget");
+                Require(Field<Label>(form, "scope").Text == "Commit to: checkin@server:/；checkin@server:/目录/a.txt  ·  Standard / 完整工作区",
+                    "Multiple selected scopes remain identifiable as remote repository paths");
+            }
+        }
         private static void ClickAt(ListView list, Point point, bool twice)
         {
             var position = (IntPtr)((point.Y << 16) | (point.X & 0xffff));

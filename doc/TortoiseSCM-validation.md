@@ -1,5 +1,9 @@
 # TortoiseSCM 验证记录
 
+## 多文件原子提交与提交窗口（2026-09-30）
+
+- [定位与最终验证](TortoiseSCM-checkin-20260930.md)：LZ4 临时配置解决批量协议失败，官方 UTF-8 shell reader 修复长中文 stdin。14 场真实窗口/服务器提交全部通过，2127 项断言，各一个 changeset，包含实际源码副本 194 项及只选 175 文件长输入；新增临时输入方式开关与 Commit to / Recent messages 布局。
+
 ## 默认原生比较/合并工具（2026-09-29）
 
 - [实现、安装测试及截图](TortoiseSCM-tortoise-tools-20260929.md)：默认包内 TortoiseGitMerge，Beyond Compare 备选；完整回归、设置普通/最小尺寸、隔离安装升级卸载及真实 native diff 通过。保留第三方 GUI 手工编辑验收边界。

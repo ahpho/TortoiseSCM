@@ -16,6 +16,7 @@ internal static class BackendTests
 
     public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "shell") return FakeShellCheckin(args);
         if (args.Length > 0 && args[0] == "status")
         {
             string changeset = File.Exists(Path.Combine(Environment.CurrentDirectory, "fake-partial")) ? "-1" : "0";
@@ -36,6 +37,19 @@ internal static class BackendTests
             File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "update-calls.log"), args[1] + Environment.NewLine);
             Console.WriteLine("Updated " + args[1]);
             if (Path.GetFileName(args[1]) == "fail.txt") { Console.Error.WriteLine("Deliberate update failure"); return 7; }
+            return 0;
+        }
+        if (args.Length > 0 && (args[0] == "checkin" || (args.Length > 1 && args[0] == "partial" && args[1] == "checkin")))
+        {
+            File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "checkin-args.log"), String.Join("|", args));
+            string clientConfig = args.FirstOrDefault(argument => argument.StartsWith("--clientconf=", StringComparison.OrdinalIgnoreCase));
+            if (clientConfig != null)
+                File.Copy(clientConfig.Substring("--clientconf=".Length), Path.Combine(Environment.CurrentDirectory, "checkin-config-copy.xml"), true);
+            using (var input = Console.OpenStandardInput())
+            using (var memory = new MemoryStream())
+            { input.CopyTo(memory); File.WriteAllBytes(Path.Combine(Environment.CurrentDirectory, "checkin-stdin.bin"), memory.ToArray()); }
+            if (args.Contains("-c=wait")) Thread.Sleep(30000);
+            if (args.Contains("-c=fail")) return 17;
             return 0;
         }
         if (args.Length > 0 && args[0] == "--helper")
@@ -63,6 +77,12 @@ internal static class BackendTests
                 using (Stream output = Console.OpenStandardOutput()) output.Write(diagnostic, 0, diagnostic.Length);
                 return 17;
             }
+            else if (args[1] == "utf8-error")
+            {
+                byte[] diagnostic = new UTF8Encoding(false).GetBytes("UTF-8 diagnostic \u4E2D\u6587");
+                using (Stream error = Console.OpenStandardError()) error.Write(diagnostic, 0, diagnostic.Length);
+                return 17;
+            }
             else foreach (string value in args.Skip(2)) Console.WriteLine(value);
             return 0;
         }
@@ -81,8 +101,12 @@ internal static class BackendTests
             request.Paths.Add(Path.Combine(temporary, "中文 space.txt"));
             var built = client.Build(request);
             Assert(built.Arguments.Contains("-c=" + request.Comment), "Checkin comment remains one argument");
-            Assert(built.Arguments.Contains(request.Paths[0]), "Selected path retained");
+            Assert(built.Arguments.Contains("中文 space.txt"), "Selected path retained relative to the workspace process directory");
             Assert(!built.Arguments.Contains("--all"), "Explicit file checkin does not request recursive discovery");
+            request.Paths[0] = Path.Combine(temporary, "-c=selected.txt");
+            built = client.Build(request);
+            Assert(built.Arguments.Contains(".\\-c=selected.txt") && !built.Arguments.Contains("-c=selected.txt"),
+                "Leading-dash selected filenames stay paths rather than cm options");
             request.Paths.Clear();
             for (int i = 0; i < 300; i++) request.Paths.Add(Path.Combine(temporary,
                 "bulk-" + i.ToString("D4") + "-" + new String('x', 80) + " 中文.txt"));
@@ -96,7 +120,25 @@ internal static class BackendTests
             for (int i = 0; i < 194; i++) request.Paths.Add(Path.Combine(temporary, "bulk-194-" + i.ToString("D3") + ".txt"));
             built = client.Build(request);
             Assert(built.Arguments.SequenceEqual(new[] { "checkin", "-", "-c=" + request.Comment }),
-                "A 194-file checkin uses stdin before cm reaches its argument parser limit");
+                "Automatic 194-file checkin uses one stdin invocation");
+            request.CheckinInputMode = PlasticCheckinInputMode.Paths;
+            built = client.Build(request);
+            Assert(String.IsNullOrEmpty(built.StandardInput) && !built.Arguments.Contains("-") &&
+                built.Arguments.Skip(1).Take(request.Paths.Count).SequenceEqual(request.Paths.Select(Path.GetFileName)),
+                "Forced path mode keeps all 194 relative arguments in one checkin");
+            request.CheckinInputMode = PlasticCheckinInputMode.Automatic;
+            request.Paths.Clear();
+            for (int i = 0; i < 65; i++) request.Paths.Add(Path.Combine(temporary, "bulk-065-" + i.ToString("D3") + ".txt"));
+            built = client.Build(request);
+            Assert(String.IsNullOrEmpty(built.StandardInput) && built.Arguments.Count == 67,
+                "65 selected files do not imply a native parser limit");
+            request.CheckinInputMode = PlasticCheckinInputMode.StandardInput;
+            request.Paths.Clear(); request.Paths.Add(Path.Combine(temporary, "中文 space.txt"));
+            built = client.Build(request);
+            Assert(built.Arguments.SequenceEqual(new[] { "checkin", "-", "-c=" + request.Comment }) &&
+                built.StandardInput == "中文 space.txt" + Environment.NewLine + Environment.NewLine,
+                "Forced stdin accepts an exact single-file selection");
+            request.CheckinInputMode = PlasticCheckinInputMode.Automatic;
             request.Paths.Clear(); request.Paths.Add(Path.Combine(temporary, "中文 space.txt"));
             request.Paths[0] = Path.GetTempPath(); Reject(delegate { client.Build(request); }, "Outside workspace rejected");
             request.Paths[0] = Path.Combine(temporary, ".plastic", "plastic.workspace"); Reject(delegate { client.Build(request); }, "Metadata rejected");
@@ -109,10 +151,10 @@ internal static class BackendTests
             for (int i = 0; i < 300; i++) request.Paths.Add(Path.Combine(temporary,
                 "partial-bulk-" + i.ToString("D4") + "-" + new String('y', 80) + " 中文.txt"));
             built = client.Build(request);
-            Assert(built.Arguments.SequenceEqual(new[] { "partial", "checkin" }.Concat(request.Paths.Select(path =>
-                path.Substring(temporary.TrimEnd('\\').Length).TrimStart('\\'))).Concat(new[] { "-c=" + request.Comment })) &&
-                String.IsNullOrEmpty(built.StandardInput),
-                "Large partial checkin keeps one changeset with relative paths because partial cm has no stdin form");
+            Assert(built.Arguments.SequenceEqual(new[] { "partial", "checkin", "-", "-c=" + request.Comment }) &&
+                built.StandardInput.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries)
+                    .SequenceEqual(request.Paths),
+                "Large partial checkin uses absolute stdin paths without splitting the changeset");
             string xml = "<StatusOutput><Changes><Change><Type>MV</Type><TypeVerbose>Moved</TypeVerbose><Path>new.txt</Path><OldPath>old.txt</OldPath><RevisionType>enTextFile</RevisionType></Change><Change><Type>DE</Type><Path>gone</Path><RevisionType>enDirectory</RevisionType></Change></Changes></StatusOutput>";
             var parsed = PlasticClient.ParseStatus(xml, temporary);
             Assert(parsed[0].Status == "MV" && parsed[0].OldPath == Path.Combine(temporary, "old.txt"), "Moved status preserves source and destination");
@@ -133,11 +175,25 @@ internal static class BackendTests
                 Arguments = new[] { "--helper", "stdin" }, StandardInput = stdin }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.Succeeded && result.Output.TrimStart('\uFEFF') == Convert.ToBase64String(new UTF8Encoding(false).GetBytes(stdin)),
                 "UTF-8 standard input round trip has no BOM before the first path");
+            Encoding englishInput = PlasticClient.SelectCmStandardInputEncoding("en", 936);
+            Assert(englishInput.CodePage == 936 && englishInput.GetPreamble().Length == 0 &&
+                englishInput.GetBytes("中文").SequenceEqual(Encoding.GetEncoding(936).GetBytes("中文")),
+                "English cm UI on Chinese Windows uses CP936 stdin without a BOM");
+            foreach (string language in new [] { "zh-Hans", "zh-Hant", "ja", "ko" })
+                Assert(PlasticClient.SelectCmStandardInputEncoding(language, 936).CodePage == 65001 &&
+                    PlasticClient.SelectCmStandardInputEncoding(language, 936).GetPreamble().Length == 0,
+                    "cm " + language + " UI uses BOM-less UTF-8 stdin");
+            bool invalidInput = false;
+            try { englishInput.GetBytes("\uD83D\uDE80.txt"); } catch (EncoderFallbackException) { invalidInput = true; }
+            Assert(invalidInput, "cm legacy stdin rejects unrepresentable paths instead of replacing characters");
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "output" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.Output.Contains("stdout 中文 19999") && result.Error.Contains("stderr 中文 19999"), "Both redirected streams drain without deadlock");
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "gbk-error" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.ExitCode == 17 && result.Error.Contains("\u6279\u91cf\u7b7e\u5165\u5931\u8d25") && result.Error.Contains("\u8def\u5f84\u592a\u957f"),
                 "Localized GBK diagnostics remain readable");
+            result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "utf8-error" } }, CancellationToken.None).GetAwaiter().GetResult();
+            Assert(result.ExitCode == 17 && result.Error.Contains("UTF-8 diagnostic 中文"),
+                "Explicit UTF-8 diagnostics remain readable on localized Windows");
             result = client.ExecuteAsync(new PlasticProcessCommand { FileName = exe, WorkingDirectory = temporary, Arguments = new [] { "--helper", "gbk-output" } }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(result.ExitCode == 17 && result.Output.Contains("\u6279\u91cf\u7b7e\u5165\u5931\u8d25") && result.Output.Contains("\u8def\u5f84\u592a\u957f"),
                 "Localized GBK stdout diagnostics remain readable");
@@ -153,6 +209,7 @@ internal static class BackendTests
                 Assert(cancelled, "Cancellation terminates process");
             }
             UpdateTests(temporary, exe);
+            CheckinTransportTests(temporary, exe);
             ReadOperationTests();
             if (args.Length > 0 && args[0] == "--read-only")
             {
@@ -170,6 +227,176 @@ internal static class BackendTests
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { Directory.Delete(temporary, true); }
+    }
+
+    private static int FakeShellCheckin(string[] args)
+    {
+        // The real cm shell returns zero even when its inner checkin fails.
+        Console.OutputEncoding = new UTF8Encoding(false);
+        string input;
+        using (var reader = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false, true))) input = reader.ReadToEnd();
+        File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "checkin-shell-input.txt"), input, new UTF8Encoding(false));
+        using (var reader = new StringReader(input))
+        {
+            string header = reader.ReadLine();
+            File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "checkin-shell-command.log"), header);
+            var inner = new List<string>();
+            var word = new StringBuilder(); bool quoted = false;
+            foreach (char character in header)
+            {
+                if (character == '"') { quoted = !quoted; continue; }
+                if (character == ' ' && !quoted) { if (word.Length > 0) { inner.Add(word.ToString()); word.Clear(); } }
+                else word.Append(character);
+            }
+            if (word.Length > 0) inner.Add(word.ToString());
+            bool isCheckin = inner.Count > 0 && (inner[0] == "checkin" || (inner.Count > 1 && inner[0] == "partial" && inner[1] == "checkin"));
+            if (!isCheckin || quoted || !inner.Contains("-")) return 23;
+            File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "checkin-args.log"), String.Join("|", args));
+            string clientConfig = args.FirstOrDefault(argument => argument.StartsWith("--clientconf=", StringComparison.OrdinalIgnoreCase));
+            if (clientConfig != null)
+                File.Copy(clientConfig.Substring("--clientconf=".Length), Path.Combine(Environment.CurrentDirectory, "checkin-config-copy.xml"), true);
+            string commentArgument = inner.Single(argument => argument.StartsWith("-commentsfile=", StringComparison.Ordinal));
+            string comment = File.ReadAllText(commentArgument.Substring("-commentsfile=".Length), new UTF8Encoding(false, true));
+            File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "checkin-comment.log"), comment, new UTF8Encoding(false));
+            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "checkin-shell-calls.log"), "checkin" + Environment.NewLine);
+            if (comment == "early-fail")
+            {
+                Console.Error.WriteLine("Deliberate failure before reading paths"); Console.WriteLine("CommandResult 17");
+                string residual;
+                while ((residual = reader.ReadLine()) != null && residual != "exit")
+                {
+                    if (residual == "") continue;
+                    if (!Path.IsPathRooted(residual)) File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "checkin-shell-calls.log"), "unexpected-command" + Environment.NewLine);
+                    Console.WriteLine("CommandResult 1");
+                }
+                return 0;
+            }
+            var paths = new List<string>(); string line;
+            while ((line = reader.ReadLine()) != null && line != "") paths.Add(line);
+            File.WriteAllBytes(Path.Combine(Environment.CurrentDirectory, "checkin-stdin.bin"),
+                new UTF8Encoding(false).GetBytes(String.Join(Environment.NewLine, paths) + Environment.NewLine + Environment.NewLine));
+            if (line == null || reader.ReadLine() != "exit" || reader.ReadLine() != null) return 23;
+            if (comment == "wait") Thread.Sleep(30000);
+            if (comment == "no-result") return 0;
+            if (comment == "wrong-count") Console.WriteLine("CommandResult 0");
+            if (comment == "fail") { Console.Error.WriteLine("Deliberate shell checkin failure 中文"); Console.WriteLine("CommandResult 17"); }
+            else Console.WriteLine("CommandResult 0");
+            return 0;
+        }
+    }
+
+    private static void CheckinTransportTests(string temporary, string exe)
+    {
+        string root = Path.Combine(temporary, "native-cm-transport"); Directory.CreateDirectory(root);
+        string fakeCm = Path.Combine(root, "cm.exe"); File.Copy(exe, fakeCm);
+        string configPath = Path.Combine(root, "client.conf");
+        string original = "<ClientConfigData><Language>en</Language><SecurityConfig>opaque-existing-auth</SecurityConfig><WorkspaceServer>server:8087</WorkspaceServer><PlasticProtoEnableLz4>no</PlasticProtoEnableLz4><UnknownSetting>preserve</UnknownSetting></ClientConfigData>";
+        File.WriteAllText(configPath, original);
+        var config = new PlasticClientConfig { CmPath = fakeCm, Timeout = TimeSpan.FromSeconds(10) };
+        var client = new PlasticClient(config);
+        var command = new PlasticProcessCommand { FileName = fakeCm, WorkingDirectory = root,
+            Arguments = new [] { "partial", "checkin", "-", "--all", "-c=success" }, StandardInput = "中文.txt\r\n\r\n" };
+        var result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+        string[] args = File.ReadAllText(Path.Combine(root, "checkin-args.log")).Split('|');
+        string copiedConfigPath = args.Single(argument => argument.StartsWith("--clientconf=")).Substring("--clientconf=".Length);
+        string copiedConfig = File.ReadAllText(Path.Combine(root, "checkin-config-copy.xml"));
+        Assert(result.Succeeded && copiedConfig.Contains("<PlasticProtoEnableLz4>yes</PlasticProtoEnableLz4>") &&
+            copiedConfig.Contains("<Language>en</Language>") && copiedConfig.Contains("opaque-existing-auth") && copiedConfig.Contains("<UnknownSetting>preserve</UnknownSetting>"),
+            "Native checkin enables supported protocol compression in a copy while preserving client settings");
+        Assert(File.ReadAllText(configPath) == original && !File.Exists(copiedConfigPath) && !Directory.Exists(Path.GetDirectoryName(copiedConfigPath)),
+            "Successful checkin leaves the original config unchanged and removes its temporary copy");
+        Assert(File.ReadAllBytes(Path.Combine(root, "checkin-stdin.bin")).SequenceEqual(
+            new UTF8Encoding(false).GetBytes(Path.Combine(root, "中文.txt") + "\r\n\r\n")) && args.Take(3).SequenceEqual(new [] { "shell", "--encoding=utf-8", "--enablestderr" }),
+            "Native stdin uses the supported shell UTF-8 reader and absolute paths with no BOM");
+        Assert(command.Arguments.SequenceEqual(new [] { "partial", "checkin", "-", "--all", "-c=success" }),
+            "Temporary transport preparation does not mutate the planned command or change selection");
+        foreach (string comment in new [] { "fail", "wait", "no-result", "wrong-count" })
+        {
+            command.Arguments = new [] { "checkin", "-", "-c=" + comment };
+            config.Timeout = comment == "wait" ? TimeSpan.FromMilliseconds(250) : TimeSpan.FromSeconds(10);
+            result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+            args = File.ReadAllText(Path.Combine(root, "checkin-args.log")).Split('|');
+            copiedConfigPath = args.Single(argument => argument.StartsWith("--clientconf=")).Substring("--clientconf=".Length);
+            Assert(!result.Succeeded && !File.Exists(copiedConfigPath) && !Directory.Exists(Path.GetDirectoryName(copiedConfigPath)) && File.ReadAllText(configPath) == original,
+                "Temporary native checkin config is removed after " + comment);
+        }
+        config.Timeout = TimeSpan.FromSeconds(10);
+        using (var cancellation = new CancellationTokenSource(250))
+        {
+            command.Arguments = new [] { "checkin", "-", "-c=wait" };
+            bool cancelled = false;
+            try { client.ExecuteAsync(command, cancellation.Token).GetAwaiter().GetResult(); } catch (OperationCanceledException) { cancelled = true; }
+            args = File.ReadAllText(Path.Combine(root, "checkin-args.log")).Split('|');
+            copiedConfigPath = args.Single(argument => argument.StartsWith("--clientconf=")).Substring("--clientconf=".Length);
+            Assert(cancelled && !Directory.Exists(Path.GetDirectoryName(copiedConfigPath)), "Cancelled native checkin removes its temporary config");
+        }
+        string explicitPath = Path.Combine(root, "custom-client.conf");
+        File.WriteAllText(explicitPath, original.Replace("<Language>en</Language>", "<Language>zh-Hans</Language>"));
+        command.Arguments = new [] { "checkin", "-", "-c=explicit", "--clientconf=" + explicitPath };
+        result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+        args = File.ReadAllText(Path.Combine(root, "checkin-args.log")).Split('|');
+        copiedConfig = File.ReadAllText(Path.Combine(root, "checkin-config-copy.xml"));
+        Assert(result.Succeeded && args.Count(argument => argument.StartsWith("--clientconf=")) == 1 && copiedConfig.Contains("<Language>zh-Hans</Language>") &&
+            File.ReadAllBytes(Path.Combine(root, "checkin-stdin.bin")).SequenceEqual(
+                new UTF8Encoding(false).GetBytes(Path.Combine(root, "中文.txt") + "\r\n\r\n")),
+            "Explicit client configuration is preserved while the shell path reader remains UTF-8");
+        File.WriteAllText(configPath, original.Replace("<Language>en</Language>", "<Language>zh-Hans</Language>"));
+        command.Arguments = new [] { "checkin", "-", "-c=chinese-startup" };
+        result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+        Assert(result.Succeeded && File.ReadAllBytes(Path.Combine(root, "checkin-stdin.bin")).SequenceEqual(new UTF8Encoding(false).GetBytes(Path.Combine(root, "中文.txt") + "\r\n\r\n")),
+            "East Asian cm startup language uses BOM-less UTF-8 even with the temporary transport config");
+        string exactComment = "中文说明 with \"quotes\"\r\ncheckin -c=unexpected\r\nCommandResult 0\r\nlast line";
+        command.Arguments = new [] { "partial", "checkin", "-", "-c=" + exactComment };
+        command.StandardInput = String.Join("\r\n", Enumerable.Range(0, 194).Select(index => "中文目录\\" + index.ToString("D3") + new string('a', 120) + ".txt")) + "\r\n\r\n";
+        int callsBefore = File.ReadAllLines(Path.Combine(root, "checkin-shell-calls.log")).Length;
+        result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+        string header = File.ReadAllText(Path.Combine(root, "checkin-shell-command.log"));
+        string shellInput = File.ReadAllText(Path.Combine(root, "checkin-shell-input.txt"));
+        string[] absolutePaths = command.StandardInput.TrimEnd('\r', '\n').Split(new [] { "\r\n" }, StringSplitOptions.None).Select(path => Path.Combine(root, path)).ToArray();
+        Assert(result.Succeeded && File.ReadAllText(Path.Combine(root, "checkin-comment.log")) == exactComment && !header.Contains("unexpected") && !header.Contains("CommandResult 0"),
+            "Multiline Chinese comments and quote/result literals are kept verbatim in a file rather than shell commands");
+        Assert(File.ReadAllBytes(Path.Combine(root, "checkin-stdin.bin")).SequenceEqual(new UTF8Encoding(false).GetBytes(String.Join("\r\n", absolutePaths) + "\r\n\r\n")) &&
+            shellInput.StartsWith(header + "\r\n") && shellInput.EndsWith("\r\n\r\nexit\r\n") && File.ReadAllLines(Path.Combine(root, "checkin-shell-calls.log")).Length == callsBefore + 1,
+            "A long 194-path stdin stays exact and executes one atomic native checkin with a controlled exit");
+        string commentsPath = header.Substring(header.IndexOf("-commentsfile=") + "-commentsfile=".Length).Trim('"');
+        Assert(!File.Exists(commentsPath) && !Directory.Exists(Path.GetDirectoryName(commentsPath)), "Comments and transport files are removed after shell checkin");
+        callsBefore = File.ReadAllLines(Path.Combine(root, "checkin-shell-calls.log")).Length;
+        command.StandardInput = "中文.txt\r\n\r\ncheckin . -c=unexpected\r\n\r\n";
+        Reject(delegate { client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult(); }, "An embedded blank path cannot inject another shell command");
+        Assert(File.ReadAllLines(Path.Combine(root, "checkin-shell-calls.log")).Length == callsBefore, "Invalid path-list input never starts native checkin");
+        command.StandardInput = "..\\outside.txt\r\n\r\n";
+        Reject(delegate { client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult(); }, "Shell stdin cannot escape its workspace");
+        command.Arguments = new [] { "checkin", "-", "-c=early-fail" };
+        command.StandardInput = "checkin\r\nexit\r\nundo . --recursive\r\n\r\n";
+        result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+        Assert(!result.Succeeded && result.Error.Contains("inspect history") && File.ReadAllLines(Path.Combine(root, "checkin-shell-calls.log")).Length == callsBefore + 1 &&
+            !File.ReadAllText(Path.Combine(root, "checkin-shell-calls.log")).Contains("unexpected-command"),
+            "An early checkin failure leaves only absolute path tokens and cannot execute basename commands");
+        header = File.ReadAllText(Path.Combine(root, "checkin-shell-command.log"));
+        commentsPath = header.Substring(header.IndexOf("-commentsfile=") + "-commentsfile=".Length).Trim('"');
+        Assert(!Directory.Exists(Path.GetDirectoryName(commentsPath)), "Uncertain early shell failure removes temporary comments and configuration");
+        ShellResultTests();
+        File.WriteAllText(configPath, original.Replace("<PlasticProtoEnableLz4>no</PlasticProtoEnableLz4>", "<PlasticProtoEnableLz4>yes</PlasticProtoEnableLz4>"));
+        command.Arguments = new [] { "checkin", "selected.txt", "-c=already-enabled" }; command.StandardInput = null;
+        result = client.ExecuteAsync(command, CancellationToken.None).GetAwaiter().GetResult();
+        args = File.ReadAllText(Path.Combine(root, "checkin-args.log")).Split('|');
+        Assert(result.Succeeded && !args.Any(argument => argument.StartsWith("--clientconf=")),
+            "Already-enabled native compression uses the original config directly");
+    }
+
+    private static void ShellResultTests()
+    {
+        var result = PlasticClient.ReadShellCheckinResult(new PlasticCommandResult { ExitCode = 0, Output = "Created cs:12\r\nCommandResult 0\r\n" });
+        Assert(result.Succeeded && result.Output.Contains("cs:12") && !result.Output.Contains("CommandResult"), "One native success marker is required and removed from user output");
+        result = PlasticClient.ReadShellCheckinResult(new PlasticCommandResult { ExitCode = 0, Output = "CommandResult 17\r\n", Error = "Readable 中文 failure" });
+        Assert(result.ExitCode == 17 && result.Error.Contains("Readable 中文"), "Inner checkin failure overrides cm shell process success");
+        result = PlasticClient.ReadShellCheckinResult(new PlasticCommandResult { ExitCode = 7, Output = "CommandResult 0\r\n", Error = "Native process failed" });
+        Assert(result.ExitCode == 7 && result.Error.Contains("Native process failed"), "Native process failure cannot be hidden by a success marker");
+        foreach (string output in new [] { "no marker", "CommandResult 0\r\nCommandResult 0\r\n", "CommandResult 0\r\nCommandResult 1\r\n", "CommandResult 99999999999999\r\n" })
+        {
+            result = PlasticClient.ReadShellCheckinResult(new PlasticCommandResult { ExitCode = 0, Output = output });
+            Assert(!result.Succeeded && result.Error.Contains("inspect history"), "Missing, multiple, or invalid checkin markers are an uncertain failure");
+        }
     }
 
     private static void ReadOperationTests()
@@ -228,8 +455,20 @@ internal static class BackendTests
         request.Paths = new List<string> { first };
         result = client.RunAsync(request, CancellationToken.None).GetAwaiter().GetResult();
         Assert(result.Succeeded && File.ReadAllLines(log).SequenceEqual(new [] { "partial " + first }), "Mutation routes through actual partial mode");
+        request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = temporary, Comment = "stale metadata bulk", Recursive = true,
+            CheckinInputMode = PlasticCheckinInputMode.StandardInput };
+        for (int i = 0; i < 65; i++) request.Paths.Add(Path.Combine(temporary, "stale-bulk-" + i.ToString("D3") + ".txt"));
+        result = client.RunAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        string[] checkinArgs = File.ReadAllText(Path.Combine(temporary, "checkin-args.log")).Split('|');
+        string[] checkinPaths = Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(temporary, "checkin-stdin.bin")))
+            .TrimEnd('\r', '\n').Split(new [] { "\r\n" }, StringSplitOptions.None);
+        Assert(result.Succeeded && checkinArgs.Take(4).SequenceEqual(new [] { "partial", "checkin", "--all", "-" }),
+            "Stale Standard metadata rebuilds a large checkin as partial stdin");
+        Assert(checkinPaths.SequenceEqual(request.Paths), "Stale metadata partial stdin uses absolute paths");
+        File.Delete(Path.Combine(temporary, "checkin-args.log")); File.Delete(Path.Combine(temporary, "checkin-stdin.bin"));
         File.Delete(Path.Combine(temporary, "fake-partial"));
         File.Delete(log);
+        request = new PlasticCommandRequest { Command = PlasticCommand.Update, WorkingDirectory = temporary, Paths = new List<string> { first } };
         request.Paths = new List<string> { first };
         Reject(delegate { client.RunAsync(request, CancellationToken.None).GetAwaiter().GetResult(); }, "Standard file update requires explicit root scope");
         Assert(!File.Exists(log), "Rejected standard file update performs no mutation");

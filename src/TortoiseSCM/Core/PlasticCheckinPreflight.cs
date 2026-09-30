@@ -94,7 +94,11 @@ namespace TortoiseSCM
             var workspace = new PlasticWorkspace { RootPath = preview.RootPath, Repository = preview.Repository, Selector = preview.Selector, Name = preview.ExpectedName, IsPartial = preview.IsPartial };
             ValidateCheckinContext(workspace);
             var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
-                Paths = preview.Paths.ToList(), Comment = comment, Recursive = HasDirectoryScope(preview) };
+                Paths = preview.Paths.ToList(), Comment = comment,
+                // Partial workspaces need --all even when the selection contains
+                // only explicitly added files. Without it cm reports AD items as
+                // unchanged; directory selection still uses the same flag.
+                Recursive = preview.IsPartial || HasDirectoryScope(preview) };
             var command = Build(request, cancellationToken, preview.IsPartial);
             ApplyWorkspaceMode(command, preview.IsPartial);
             bool actualPartial = command.Arguments.Count > 0 && command.Arguments[0] == "partial";
@@ -109,7 +113,11 @@ namespace TortoiseSCM
         // This is the interactive equivalent of Gluon's check-in action. Build
         // the same native command, then execute it once without repeating the
         // already-displayed snapshot and content/lock scans.
-        public async Task<PlasticCommandResult> CheckinPreparedFastAsync(PlasticCheckinPreview preview, string comment, CancellationToken cancellationToken)
+        public Task<PlasticCommandResult> CheckinPreparedFastAsync(PlasticCheckinPreview preview, string comment, CancellationToken cancellationToken)
+        { return CheckinPreparedFastAsync(preview, comment, cancellationToken, PlasticCheckinInputMode.Automatic); }
+
+        public async Task<PlasticCommandResult> CheckinPreparedFastAsync(PlasticCheckinPreview preview, string comment, CancellationToken cancellationToken,
+            PlasticCheckinInputMode inputMode)
         {
             if (preview == null) throw new ArgumentNullException("preview");
             if (String.IsNullOrWhiteSpace(comment)) throw new ArgumentException("A checkin comment is required.", "comment");
@@ -123,7 +131,8 @@ namespace TortoiseSCM
                 workspace.Name != preview.ExpectedName || workspace.Selector != preview.Selector || workspace.IsPartial != preview.IsPartial)
                 throw new InvalidOperationException("工作区已改变，请刷新状态后重新预检签入范围。");
             var request = new PlasticCommandRequest { Command = PlasticCommand.Checkin, WorkingDirectory = preview.RootPath,
-                Paths = preview.Paths.ToList(), Comment = comment, Recursive = HasDirectoryScope(preview) };
+                Paths = preview.Paths.ToList(), Comment = comment,
+                Recursive = preview.IsPartial || HasDirectoryScope(preview), CheckinInputMode = inputMode };
             var command = Build(request, cancellationToken, preview.IsPartial);
             ApplyWorkspaceMode(command, preview.IsPartial);
             using (var gate = StructureGate(preview.RootPath))
@@ -193,7 +202,15 @@ namespace TortoiseSCM
         }
 
         private static bool IsDirectoryPending(string code)
-        { return code != "CH" && code != "CO" && !IsPrivateCheckinStatus(code); }
+        {
+            // An AD directory is the native container emitted while files are
+            // added in a Gluon workspace.  Its child files are independently
+            // checkin-able; requiring the container row to be selected makes a
+            // one-file checkin impossible because the UI cascades directory
+            // checks to every descendant.  Deletions and moves still require
+            // their directory operation to be reviewed together.
+            return code == "DE" || code == "LD" || code == "MV" || code == "RM";
+        }
 
         private static bool IsPrivateCheckinStatus(string code)
         { return code == "PR" || code == "IG" || code == "P" || code == "I"; }

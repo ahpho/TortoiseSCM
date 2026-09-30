@@ -8,6 +8,7 @@ using System.Xml.Linq;
 namespace TortoiseSCM
 {
     public enum PlasticCommand { Status, Add, Checkout, Checkin, Undo, Update, History, Diff, Gluon }
+    public enum PlasticCheckinInputMode { Automatic, Paths, StandardInput }
 
     public sealed class PlasticCommandRequest
     {
@@ -19,6 +20,7 @@ namespace TortoiseSCM
         public bool IncludePrivate { get; set; }
         public bool Force { get; set; }
         public string DiffSpec { get; set; }
+        public PlasticCheckinInputMode CheckinInputMode { get; set; }
         public PlasticCommandRequest() { Paths = new List<string>(); }
     }
 

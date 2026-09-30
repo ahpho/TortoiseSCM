@@ -36,7 +36,7 @@ internal static class CheckinPreflightTests
         Check(readOnly, "Paths collection is immutable");
         Check(client.CheckinPreparedAsync(preview, "reviewed", CancellationToken.None).GetAwaiter().GetResult().Succeeded, "Unchanged preview signs in");
         string[] executed = XDocument.Load(Path.Combine(root, "executed")).Root.Elements("arg").Select(x => x.Value).ToArray();
-        Check(executed.Contains(Path.Combine(root, "file.txt")) && !executed.Contains(Path.Combine(root, "other.txt")) && !executed.Contains("--private"), "Native checkin retains exact requested scope");
+        Check(executed.Contains("file.txt") && !executed.Contains("other.txt") && !executed.Contains("--private"), "Native checkin retains exact requested scope");
         foreach (string change in new[] { "content", "status", "selector", "name", "late-content", "missing" })
         {
             Reset(); preview = Prepare(client, "file.txt");
@@ -62,9 +62,25 @@ internal static class CheckinPreflightTests
         string[] fastExecuted = XDocument.Load(Path.Combine(root, "executed")).Root.Elements("arg").Select(x => x.Value).ToArray();
         Check(fastExecuted.Length > 1 && fastExecuted[0] == "partial" && fastExecuted[1] == "checkin",
             "Fast partial checkin dispatches cm partial command");
+        Check(fastExecuted.Contains("--all"), "Partial checkin includes added files when selection contains explicit files");
+        Check(new PlasticCommandRequest().CheckinInputMode == PlasticCheckinInputMode.Automatic,
+            "Existing callers retain automatic input selection by default");
+        Check(client.CheckinPreparedFastAsync(preview, "path method", CancellationToken.None, PlasticCheckinInputMode.Paths).GetAwaiter().GetResult().Succeeded,
+            "Fast checkin accepts explicit path input selection");
+        var pathExecution = XDocument.Load(Path.Combine(root, "executed")).Root;
+        Check(pathExecution.Elements("arg").Any(arg => arg.Value == "file.txt") && !pathExecution.Elements("arg").Any(arg => arg.Value == "-"),
+            "Fast path selection reaches the native command unchanged");
+        Check(client.CheckinPreparedFastAsync(preview, "stdin method", CancellationToken.None, PlasticCheckinInputMode.StandardInput).GetAwaiter().GetResult().Succeeded,
+            "Fast checkin accepts stdin input selection");
+        var stdinExecution = XDocument.Load(Path.Combine(root, "executed")).Root;
+        Check(stdinExecution.Elements("arg").Any(arg => arg.Value == "-") && !stdinExecution.Elements("arg").Any(arg => arg.Value == Path.Combine(root, "file.txt")) &&
+            ((string)stdinExecution.Element("input")).Contains("file.txt") && !((string)stdinExecution.Element("input")).Contains("other.txt"),
+            "Fast stdin selection forwards only the explicitly selected file through stdin");
         Reset(); Reject(() => Prepare(client, "private.txt"), "Explicit private selection rejected");
         Reset(); Reject(() => Prepare(client, "missing.txt"), "Missing selected pending path rejected");
-        Reset(); File.WriteAllText(Path.Combine(root, "mode"), "added-directory"); Reject(() => Prepare(client, "folder/child.txt"), "Unselected pending directory dependency rejected");
+        Reset(); File.WriteAllText(Path.Combine(root, "mode"), "added-directory");
+        Check(Prepare(client, "folder/child.txt").Files.Any(item => item.Path.EndsWith("child.txt", StringComparison.OrdinalIgnoreCase)),
+            "An added child file can be reviewed without selecting its AD directory container");
         Reset(); File.WriteAllText(Path.Combine(root, "mode"), "locks-failed"); preview = Prepare(client, "file.txt");
         Check(preview.Locks.Count == 0 && preview.LockWarning.Length > 0, "Unsupported lock query stays explicit advisory");
         Reset(); preview = Prepare(client, "file.txt"); File.WriteAllText(Path.Combine(root, "mode"), "checkin-failed");
@@ -108,7 +124,11 @@ internal static class CheckinPreflightTests
             Console.WriteLine("TSLOCK|repo|12|bfc84710-23bf-4343-bc03-54548f8e4fdd|today|/main|4|/main|4|Locked|tester|review|/file.txt|END"); return 0;
         }
         if ((args[0] == "checkin") || (args.Length > 1 && args[0] == "partial" && args[1] == "checkin"))
-        { new XDocument(new XElement("args", args.Select(a => new XElement("arg", a)))).Save(Path.Combine(root, "executed")); return mode == "checkin-failed" ? 19 : 0; }
+        {
+            new XDocument(new XElement("args", args.Select(a => new XElement("arg", a)),
+                new XElement("input", args.Contains("-") ? Console.In.ReadToEnd() : ""))).Save(Path.Combine(root, "executed"));
+            return mode == "checkin-failed" ? 19 : 0;
+        }
         return 20;
     }
     private static XElement Row(string path, string status, bool directory)

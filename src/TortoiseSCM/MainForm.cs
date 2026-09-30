@@ -19,7 +19,7 @@ namespace TortoiseSCM
         private PlasticWorkspace workspace;
         private readonly ListView files = new PendingChangesListView();
         private readonly TextBox comment = new TextBox();
-        private readonly Button messageLibrary = DialogStyle.Button("说明历史 / 模板…");
+        private readonly Button messageLibrary = DialogStyle.Button("Recent messages");
         private readonly TextBox output = new TextBox();
         private readonly Button actions = new Button();
         private readonly Label status = new Label();
@@ -29,6 +29,7 @@ namespace TortoiseSCM
         private readonly LinkLabel selectAll = new LinkLabel();
         private readonly LinkLabel selectNone = new LinkLabel();
         private readonly CheckBox showUnversioned = new CheckBox();
+        private readonly CheckBox useCheckinStdin = new CheckBox();
         private bool busy;
         private bool loaded;
         private bool changingChecks;
@@ -55,7 +56,7 @@ namespace TortoiseSCM
             // the same single native command as Gluon instead of re-hashing all
             // files and re-querying locks/status before dispatch.
             prepareCheckin = (root, paths, repository, selector, token) => client.PrepareCheckinFastAsync(root, paths, repository, selector, token);
-            submitCheckin = (preview, message, token) => client.CheckinPreparedFastAsync(preview, message, token);
+            submitCheckin = (preview, message, token) => client.CheckinPreparedFastAsync(preview, message, token, SelectedCheckinInputMode());
             runCommand = (commandRequest, token) => client.RunAsync(commandRequest, token);
             // The preview is already shown in the main check-in window. Submit
             // immediately after preflight; keep this delegate as a test seam so
@@ -94,7 +95,7 @@ namespace TortoiseSCM
             // Follow IDD_COMMITDLG: message above changes, selection links, bottom command row.
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -119,7 +120,7 @@ namespace TortoiseSCM
             messageLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             messageLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var messageTools = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
-            messageLibrary.Width = 160; messageLibrary.Dock = DockStyle.Right; messageLibrary.Enabled = false;
+            messageLibrary.Width = 160; messageLibrary.Dock = DockStyle.Left; messageLibrary.Enabled = false;
             messageLibrary.Click += delegate { OpenMessageLibrary(); };
             messageTools.Controls.Add(messageLibrary);
             messageLayout.Controls.Add(messageTools, 0, 0); messageLayout.Controls.Add(comment, 0, 1);
@@ -265,6 +266,11 @@ namespace TortoiseSCM
             actions.Click += delegate { operations.Show(actions, new Point(0, actions.Height)); };
             left.Controls.Add(refresh);
             left.Controls.Add(actions);
+            useCheckinStdin.Text = "使用 stdin 提交（测试）";
+            useCheckinStdin.AutoSize = true;
+            useCheckinStdin.Margin = new Padding(6, 7, 6, 0);
+            useCheckinStdin.AccessibleName = "使用 stdin 提交（测试）";
+            left.Controls.Add(useCheckinStdin);
             progress.Size = new Size(110, 16);
             progress.Style = ProgressBarStyle.Marquee;
             progress.Visible = false;
@@ -388,8 +394,7 @@ namespace TortoiseSCM
                         throw new InvalidOperationException("请一次只选择同一 Plastic 工作区内的文件。");
                 }
                 Text = string.Join("; ", launch.Paths.ToArray()) + " - 提交 - TortoiseSCM";
-                scope.Text = "工作区：" + workspace.RootPath + (workspace.IsPartial ? "  ·  Gluon / 部分工作区" : "  ·  完整工作区") +
-                    "\r\n范围：" + string.Join("；", launch.Paths.ToArray());
+                UpdateCommitTarget();
                 loaded = true;
                 OverlayCacheHost.TrackAndStart(workspace.RootPath);
                 SetBusy(false, "");
@@ -825,9 +830,25 @@ namespace TortoiseSCM
             files.Enabled = !value;
             comment.Enabled = !value;
             messageLibrary.Enabled = !value && loaded;
+            useCheckinStdin.Enabled = !value && loaded;
             selectAll.Enabled = selectNone.Enabled = !value;
             progress.Visible = value;
             status.Text = text;
+        }
+
+        private PlasticCheckinInputMode SelectedCheckinInputMode()
+        { return useCheckinStdin.Checked ? PlasticCheckinInputMode.StandardInput : PlasticCheckinInputMode.Paths; }
+
+        private void UpdateCommitTarget()
+        {
+            string root = Path.GetFullPath(workspace.RootPath).TrimEnd('\\', '/');
+            var remotePaths = launch.Paths.Select(path => {
+                string absolute = Path.GetFullPath(path).TrimEnd('\\', '/');
+                string relative = absolute.Substring(root.Length).TrimStart('\\', '/').Replace('\\', '/');
+                return workspace.Repository + ":/" + relative;
+            }).Distinct(StringComparer.OrdinalIgnoreCase);
+            scope.Text = "Commit to: " + String.Join("；", remotePaths) +
+                (workspace.IsPartial ? "  ·  Gluon / 部分工作区" : "  ·  Standard / 完整工作区");
         }
 
         private void UpdateSelectionCount()
