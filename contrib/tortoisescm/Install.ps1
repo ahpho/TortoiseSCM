@@ -13,6 +13,7 @@ if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell to instal
 if ($EnableMachineOverlays -and $NoRegister) { throw '-EnableMachineOverlays cannot be combined with -NoRegister.' }
 if ($EnableModernMenu -and $NoRegister) { throw '-EnableModernMenu cannot be combined with -NoRegister.' }
 if ($EnableMachineOverlays -and -not (Test-TscmAdministrator)) { throw 'Machine overlays require elevated PowerShell. No files or registration were changed.' }
+Assert-TscmPlasticClientInstalled | Out-Null
 $installationMutex = Enter-TscmInstallMutex
 try {
 $package = Assert-TscmPlainPath $PackageDirectory

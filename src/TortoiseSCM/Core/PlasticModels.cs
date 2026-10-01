@@ -165,10 +165,39 @@ namespace TortoiseSCM
         private static string FindExecutable(string name)
         {
             var directories = new List<string>();
-            directories.Add(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PlasticSCM5", "client"));
-            directories.Add(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "PlasticSCM5", "client"));
-            directories.Add(@"D:\Program Files\PlasticSCM5\client");
-            directories.AddRange((Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'));
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Action<string> add = delegate(string directory)
+            {
+                if (String.IsNullOrWhiteSpace(directory)) return;
+                try
+                {
+                    directory = directory.Trim().TrimEnd('\\');
+                    if (directory.Length > 0 && seen.Add(directory)) directories.Add(directory);
+                }
+                catch (ArgumentException) { }
+            };
+            add(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PlasticSCM5", "client"));
+            add(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "PlasticSCM5", "client"));
+            // Installations on D:, E:, F: and other data volumes are common.
+            // Search every ready drive's conventional Program Files locations,
+            // not only the system drive or the historical D: fallback.
+            try
+            {
+                foreach (DriveInfo drive in DriveInfo.GetDrives())
+                {
+                    try
+                    {
+                        if (!drive.IsReady || drive.DriveType == DriveType.CDRom) continue;
+                        add(System.IO.Path.Combine(drive.RootDirectory.FullName, "Program Files", "PlasticSCM5", "client"));
+                        add(System.IO.Path.Combine(drive.RootDirectory.FullName, "Program Files (x86)", "PlasticSCM5", "client"));
+                    }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
+            }
+            catch (IOException) { }
+            add(@"D:\Program Files\PlasticSCM5\client");
+            foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';')) add(directory);
             foreach (string directory in directories)
             {
                 if (String.IsNullOrWhiteSpace(directory)) continue;

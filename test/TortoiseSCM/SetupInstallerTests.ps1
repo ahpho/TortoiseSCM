@@ -57,10 +57,11 @@ try {
     Assert ([IO.File]::ReadAllText((Join-Path $root 'current-install.json')) -eq $pointerBefore) 'Rejected relocation preserves the active installation.'
     Assert (Test-Path -LiteralPath (Join-Path $first.versionDirectory 'Tools/BeyondCompare/BComp.exe')) 'Beyond Compare is installed with the payload.'
     if ($TortoiseToolsDirectory) {
-        foreach ($file in @('TortoiseGitMerge.exe', 'TortoiseGitUDiff.exe', 'LICENSE.txt', 'TortoiseGit-source.zip', 'mfc140u.dll')) {
+        foreach ($file in @('TortoiseGitMerge.exe', 'TortoiseGitUDiff.exe', 'LICENSE.txt', 'mfc140u.dll')) {
             $installedFile = Join-Path $first.versionDirectory ('Tools/TortoiseGit/' + $file)
             Assert ((Get-FileHash -LiteralPath $installedFile).Hash -eq (Get-FileHash -LiteralPath (Join-Path $TortoiseToolsDirectory $file)).Hash) "Native tool payload matches source: $file"
         }
+        Assert (-not (Test-Path -LiteralPath (Join-Path $first.versionDirectory 'Tools/TortoiseGit/TortoiseGit-source.zip'))) 'End-user installer omits the separate TortoiseGit source archive.'
         $start = New-Object Diagnostics.ProcessStartInfo
         $start.FileName = Join-Path $first.versionDirectory 'TortoiseSCM.exe'
         $start.UseShellExecute = $false; $start.CreateNoWindow = $true

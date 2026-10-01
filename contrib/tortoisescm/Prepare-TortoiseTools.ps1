@@ -41,7 +41,8 @@ else {
 @'
 Unmodified official TortoiseGitMerge and TortoiseGitUDiff 2.19.0.0.
 GPLv2: LICENSE.txt. Dependencies retain their own licenses in the source archive.
-Complete corresponding source including pinned submodules: TortoiseGit-source.zip.
+Complete corresponding source including pinned submodules is retained as a separate build/source artifact;
+it is intentionally not included in the end-user TortoiseSCM installer.
 Release: REL_2.19.0.0_EXTERNAL, commit 54e40c426abcd38f93cd7f2bbafd9b1206696912.
 Extract the source archive and follow build.txt. https://tortoisegit.org/sourcecode/
 App-local Microsoft Visual C++ redistributable CRT/MFC DLLs are licensed separately by Microsoft.

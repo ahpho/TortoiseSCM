@@ -449,7 +449,7 @@ GUI 在“操作”菜单或待定列表右键提供同名入口；干净文件�
 
 默认使用包内 **TortoiseGitMerge**，同时提供 **TortoiseGitUDiff** 查看统一差异。设置 → 差异查看器或合并工具中的下拉框可切换 **Beyond Compare**；两页共用选择。BC 路径留空时先检测包内程序，再查找系统安装。选择 BCompare.exe 会使用同目录的 BComp.exe；BC 三方合并需 Pro 许可证。TortoiseGitMerge 不需要 BC 许可证。
 
-打包使用 `-TortoiseToolsDirectory` 指定完整原生工具目录。工具保留官方名称与许可证，原生版本 2.19.0.0；所需 DLL、Microsoft VC++ 运行库及包含固定版本子模块的完整对应源码 `Tools/TortoiseGit/TortoiseGit-source.zip` 一并携带。`SOURCE.txt` 记录来源，工具文件进入逐文件 SHA-256 清单，随安装/升级/卸载维护。不注册 TortoiseGit 自己的 Shell 扩展。
+打包使用 `-TortoiseToolsDirectory` 指定完整原生工具目录。工具保留官方名称与许可证，原生版本 2.19.0.0；所需 DLL 和 Microsoft VC++ 运行库随安装包携带，完整对应源码保留为独立的源代码/合规构建产物，不再塞入终端用户安装包。`SOURCE.txt` 记录来源，运行时工具进入逐文件 SHA-256 清单，随安装/升级/卸载维护。不注册 TortoiseGit 自己的 Shell 扩展。
 
 工作文件基线按 Plastic ItemId 定位，支持受控文件本地改名后的比较；启动前重新核对工作区 selector、仓库和文件身份。历史主“比较工具”按钮下载固定端点，暂存集逐文件比较下载父版本和暂存版本。比较两侧只读；三方角色为本地、远程和祖先基线，输出为独立结果文件。TortoiseGitMerge 左侧为远程、右侧为本地；BC 左侧为本地、右侧为远程。参数由程序固定管理，无需填写模板。输入角色及等待方式依据 [Beyond Compare 官方集成说明](https://www.scootersoftware.com/kb/vcs) 和 [命令行文档](https://www.scootersoftware.com/v5help/command_line_reference.html)。
 

@@ -14,10 +14,11 @@ $binaries = Assert-TscmPlainPath $BinaryDirectory
 $tortoiseFiles = @()
 if (-not [string]::IsNullOrWhiteSpace($TortoiseToolsDirectory)) {
     $native = Assert-TscmPlainPath $TortoiseToolsDirectory
-    # A complete, app-local runtime plus the corresponding sources and licenses.
+    # A complete, app-local runtime plus provenance and licenses. The large
+    # corresponding-source archive is kept outside the end-user installer.
     foreach ($file in @('TortoiseGitMerge.exe', 'TortoiseGitUDiff.exe', 'gitdll.dll', 'libgit2_tgit.dll', 'zlib1_tgit.dll', 'SciLexer_tgit.dll',
         'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll', 'mfc140u.dll',
-        'LICENSE.txt', 'apr License.txt', 'SOURCE.txt', 'TortoiseGit-source.zip')) {
+        'LICENSE.txt', 'apr License.txt', 'SOURCE.txt')) {
         $candidate = Assert-TscmPlainPath (Join-Path $native $file)
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "Incomplete Tortoise tool runtime: $file" }
         $tortoiseFiles += $candidate
@@ -124,7 +125,7 @@ TortoiseSCM license: GPL-2.0-or-later; see LICENSE. See doc/TortoiseSCM.md for u
     if ($tortoiseFiles.Count -gt 0) {
         $toolInstructions = "Default diff and merge: Tools/TortoiseGit/TortoiseGitMerge.exe. TortoiseGitUDiff.exe views unified diff files.`r`n" +
             "Select Beyond Compare in Settings to use the alternative. Explicit existing BC choices are preserved.`r`n" +
-            "TortoiseGit GPL license and complete corresponding sources are in Tools/TortoiseGit (LICENSE.txt, SOURCE.txt, TortoiseGit-source.zip).`r`n" + $toolInstructions
+            "TortoiseGit GPL license and source provenance are in Tools/TortoiseGit (LICENSE.txt, SOURCE.txt). The complete corresponding source is distributed separately from this installer.`r`n" + $toolInstructions
     }
     $readme.Replace('{BEYOND_COMPARE_INSTRUCTIONS}', $toolInstructions) | Set-Content -LiteralPath (Join-Path $stage 'README-PACKAGE.txt') -Encoding UTF8
     $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
@@ -139,7 +140,7 @@ TortoiseSCM license: GPL-2.0-or-later; see LICENSE. See doc/TortoiseSCM.md for u
     if ($tortoiseFiles.Count -gt 0) {
         $bcMetadata = if ($manifest.Contains('bundledTools')) { @($manifest.bundledTools) } else { @() }
         $manifest.bundledTools = @([ordered]@{ name = 'TortoiseGit tools'; directory = 'Tools/TortoiseGit'; executable = 'Tools/TortoiseGit/TortoiseGitMerge.exe';
-            license = 'Tools/TortoiseGit/LICENSE.txt'; source = 'Tools/TortoiseGit/TortoiseGit-source.zip' }) + $bcMetadata
+            license = 'Tools/TortoiseGit/LICENSE.txt' }) + $bcMetadata
     }
     Write-TscmJson (Join-Path $stage 'package-manifest.json') $manifest
     Read-TscmManifest $stage -VerifyFiles | Out-Null

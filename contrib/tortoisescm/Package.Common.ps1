@@ -60,6 +60,67 @@ function Test-TscmAdministrator {
     return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-TscmPlasticClientSearchPaths {
+    $paths = New-Object 'Collections.Generic.List[string]'
+    $seen = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $add = {
+        param([string]$Candidate)
+        if ([string]::IsNullOrWhiteSpace($Candidate)) { return }
+        try {
+            $normalized = $Candidate.Trim().TrimEnd('\')
+            if ($normalized -and $seen.Add($normalized)) { $paths.Add($normalized) }
+        } catch [ArgumentException] { }
+    }
+    foreach ($programFiles in @(
+        [Environment]::GetEnvironmentVariable('ProgramFiles'),
+        [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($programFiles)) {
+            & $add (Join-Path $programFiles 'PlasticSCM5\client')
+        }
+    }
+    # Plastic is commonly installed under the Program Files directory of a
+    # non-system volume. Check every ready drive letter instead of assuming C:.
+    try {
+        foreach ($drive in [IO.DriveInfo]::GetDrives()) {
+            try {
+                if (-not $drive.IsReady -or $drive.DriveType -eq [IO.DriveType]::CDRom) { continue }
+                & $add (Join-Path $drive.RootDirectory.FullName 'Program Files\PlasticSCM5\client')
+                & $add (Join-Path $drive.RootDirectory.FullName 'Program Files (x86)\PlasticSCM5\client')
+            } catch [IOException] { }
+            catch [UnauthorizedAccessException] { }
+        }
+    } catch [IOException] { }
+    foreach ($directory in ([Environment]::GetEnvironmentVariable('PATH') -split ';')) {
+        & $add $directory
+    }
+    return @($paths)
+}
+
+function Find-TscmPlasticClient {
+    foreach ($directory in (Get-TscmPlasticClientSearchPaths)) {
+        $cm = Join-Path $directory 'cm.exe'
+        if (Test-Path -LiteralPath $cm -PathType Leaf) {
+            $gluon = Join-Path $directory 'gluon.exe'
+            return [pscustomobject]@{
+                Directory = $directory
+                CmPath = $cm
+                GluonPath = $gluon
+                HasGluon = Test-Path -LiteralPath $gluon -PathType Leaf
+            }
+        }
+    }
+    return $null
+}
+
+function Assert-TscmPlasticClientInstalled {
+    $client = Find-TscmPlasticClient
+    if (-not $client) {
+        throw 'Plastic SCM / Unity Version Control client not found (cm.exe). Checked all ready drive letters under Program Files and Program Files (x86), plus PATH. Install the client and retry.'
+    }
+    return $client
+}
+
 function Enter-TscmInstallMutex([int]$TimeoutMilliseconds = 30000) {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $mutex = New-Object Threading.Mutex($false, ('Global\TortoiseSCM.Install.' + $sid))

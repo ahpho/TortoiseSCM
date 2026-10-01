@@ -39,7 +39,7 @@ try {
     } finally { $archive.Dispose() }
     $manifest = Read-TscmManifest $stage -VerifyFiles
     $hasNative = @($manifest.files | Where-Object path -eq 'Tools/TortoiseGit/TortoiseGitMerge.exe').Count -eq 1
-    $requiredTools = if ($hasNative) { @('Tools/TortoiseGit/TortoiseGitMerge.exe', 'Tools/TortoiseGit/TortoiseGitUDiff.exe', 'Tools/TortoiseGit/LICENSE.txt', 'Tools/TortoiseGit/TortoiseGit-source.zip') }
+    $requiredTools = if ($hasNative) { @('Tools/TortoiseGit/TortoiseGitMerge.exe', 'Tools/TortoiseGit/TortoiseGitUDiff.exe', 'Tools/TortoiseGit/LICENSE.txt') }
         else { @('Tools/BeyondCompare/BCompare.exe', 'Tools/BeyondCompare/BComp.exe', 'Tools/BeyondCompare/License.html') }
     foreach ($relative in $requiredTools) {
         if (@($manifest.files | Where-Object path -eq $relative).Count -ne 1) { throw ('Installer must contain verified tool runtime: ' + $relative) }

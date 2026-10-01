@@ -93,6 +93,7 @@ try {
     $pointerPath = Join-TscmOwnedPath $rootPath 'current-install.json'
     if ($Action -eq 'Install') {
         if ([string]::IsNullOrWhiteSpace($PackageArchive)) { throw '缺少随包安装文件。' }
+        Assert-TscmPlasticClientInstalled | Out-Null
         # The graphical setup is elevated (Setup.iss uses PrivilegesRequired=admin),
         # so a new installation enables Explorer's machine-level overlay handlers.
         # TestSetup passes -NoRegister and must remain isolated from HKLM.
@@ -113,7 +114,7 @@ try {
         Expand-SetupPackage $PackageArchive $stage
         $manifest = Read-TscmManifest $stage -VerifyFiles
         $hasNative = @($manifest.files | Where-Object path -eq 'Tools/TortoiseGit/TortoiseGitMerge.exe').Count -eq 1
-        $requiredTools = if ($hasNative) { @('Tools/TortoiseGit/TortoiseGitMerge.exe', 'Tools/TortoiseGit/TortoiseGitUDiff.exe', 'Tools/TortoiseGit/LICENSE.txt', 'Tools/TortoiseGit/TortoiseGit-source.zip') } else { @('Tools/BeyondCompare/BComp.exe', 'Tools/BeyondCompare/BCompare.exe', 'Tools/BeyondCompare/License.html') }
+        $requiredTools = if ($hasNative) { @('Tools/TortoiseGit/TortoiseGitMerge.exe', 'Tools/TortoiseGit/TortoiseGitUDiff.exe', 'Tools/TortoiseGit/LICENSE.txt') } else { @('Tools/BeyondCompare/BComp.exe', 'Tools/BeyondCompare/BCompare.exe', 'Tools/BeyondCompare/License.html') }
         foreach ($required in $requiredTools) {
             if (@($manifest.files | Where-Object path -EQ $required).Count -ne 1) { throw '此图形安装包缺少比较工具运行文件，请使用完整安装包。' }
         }
