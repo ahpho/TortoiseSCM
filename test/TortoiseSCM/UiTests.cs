@@ -111,6 +111,15 @@ namespace TortoiseSCM
                 var request = LaunchRequest.Parse(new[] { "--command", "checkin", "--pathfile", pathfile });
                 Require(request.Paths.Count == 2 && request.Paths[0].Contains("中文 空格"), "UTF-8 Explorer multi-selection");
                 Require(!File.Exists(pathfile), "Consumed path file cleanup");
+                string commentsFile = Path.Combine(artifacts, "ai-checkin-message.txt");
+                string aiComment = "AI 修改说明\r\n第二行";
+                File.WriteAllText(commentsFile, aiComment, new System.Text.UTF8Encoding(false));
+                request = LaunchRequest.Parse(new[] { "--command", "checkin-dialog", "--path", Path.Combine(artifacts, "changed.cs"), "--path", Path.Combine(artifacts, "new.cs"), "--commentsfile", commentsFile });
+                Require(request.Command == "checkin" && request.Paths.Count == 2 && request.Comment == aiComment,
+                    "GUI checkin-dialog accepts an explicit file list and UTF-8 comment file");
+                Require(File.Exists(commentsFile), "GUI comment file is read without consuming the caller-owned file");
+                try { LaunchRequest.Parse(new[] { "--command", "history", "--path", artifacts, "--comment", "not allowed" }); throw new Exception("GUI comment accepted for non-checkin command"); }
+                catch (ArgumentException) { }
                 try { LaunchRequest.Parse(new[] { "--command", "unknown" }); throw new Exception("Unknown command accepted"); }
                 catch (ArgumentException) { }
                 try { LaunchRequest.Parse(new[] { "--pathfile", Path.Combine(artifacts, "foreign.txt") }); throw new Exception("Foreign path file accepted"); }

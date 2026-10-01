@@ -44,6 +44,7 @@ namespace TortoiseSCM
                 TestCommitLayoutAndInput(root, client, initialRows, artifacts);
                 TestPartialStructuralSelection(root, client);
                 TestDefaultChecksAndDoubleClick(root, client, initialRows, artifacts);
+                TestExplicitAutomationFileSelection(root, client);
                 Console.WriteLine("PASS: check-in UI (" + assertions + " assertions)");
             }
             finally { Directory.Delete(root, true); }
@@ -190,6 +191,30 @@ namespace TortoiseSCM
                 form.Size = form.MinimumSize; Application.DoEvents(); CheckBounds(form);
                 Save(form, Path.Combine(artifacts, "pending-checks-minimum.png"));
                 form.Close();
+            }
+        }
+
+        private static void TestExplicitAutomationFileSelection(string root, PlasticClient client)
+        {
+            string path = Path.Combine(root, "ai-created.txt");
+            File.WriteAllText(path, "created by automation");
+            var launch = LaunchRequest.Parse(new[] { "--command", "checkin-dialog", "--path", path, "--comment", "AI check-in" });
+            using (var form = new MainForm(launch, false))
+            {
+                Set(form, "client", client);
+                Set(form, "workspace", client.DiscoverWorkspace(root));
+                Set(form, "loaded", true);
+                Set(form, "reportError", new Action<string>(message => { throw new Exception(message); }));
+                Set(form, "getPending", new Func<string, CancellationToken, Task<IList<PlasticStatusItem>>>((scope, token) =>
+                    Task.FromResult<IList<PlasticStatusItem>>(new List<PlasticStatusItem> {
+                        new PlasticStatusItem { Path = path, StatusCode = "PR", StatusDescription = "private" }
+                    })));
+                bool refreshed = (bool)AwaitResult(form, "RefreshAsync");
+                var list = Field<ListView>(form, "files");
+                Require(refreshed && list.Items.Count == 1 && list.Items[0].Checked,
+                    "Explicit automation files show and start checked even when unversioned files are hidden by default");
+                Require(Field<TextBox>(form, "comment").Text == "AI check-in",
+                    "GUI checkin-dialog pre-fills the supplied comment");
             }
         }
 

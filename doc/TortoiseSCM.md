@@ -311,6 +311,30 @@ Gluon 独立运行，TortoiseSCM 仅确认进程启动。比较工具则等待�
 `TortoiseSCM.exe` 同时承担主 GUI 和命令入口的角色。加入 `--cli` 后，在初始化 WinForms 前分流；
 参数错误、服务器错误和超时都不会打开对话框。GUI 与 CLI 共用 `PlasticClient`，CLI 不是绕过产品直接调用 cm 的测试脚本。
 
+### 从命令行打开 GUI 签入窗口
+
+不带 `--cli` 时，`--command` 是 GUI 启动接口。最适合自动化修改后交给用户确认的调用是：
+
+```powershell
+$exe = '.\bin\TortoiseSCM\Release\TortoiseSCM.exe'
+# 每个 --path 都是一个明确的本地文件；窗口只显示这些范围内的待定更改
+Start-Process -FilePath $exe -ArgumentList @(
+  '--command', 'checkin-dialog',
+  '--path', 'D:\workspace\src\changed.cs',
+  '--path', 'D:\workspace\README.md',
+  '--comment', 'AI: update implementation and documentation'
+)
+# 多行说明也可以放在 UTF-8 文件中；文件不会被程序删除
+Start-Process -FilePath $exe -ArgumentList @(
+  '--command', 'checkin-dialog', '--path', 'D:\workspace\src\changed.cs',
+  '--commentsfile', 'D:\Temp\ai-checkin-message.txt'
+)
+```
+
+`checkin-dialog` 和 `commit-dialog` 都是 `checkin` GUI 命令的明确别名。重复 `--path` 按传入顺序处理；显式传入的新建/未版本控制文件会显示并默认勾选，普通工作区范围仍不会自动显示其他未版本控制文件。说明会预填到签入框，用户只需核对列表并点击提交。该入口只打开窗口，不会自动签入；若要完全无界面提交，使用下面的 `--cli --command checkin --yes --comment ...`。
+
+GUI 启动命令覆盖常用入口：`checkin-dialog`、`update`、`add`、`checkout`、`checkout-recursive`、`undo`、`diff`、`history`、`blame`、`move`、`remove`、`ignore`、`merge`、`branches`、`shelves`、`labels`、`repository-browser`、`revision-graph`、`locks`、`unlock`、`rollback`、`recover`、`gluon`、`settings`、`version` 和 `create-workspace`。这些命令用于打开相应 GUI；需要无界面自动化时使用下文列出的 `--cli` 命令，其中有对应实现的操作保持 JSON/退出码契约，GUI-only 操作（例如 `gluon`、`version` 和工作区向导）仍明确保持交互式。
+
 ```powershell
 $exe = '.\bin\TortoiseSCM\Release\TortoiseSCM.exe'
 & $exe --cli --help | Out-String

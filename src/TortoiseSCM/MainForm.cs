@@ -82,6 +82,7 @@ namespace TortoiseSCM
             Size = new Size(930, 720);
             AutoScaleMode = AutoScaleMode.Dpi;
             BuildLayout();
+            if (launch.Comment != null) comment.Text = launch.Comment;
             if (initialize) Shown += async delegate { await InitializeAsync(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
@@ -457,6 +458,15 @@ namespace TortoiseSCM
                 path.StartsWith(p.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
         }
 
+        // An automation caller may pass a newly created, still-private file
+        // explicitly. Keep that exact file visible and selected without
+        // changing the normal workspace-wide default of hiding private files.
+        private bool IsExplicitFile(string path)
+        {
+            return launch.Paths.Any(selected => String.Equals(path, selected, StringComparison.OrdinalIgnoreCase) &&
+                !Directory.Exists(selected));
+        }
+
         private void ShowRevisionGraph(long? before)
         {
             if (busy || !loaded) return;
@@ -533,13 +543,14 @@ namespace TortoiseSCM
                 try
                 {
                     files.Items.Clear();
-                    foreach (var item in items.Where(i => InScope(i.Path) && (showUnversioned.Checked || !IsPrivate(i.StatusCode))))
+                    foreach (var item in items.Where(i => InScope(i.Path) &&
+                        (showUnversioned.Checked || !IsPrivate(i.StatusCode) || IsExplicitFile(i.Path))))
                     {
                         string relative = item.Path.StartsWith(workspace.RootPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)
                             ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
                         if (!string.IsNullOrEmpty(item.OldPath)) relative = item.OldPath + " → " + relative;
                         var row = new ListViewItem(relative) { Tag = item, Checked = checkedPaths.Contains(item.Path) ||
-                            (!previousPaths.Contains(item.Path) && !IsPrivate(item.StatusCode)) };
+                            (!previousPaths.Contains(item.Path) && (!IsPrivate(item.StatusCode) || IsExplicitFile(item.Path))) };
                         row.SubItems.Add(item.IsDirectory ? "" : Path.GetExtension(item.Path));
                         row.SubItems.Add(item.StatusDescription);
                         files.Items.Add(row);

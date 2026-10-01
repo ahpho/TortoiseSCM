@@ -14,6 +14,8 @@ namespace TortoiseSCM
     internal static class CliRunner
     {
         internal const string Help = "TortoiseSCM --cli --command <command> --path <absolute-path> [--path ...]\r\n" +
+            "GUI launch (omit --cli): TortoiseSCM.exe --command checkin-dialog --path <file> [--path ...] [--comment <text> | --commentsfile <UTF-8-file>]\r\n" +
+            "  checkin-dialog (also commit-dialog) opens the checked-in-file window; explicit files, including new files, are preselected.\r\n" +
             "Commands: status, workspace, add, checkout, checkin, undo, update, history, diff,\r\n" +
             "          changeset, rollback, switch, export, diff-history, diff-changesets, remove, move, ignore, settings, merge\r\n" +
             "          merge-preview, merge-start, merge-status, merge-prepare, merge-resolve, merge-conflict-tool\r\n" +

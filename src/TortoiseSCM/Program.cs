@@ -117,6 +117,7 @@ namespace TortoiseSCM
         internal string Command = "status";
         internal long? Changeset;
         internal long? Before;
+        internal string Comment;
         internal string ParentPath;
         internal readonly List<string> Paths = new List<string>();
 
@@ -132,6 +133,17 @@ namespace TortoiseSCM
                 {
                     case "--command": result.Command = value.ToLowerInvariant(); break;
                     case "--path": result.Paths.Add(Path.GetFullPath(value)); break;
+                    case "--comment":
+                        if (result.Comment != null) throw new ArgumentException("--comment 与 --commentsfile 只能指定一个。");
+                        result.Comment = value; break;
+                    case "--commentsfile":
+                        if (result.Comment != null) throw new ArgumentException("--comment 与 --commentsfile 只能指定一个。");
+                        string commentsFile = Path.GetFullPath(value);
+                        if (!File.Exists(commentsFile)) throw new ArgumentException("签入说明文件不存在：" + commentsFile);
+                        if (new FileInfo(commentsFile).Length > 64 * 1024) throw new ArgumentException("签入说明文件不能超过 64 KiB。");
+                        try { result.Comment = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(commentsFile)).TrimStart('\uFEFF'); }
+                        catch (DecoderFallbackException) { throw new ArgumentException("签入说明文件必须是 UTF-8。"); }
+                        break;
                     case "--parent-path":
                         if (result.ParentPath != null || String.IsNullOrWhiteSpace(value) || !Path.IsPathRooted(value) ||
                             (!value.StartsWith("\\\\", StringComparison.Ordinal) && (value.Length < 3 || value[1] != ':' || (value[2] != '\\' && value[2] != '/'))))
@@ -164,6 +176,7 @@ namespace TortoiseSCM
                     default: throw new ArgumentException("未知参数：" + option);
                 }
             }
+            if (result.Command == "checkin-dialog" || result.Command == "commit-dialog") result.Command = "checkin";
             // Keep these names in sync with the verbs exposed by the native
             // Explorer extension.  File operations are deliberately routed
             // through MainForm so they retain the same confirmation and
@@ -176,6 +189,10 @@ namespace TortoiseSCM
                 throw new ArgumentException("--parent-path 仅适用于拉取仓库，不能与 --path 或 --pathfile 同时使用。");
             if (result.Changeset.HasValue && result.Command != "repository-browser") throw new ArgumentException("--changeset 仅适用于仓库浏览器。");
             if (result.Before.HasValue && result.Command != "revision-graph") throw new ArgumentException("--before 仅适用于版本关系图。");
+            if (result.Comment != null && result.Command != "checkin")
+                throw new ArgumentException("--comment/--commentsfile 仅适用于 checkin 或 checkin-dialog。");
+            if (result.Comment != null && result.Comment.Length > CommitMessageStore.MaxMessageLength)
+                throw new ArgumentException("签入说明不能超过 " + CommitMessageStore.MaxMessageLength + " 个字符。");
             return result;
         }
     }
