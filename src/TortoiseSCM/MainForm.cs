@@ -25,6 +25,7 @@ namespace TortoiseSCM
         private readonly Label status = new Label();
         private readonly ProgressBar progress = new ProgressBar();
         private readonly Label scope = new Label();
+        private readonly Label workflowHint = new Label();
         private readonly Button checkin = new Button();
         private readonly LinkLabel selectAll = new LinkLabel();
         private readonly LinkLabel selectNone = new LinkLabel();
@@ -97,9 +98,10 @@ namespace TortoiseSCM
         private void BuildLayout()
         {
             // Follow IDD_COMMITDLG: message above changes, selection links, bottom command row.
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(10) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -108,6 +110,14 @@ namespace TortoiseSCM
             scope.AutoEllipsis = true;
             scope.Text = "正在识别工作区…";
             layout.Controls.Add(scope, 0, 0);
+            workflowHint.Dock = DockStyle.Fill;
+            workflowHint.AutoEllipsis = true;
+            workflowHint.UseMnemonic = false;
+            workflowHint.Text = PlasticStatusPresentation.WorkflowHint;
+            workflowHint.AccessibleName = "签出、直接修改和服务器锁说明";
+            workflowHint.TextAlign = ContentAlignment.MiddleLeft;
+            workflowHint.ForeColor = SystemColors.GrayText;
+            layout.Controls.Add(workflowHint, 0, 1);
 
             var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal,
                 Size = new Size(880, 520), SplitterDistance = 155, Panel1MinSize = 100, Panel2MinSize = 160, SplitterWidth = 5 };
@@ -178,12 +188,12 @@ namespace TortoiseSCM
             changes.Controls.Add(files, 0, 1);
             changesGroup.Controls.Add(changes);
             split.Panel2.Controls.Add(changesGroup);
-            layout.Controls.Add(split, 0, 1);
+            layout.Controls.Add(split, 0, 2);
             status.Dock = DockStyle.Fill;
             status.TextAlign = ContentAlignment.MiddleLeft;
             status.AutoEllipsis = true;
             status.UseMnemonic = false;
-            layout.Controls.Add(status, 0, 2);
+            layout.Controls.Add(status, 0, 3);
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -280,7 +290,7 @@ namespace TortoiseSCM
             right.Controls.Add(checkin);
             right.Controls.Add(close);
             footer.Controls.Add(right, 1, 0);
-            layout.Controls.Add(footer, 0, 3);
+            layout.Controls.Add(footer, 0, 4);
             Controls.Add(layout);
             CancelButton = close;
             output.Multiline = true;
@@ -552,7 +562,7 @@ namespace TortoiseSCM
                         var row = new ListViewItem(relative) { Tag = item, Checked = checkedPaths.Contains(item.Path) ||
                             (!previousPaths.Contains(item.Path) && (!IsPrivate(item.StatusCode) || IsExplicitFile(item.Path))) };
                         row.SubItems.Add(item.IsDirectory ? "" : Path.GetExtension(item.Path));
-                        row.SubItems.Add(item.StatusDescription);
+                        row.SubItems.Add(PlasticStatusPresentation.PendingStatus(item));
                         files.Items.Add(row);
                     }
                 }

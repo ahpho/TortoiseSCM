@@ -88,7 +88,8 @@ namespace TortoiseSCM
                 }
                 scope.Text = "工作区：" + workspace.RootPath + "\r\n范围：" +
                     String.Join("；", selectedPaths.ToArray()) + "\r\n" +
-                    (selectedPaths.Any(Directory.Exists) ? "目录操作会包含全部子项。" : "");
+                    (selectedPaths.Any(Directory.Exists) ? "目录操作会包含全部子项。" : "") +
+                    (IsCheckout() ? "\r\n提示：" + PlasticStatusPresentation.WorkflowHint : "");
 
                 var all = await client.GetStatusAsync(workspace.RootPath, CancellationToken.None);
                 var candidates = IsRecursiveCheckout()
@@ -110,7 +111,7 @@ namespace TortoiseSCM
                             ? item.Path.Substring(workspace.RootPath.TrimEnd('\\').Length + 1) : item.Path;
                         var row = new ListViewItem(relative) { Tag = item, Checked = commandName == "add" || !IsPrivate(item.StatusCode) };
                         row.SubItems.Add(item.IsDirectory ? "" : Path.GetExtension(item.Path));
-                        row.SubItems.Add(String.IsNullOrWhiteSpace(item.StatusDescription) ? item.StatusCode : item.StatusDescription);
+                        row.SubItems.Add(PlasticStatusPresentation.PendingStatus(item));
                         files.Items.Add(row);
                     }
                 }

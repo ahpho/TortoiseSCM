@@ -155,6 +155,12 @@ namespace TortoiseSCM
                 var showUnversioned = Field<CheckBox>(form, "showUnversioned");
                 Require(list.Items.Count == rows.Count && list.CheckedItems.Count == rows.Count && !showUnversioned.Checked,
                     "Controlled pending changes start checked while unversioned files stay hidden");
+                Require(list.Items.Cast<ListViewItem>().Any(item => ((PlasticStatusItem)item.Tag).StatusCode == "CH" &&
+                    item.SubItems[2].Text.Contains("可直接签入")),
+                    "Directly edited CH rows explain that checkout is not required before check-in");
+                Require(list.Items.Cast<ListViewItem>().Any(item => ((PlasticStatusItem)item.Tag).StatusCode == "CO" &&
+                    item.SubItems[2].Text.Contains("不代表服务器锁")),
+                    "CO rows explain that local checkout does not prove a server lock");
                 showUnversioned.Checked = true;
                 PumpUntil(() => !(bool)Get(form, "busy") && list.Items.Cast<ListViewItem>().Any(item => ((PlasticStatusItem)item.Tag).StatusCode == "PR"),
                     "Show unversioned files refreshes the pending list");

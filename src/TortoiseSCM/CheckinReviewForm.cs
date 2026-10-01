@@ -84,7 +84,7 @@ namespace TortoiseSCM
                 string path = item.Path ?? "";
                 if (!String.IsNullOrEmpty(item.OldPath)) path = item.OldPath + " → " + path;
                 var row = new ListViewItem(path);
-                row.SubItems.Add(item.StatusDescription ?? item.StatusCode ?? item.Status ?? "");
+                row.SubItems.Add(PlasticStatusPresentation.PendingStatus(item));
                 row.SubItems.Add(item.IsDirectory ? "目录及其全部后代" : "文件");
                 row.Tag = item;
                 files.Items.Add(row);

@@ -24,11 +24,13 @@ namespace TortoiseSCM
             Size = new Size(920, 560); MinimumSize = new Size(740, 400);
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 4 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-            layout.Controls.Add(new Label { Text = "锁属于当前仓库。文件签出时，仅在匹配服务器锁规则的情况下申请锁。\r\n只能释放当前用户在当前工作区持有的锁。", Dock = DockStyle.Fill }, 0, 0);
+            layout.Controls.Add(new Label { Text = "锁属于当前仓库。文件签出时，仅在匹配服务器锁规则的情况下申请锁。\r\n" +
+                "CH/CO 是本地待定状态，CO 不等于服务器锁；请以本窗口的路径、持有人和状态为准。\r\n" +
+                "只能释放当前用户在当前工作区持有的锁。", Dock = DockStyle.Fill }, 0, 0);
             items.Dock = DockStyle.Fill; items.View = View.Details; items.MultiSelect = false; DialogStyle.ApplyList(items);
             items.Columns.Add("路径", 330); items.Columns.Add("持有人", 155); items.Columns.Add("工作区", 170); items.Columns.Add("状态", 120);
             items.SelectedIndexChanged += delegate { UpdateButtons(); }; layout.Controls.Add(items, 0, 1);
